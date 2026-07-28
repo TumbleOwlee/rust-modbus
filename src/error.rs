@@ -69,6 +69,10 @@ pub enum Error {
         actual: u16,
     },
 
+    /// An MBAP header carried a protocol identifier other than 0 (FR-R-102).
+    #[error("MBAP protocol identifier {0} is not 0")]
+    ProtocolIdentifier(u16),
+
     /// An ADU exceeded the maximum its framing permits (FR-R-091, FR-R-104,
     /// FR-R-113).
     #[error("ADU of {len} bytes exceeds the maximum of {max}")]

@@ -11,6 +11,7 @@ mod function;
 mod mei;
 mod pdu;
 mod rtu;
+mod tcp;
 
 pub use diagnostics::DiagnosticSubFunction;
 pub use exception::{ExceptionCode, ExceptionResponse};
@@ -20,3 +21,4 @@ pub use function::FunctionCode;
 pub use mei::{DeviceIdObject, MeiRequest, MeiResponse, ReadDeviceIdCode};
 pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};
 pub use rtu::Rtu;
+pub use tcp::{MbapHeader, Tcp};
