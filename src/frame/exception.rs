@@ -1,5 +1,8 @@
 //! Modbus exception responses (FR-R-080 … FR-R-086).
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::error::{Error, Result};
 use crate::frame::function::FunctionCode;
 

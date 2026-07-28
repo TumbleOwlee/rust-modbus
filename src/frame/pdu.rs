@@ -5,6 +5,9 @@
 //! direction, so the caller states the direction by choosing the type
 //! (FR-R-005).
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use winnow::Parser;
 use winnow::binary::{be_u8, be_u16};
 use winnow::token::{rest, take};

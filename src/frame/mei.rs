@@ -4,6 +4,9 @@
 //! either knows (Read Device Identification) or carries whole (CANopen, and
 //! anything unnamed).
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use winnow::Parser;
 use winnow::binary::be_u8;
 use winnow::token::{rest, take};

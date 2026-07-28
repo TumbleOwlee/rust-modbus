@@ -35,6 +35,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo test --all-features
 
+  # NF-R-003. Builds for a bare-metal target with no default features, so the
+  # `no_std` guarantee is checked by the compiler rather than asserted in prose.
+  # A `std` dependency reintroduced anywhere in the frame area fails here.
+  no-std:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add thumbv7em-none-eabi
+      - run: cargo build --target thumbv7em-none-eabi --no-default-features
+
   # Coverage floor. 80% of lines, enforced -- not advisory. See AGENTS.md
   # "Test-driven": the floor catches untested modules, it does not certify
   # tested ones.

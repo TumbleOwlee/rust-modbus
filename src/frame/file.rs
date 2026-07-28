@@ -9,6 +9,8 @@
 //! within it, so a sub-item overrunning the region is caught against the stated
 //! length rather than against whatever the caller happened to supply.
 
+use alloc::vec::Vec;
+
 use winnow::Parser;
 use winnow::binary::{be_u8, be_u16};
 use winnow::token::take;

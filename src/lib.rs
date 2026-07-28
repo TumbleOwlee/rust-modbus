@@ -5,6 +5,9 @@
 //! it.
 
 #![forbid(unsafe_code)]
+#![no_std]
+
+extern crate alloc;
 
 mod error;
 mod frame;

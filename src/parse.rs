@@ -11,6 +11,8 @@
 //! [`ErrMode::Cut`], so they bubble straight out instead of being mistaken for a
 //! branch that should be retried.
 
+use alloc::vec::Vec;
+
 use winnow::error::{ErrMode, Needed, ParserError};
 use winnow::stream::Stream;
 use winnow::{Parser, Partial};
