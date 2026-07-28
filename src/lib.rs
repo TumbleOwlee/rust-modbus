@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Async Modbus client and server over RTU and TCP.
+//!
+//! The authoritative specification of this crate's behavior lives in
+//! `docs/specs/`; requirement IDs cited in doc comments (`FR-R-*`, …) refer to
+//! it.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![forbid(unsafe_code)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod error;
+// The parsing primitives have no non-test caller until the first decoder lands
+// in the next stage. This allow goes away with it.
+#[allow(dead_code)]
+mod parse;
+
+pub use error::{Error, Result};

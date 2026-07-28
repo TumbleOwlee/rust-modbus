@@ -221,6 +221,13 @@ failure is caught either way.
   long file that covers one cohesive concern, or is flat generated data (e.g. a function-code
   table), stays whole. Treat a line count as a prompt to *review* the file, not a mandate to
   divide it.
+- **Check crates.io before hand-rolling anything.** At the start of every
+  implementation stage, list the functionality it needs (byte parsing, checksums, hex,
+  serial I/O, async runtime, …) and search crates.io for a popular, maintained crate
+  that already provides it. Report downloads, latest release date, and maintenance
+  state, and recommend — do not default to writing it yourself. Adding the dependency
+  is still a scope boundary below, so the finding goes to the user, not straight into
+  `Cargo.toml`.
 - **Errors are typed, never stringly.** Failures surface as variants of the crate's error
   enum, not formatted strings a caller has to match on by substring. A new failure mode is
   a new variant — and a new variant is a public API change, so it is spec (gate 1).
