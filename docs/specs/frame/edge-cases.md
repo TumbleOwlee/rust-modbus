@@ -38,7 +38,9 @@ mistaken for an oversight and silently "fixed".
 | FC8 body not dividing into whole 16-bit words | illegal-value error naming the data length (FR-R-061) |
 | FC12 byte count outside 6–70 | out-of-range error, raised before any event byte is consumed (FR-R-065) |
 | Encoding a general Diagnostics sub-function holding a named code | reserved-code error (FR-R-063) |
-| MEI 14 object count disagreeing with the objects present | byte-count-mismatch error (FR-R-077) |
+| MEI 14 object count disagreeing with the objects present | byte-count-mismatch error, its two numbers counting objects rather than bytes (FR-R-077) |
+| MEI 14 response whose final object is cut short mid-value | truncated-input error, not a count mismatch (FR-R-131) |
+| MEI 14 response with 256+ objects, or an object value over 255 bytes | out-of-range error on encode (FR-R-078) |
 | Unknown MEI type | decodes as a general MEI value with an opaque body (FR-R-071) |
 | Unknown Diagnostics sub-function, including reserved 5–9 | decodes as a general sub-function value (FR-R-063) |
 | Comm event status word ∉ {`0x0000`, `0xFFFF`} | carried as-is, no error (FR-R-068) |

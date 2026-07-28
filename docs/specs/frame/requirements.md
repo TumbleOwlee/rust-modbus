@@ -331,6 +331,10 @@ decode with an illegal-value error.
 does not match the number of complete objects present in the remaining bytes
 shall fail with a byte-count-mismatch error.
 
+**FR-R-078** — Encoding a Read Device Identification response with more than 255
+objects, or an object whose value exceeds 255 bytes, shall fail with an
+out-of-range error naming the field. Both are 1-byte fields on the wire.
+
 ---
 
 ## 7. Exception responses

@@ -12,7 +12,7 @@ mod parse;
 
 pub use error::{Error, Result};
 pub use frame::{
-    DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
-    FileRecordReadResponse, FileRecordWrite, FunctionCode, MAX_PDU_LEN, RequestPdu, ResponsePdu,
-    mask_write_result,
+    DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
+    FileRecordReadResponse, FileRecordWrite, FunctionCode, MAX_PDU_LEN, MeiRequest, MeiResponse,
+    ReadDeviceIdCode, RequestPdu, ResponsePdu, mask_write_result,
 };

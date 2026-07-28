@@ -14,6 +14,7 @@ use crate::frame::diagnostics::DiagnosticSubFunction;
 use crate::frame::exception::ExceptionResponse;
 use crate::frame::file::{self, FileRecordRead, FileRecordReadResponse, FileRecordWrite};
 use crate::frame::function::FunctionCode;
+use crate::frame::mei::{self, MeiRequest, MeiResponse};
 use crate::parse::{self, Input, ParseResult};
 
 /// Maximum PDU size, inclusive of the function code (FR-R-002).
@@ -142,6 +143,16 @@ pub enum RequestPdu {
         /// FIFO pointer address.
         address: u16,
     },
+    /// 43 — Encapsulated Interface Transport (FR-R-070).
+    EncapsulatedInterfaceTransport(MeiRequest),
+    /// A function code the crate does not name (FR-R-011).
+    Custom {
+        /// The raw function code; 1–127, and not one of the nineteen public
+        /// codes (FR-R-013).
+        code: u8,
+        /// The body, opaque and unvalidated (FR-R-012).
+        data: Vec<u8>,
+    },
 }
 
 /// A response PDU.
@@ -258,6 +269,16 @@ pub enum ResponsePdu {
     ReadFifoQueue {
         /// Queued values; at most 31 (FR-R-042).
         values: Vec<u16>,
+    },
+    /// 43 — Encapsulated Interface Transport (FR-R-070).
+    EncapsulatedInterfaceTransport(MeiResponse),
+    /// A function code the crate does not name (FR-R-011).
+    Custom {
+        /// The raw function code; 1–127, and not one of the nineteen public
+        /// codes (FR-R-013).
+        code: u8,
+        /// The body, opaque and unvalidated (FR-R-012).
+        data: Vec<u8>,
     },
     /// An exception response (FR-R-081).
     Exception(ExceptionResponse),
@@ -555,6 +576,16 @@ fn check_event_log_bytes(byte_count: u32) -> Result<()> {
     Ok(())
 }
 
+/// Encode a custom function code and its opaque body (FR-R-012, FR-R-013).
+///
+/// The code goes through [`FunctionCode`] so a custom code holding one of the
+/// nineteen named codes is rejected in exactly one place.
+fn encode_custom(code: u8, data: &[u8]) -> Result<Vec<u8>> {
+    let mut bytes = vec![FunctionCode::Custom(code).encode()?];
+    bytes.extend_from_slice(data);
+    finish(bytes)
+}
+
 /// Prepend `code` to an already-assembled body and size-check the result.
 fn encode_body(code: u8, body: Vec<u8>) -> Result<Vec<u8>> {
     let mut bytes = vec![code];
@@ -678,9 +709,13 @@ impl RequestPdu {
                 FunctionCode::ReadFifoQueue => Self::ReadFifoQueue {
                     address: be_u16.parse_next(input)?,
                 },
-                // Bodies for the remaining function codes land in later stages;
-                // this arm shrinks to nothing when the last of them does.
-                _ => return parse::fail(Error::Malformed),
+                FunctionCode::EncapsulatedInterfaceTransport => {
+                    Self::EncapsulatedInterfaceTransport(mei::decode_request(input)?)
+                }
+                FunctionCode::Custom(code) => Self::Custom {
+                    code,
+                    data: rest.parse_next(input)?.to_vec(),
+                },
             };
             Ok(request)
         })
@@ -765,6 +800,10 @@ impl RequestPdu {
                 bytes.extend_from_slice(&address.to_be_bytes());
                 finish(bytes)
             }
+            Self::EncapsulatedInterfaceTransport(ref request) => {
+                encode_body(43, mei::encode_request(request))
+            }
+            Self::Custom { code, ref data } => encode_custom(code, data),
         }
     }
 }
@@ -855,8 +894,13 @@ impl ResponsePdu {
                 FunctionCode::ReadFifoQueue => Self::ReadFifoQueue {
                     values: fifo_values(input)?,
                 },
-                // As in `RequestPdu::decode`: later stages fill this in.
-                _ => return parse::fail(Error::Malformed),
+                FunctionCode::EncapsulatedInterfaceTransport => {
+                    Self::EncapsulatedInterfaceTransport(mei::decode_response(input)?)
+                }
+                FunctionCode::Custom(code) => Self::Custom {
+                    code,
+                    data: rest.parse_next(input)?.to_vec(),
+                },
             };
             Ok(response)
         })
@@ -940,6 +984,10 @@ impl ResponsePdu {
                 bytes.extend_from_slice(&registers_to_bytes(values));
                 finish(bytes)
             }
+            Self::EncapsulatedInterfaceTransport(response) => {
+                encode_body(43, mei::encode_response(response)?)
+            }
+            Self::Custom { code, data } => encode_custom(*code, data),
             Self::Exception(exception) => exception.encode(),
         }
     }
@@ -974,6 +1022,7 @@ pub(super) fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::frame::exception::ExceptionCode;
+    use crate::frame::mei::{DeviceIdObject, ReadDeviceIdCode};
 
     /// Coil states of the Read Coils response in the specification's worked
     /// example: bytes `CD 6B 05`, least significant bit first (§6.1).
@@ -1994,6 +2043,233 @@ mod tests {
         assert_eq!(response.encode(), Ok(bytes.to_vec()));
     }
 
+    /// The specification's Read Device Identification response example
+    /// (§6.21): three basic objects, no continuation.
+    fn read_device_id_response_bytes() -> Vec<u8> {
+        let mut bytes = vec![0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x03];
+        for (id, value) in [(0x00u8, "Company"), (0x01, "Product"), (0x02, "V2.11")] {
+            bytes.push(id);
+            bytes.push(u8::try_from(value.len()).expect("value fits a byte"));
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    /// FR-R-011, FR-R-012 — an unnamed function code decodes with its body
+    /// opaque: every remaining byte, imposed on by nothing.
+    fn ut_custom_function_code_body_is_opaque() {
+        let bytes = [0x41, 0xDE, 0xAD, 0xBE, 0xEF];
+        let request = RequestPdu::Custom {
+            code: 0x41,
+            data: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        };
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+
+        let response = ResponsePdu::Custom {
+            code: 0x41,
+            data: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        };
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-012 — "every remaining byte" includes none at all.
+    fn ut_custom_body_may_be_empty() {
+        let request = RequestPdu::Custom {
+            code: 0x64,
+            data: Vec::new(),
+        };
+        assert_eq!(RequestPdu::decode(&[0x64]), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(vec![0x64]));
+    }
+
+    #[test]
+    /// FR-R-013 — a custom code holding one of the nineteen named codes has two
+    /// representations, so encoding it is a reserved-code error.
+    fn ut_encoding_custom_with_named_code_is_reserved_error() {
+        assert_eq!(
+            RequestPdu::Custom {
+                code: 3,
+                data: vec![0x00],
+            }
+            .encode(),
+            Err(Error::ReservedCode(3))
+        );
+    }
+
+    #[test]
+    /// FR-R-073 — the specification's Read Device Identification request
+    /// example (§6.21): basic identification, from object 0.
+    fn ut_read_device_identification_request_spec_example() {
+        let bytes = [0x2B, 0x0E, 0x01, 0x00];
+        let request =
+            RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Basic,
+                object_id: 0x00,
+            });
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-075 — the specification's Read Device Identification response
+    /// example (§6.21): each object is an id, a length, and that many bytes.
+    fn ut_read_device_identification_response_spec_example() {
+        let bytes = read_device_id_response_bytes();
+        let response =
+            ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Basic,
+                conformity_level: 0x01,
+                more_follows: false,
+                next_object_id: 0x00,
+                objects: vec![
+                    DeviceIdObject {
+                        id: 0x00,
+                        value: b"Company".to_vec(),
+                    },
+                    DeviceIdObject {
+                        id: 0x01,
+                        value: b"Product".to_vec(),
+                    },
+                    DeviceIdObject {
+                        id: 0x02,
+                        value: b"V2.11".to_vec(),
+                    },
+                ],
+            });
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes));
+    }
+
+    #[test]
+    /// FR-R-074 — only 1–4 name a conformity class, so 0 and 5 are out of
+    /// range.
+    fn ut_read_device_id_code_out_of_range() {
+        for raw in [0x00u8, 0x05, 0xFF] {
+            assert_eq!(
+                RequestPdu::decode(&[0x2B, 0x0E, raw, 0x00]),
+                Err(Error::OutOfRange {
+                    field: "read device id code",
+                    value: u32::from(raw),
+                    min: 1,
+                    max: 4,
+                }),
+                "code {raw}"
+            );
+        }
+    }
+
+    #[test]
+    /// FR-R-074 — each of the four conformity classes has its own wire byte,
+    /// and each round-trips.
+    fn ut_read_device_id_codes_round_trip() {
+        for (raw, code) in [
+            (1u8, ReadDeviceIdCode::Basic),
+            (2, ReadDeviceIdCode::Regular),
+            (3, ReadDeviceIdCode::Extended),
+            (4, ReadDeviceIdCode::Individual),
+        ] {
+            let bytes = [0x2B, 0x0E, raw, 0x00];
+            let request =
+                RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::ReadDeviceIdentification {
+                    read_device_id_code: code,
+                    object_id: 0x00,
+                });
+            assert_eq!(
+                RequestPdu::decode(&bytes),
+                Ok(request.clone()),
+                "code {raw}"
+            );
+            assert_eq!(request.encode(), Ok(bytes.to_vec()), "code {raw}");
+        }
+    }
+
+    #[test]
+    /// FR-R-075 — a partial response sets more-follows and names the object to
+    /// resume from; an empty object list is legal there.
+    fn ut_read_device_identification_partial_response() {
+        let bytes = [0x2B, 0x0E, 0x03, 0x02, 0xFF, 0x80, 0x00];
+        let response =
+            ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Extended,
+                conformity_level: 0x02,
+                more_follows: true,
+                next_object_id: 0x80,
+                objects: Vec::new(),
+            });
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-076 — the more-follows indicator is `0x00` or `0xFF` and nothing
+    /// else.
+    fn ut_more_follows_indicator_illegal_value() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x2B, 0x0E, 0x01, 0x01, 0x01, 0x00, 0x00]),
+            Err(Error::IllegalValue {
+                field: "more follows",
+                value: 0x01,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-077 — the object count must match the objects actually present;
+    /// the counts are objects, not bytes.
+    fn ut_device_id_object_count_mismatch() {
+        let bytes = [
+            0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x03, 0x00, 0x02, 0xAA, 0xBB,
+        ];
+        assert_eq!(
+            ResponsePdu::decode(&bytes),
+            Err(Error::ByteCountMismatch {
+                expected: 3,
+                actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-072 — a CANopen body is carried whole; the crate parses none of it.
+    fn ut_canopen_body_is_opaque() {
+        let bytes = [0x2B, 0x0D, 0x01, 0x02, 0x03];
+        let request = RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::CanOpen {
+            data: vec![0x01, 0x02, 0x03],
+        });
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+
+        let response = ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::CanOpen {
+            data: vec![0x01, 0x02, 0x03],
+        });
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-071 — an MEI type the crate does not name keeps its raw byte and an
+    /// opaque body rather than failing.
+    fn ut_unknown_mei_type_is_opaque() {
+        let bytes = [0x2B, 0x7F, 0xAA];
+        let request = RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::Other {
+            mei_type: 0x7F,
+            data: vec![0xAA],
+        });
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+
+        let response = ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::Other {
+            mei_type: 0x7F,
+            data: vec![0xAA],
+        });
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
     #[test]
     /// FR-R-133 — decode and encode are inverse for every PDU in this stage.
     fn ut_round_trips() {
@@ -2018,6 +2294,10 @@ mod tests {
             vec![0x0B],
             vec![0x0C],
             vec![0x11],
+            vec![0x41, 0xDE, 0xAD],
+            vec![0x2B, 0x0E, 0x01, 0x00],
+            vec![0x2B, 0x0D, 0x01, 0x02],
+            vec![0x2B, 0x7F, 0xAA],
             vec![
                 0x14, 0x0E, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x06, 0x00, 0x03, 0x00, 0x09,
                 0x00, 0x02,
@@ -2052,6 +2332,9 @@ mod tests {
             vec![0x0B, 0xFF, 0xFF, 0x01, 0x08],
             vec![0x0C, 0x08, 0x00, 0x00, 0x01, 0x08, 0x01, 0x21, 0x20, 0x00],
             vec![0x11, 0x03, 0xAA, 0xFF, 0x01],
+            vec![0x41, 0xDE, 0xAD],
+            vec![0x2B, 0x0D, 0x01, 0x02],
+            vec![0x2B, 0x7F, 0xAA],
             vec![
                 0x14, 0x0C, 0x05, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x05, 0x06, 0x33, 0xCD, 0x00, 0x40,
             ],
