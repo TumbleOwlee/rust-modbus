@@ -35,6 +35,16 @@ pub enum Error {
     #[error("code {0} is named and must not be carried as a custom value")]
     ReservedCode(u8),
 
+    /// A field or PDU whose length is fixed by its layout did not have it
+    /// (FR-R-085, FR-R-105, FR-R-106).
+    #[error("invalid length: expected {expected}, got {actual}")]
+    InvalidLength {
+        /// Bytes the layout fixes.
+        expected: usize,
+        /// Bytes actually present.
+        actual: usize,
+    },
+
     /// A structural parse failure with no more specific cause.
     #[error("malformed frame")]
     Malformed,

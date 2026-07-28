@@ -14,4 +14,4 @@ mod frame;
 mod parse;
 
 pub use error::{Error, Result};
-pub use frame::FunctionCode;
+pub use frame::{ExceptionCode, ExceptionResponse, FunctionCode};
