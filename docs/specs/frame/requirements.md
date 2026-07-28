@@ -203,8 +203,10 @@ sub-request being exactly 7 bytes: a 1-byte reference type, a 2-byte file number
 a 2-byte record number, and a 2-byte record length in registers.
 
 **FR-R-051** — The request byte count of a Read File Record request shall be in
-the range 7–245 (`0x07`–`0xF5`) inclusive and shall be an exact multiple of 7; a
-value violating either condition shall fail to decode with a byte-count error.
+the range 7–245 (`0x07`–`0xF5`) inclusive and shall be an exact multiple of 7. A
+value outside the range shall fail to decode with an out-of-range error; a value
+inside it that is not a multiple of 7 shall fail to decode with an illegal-value
+error naming the byte count.
 
 **FR-R-052** — A Read File Record response PDU shall consist of a 1-byte response
 data length in the range 7–245 inclusive, followed by that many bytes of
@@ -229,6 +231,13 @@ reference-type error.
 **FR-R-056** — A file number shall be in the range 1–65535 and a record number in
 the range 0–9999 (`0x270F`); encoding a value outside either range shall fail
 with an out-of-range error.
+
+**FR-R-057** — A file response length that is zero or even shall fail to decode
+with an illegal-value error naming the field, since it claims an odd number of
+record data bytes and cannot hold whole registers.
+
+**FR-R-058** — The file number and record number ranges FR-R-056 fixes shall be
+enforced on decode as well as on encode.
 
 ---
 

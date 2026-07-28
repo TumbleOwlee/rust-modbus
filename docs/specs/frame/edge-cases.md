@@ -26,7 +26,11 @@ mistaken for an oversight and silently "fixed".
 | Write Single Coil value ∉ {`0x0000`, `0xFF00`} | illegal-value error (FR-R-027) |
 | FC24 FIFO count > 31 | out-of-range error, raised before any sizing allocation (FR-R-042) |
 | File record reference type ≠ 6 | reference-type error (FR-R-055) |
-| FC20 request byte count not a multiple of 7 | byte-count error (FR-R-051) |
+| FC20 request byte count outside 7–245 | out-of-range error (FR-R-051) |
+| FC20 request byte count not a multiple of 7 | illegal-value error naming the byte count (FR-R-051) |
+| File response length zero or even | illegal-value error naming the field (FR-R-057) |
+| File or record number outside its range | out-of-range error, on decode as well as encode (FR-R-056, FR-R-058) |
+| File record sub-item overrunning its length-delimited region | truncated-input error measured against the stated length (FR-R-131) |
 | Read device id code outside 1–4 | out-of-range error (FR-R-074) |
 | More-follows indicator ∉ {`0x00`, `0xFF`} | illegal-value error (FR-R-076) |
 | Run indicator status ∉ {`0x00`, `0xFF`} | illegal-value error (FR-R-067) |
@@ -75,6 +79,11 @@ input whatsoever.
   coil values, while the request's quantity says exactly which bits are padding.
   Both rules exist to keep decode and encode inverse (FR-R-133). Do not "fix"
   this into false symmetry.
+- **A FC20 sub-request's record length is not range-checked.** The
+  specification fixes no bound for it, and the size of the response it provokes
+  is the server's to judge, so only the 2-byte field width limits it. A request
+  asking for more registers than a response could carry decodes fine; the
+  server answers with an exception.
 - **Custom codes carry no semantics.** `Custom(u8)` preserves bytes; it does not
   know quantities, addresses, or lengths, so nothing beyond the PDU size limit is
   validated. A consumer using vendor codes owns their meaning.

@@ -67,11 +67,39 @@ where
             0 => Ok(value),
             extra => Err(Error::TrailingBytes { extra }),
         },
-        Err(ErrMode::Incomplete(needed)) => Err(Error::Truncated {
-            expected: bytes.len().saturating_add(missing(needed)),
-            supplied: bytes.len(),
-        }),
-        Err(ErrMode::Backtrack(failure) | ErrMode::Cut(failure)) => Err(failure.into_error()),
+        Err(error) => Err(convert(error, bytes.len())),
+    }
+}
+
+/// Run `parser` over `bytes` repeatedly until the input is exhausted.
+///
+/// Used for the length-delimited regions that hold a variable number of
+/// same-shaped items — file record sub-requests and sub-responses (FR-R-050,
+/// FR-R-052, FR-R-053). The region has already been carved out at its stated
+/// length, so an item running past its end is reported against that length.
+pub(crate) fn run_all<O, P>(bytes: &[u8], mut parser: P) -> Result<Vec<O>>
+where
+    P: for<'a> FnMut(&mut Input<'a>) -> ParseResult<O>,
+{
+    let mut input = Partial::new(bytes);
+    let mut items = Vec::new();
+    while input.eof_offset() > 0 {
+        match parser(&mut input) {
+            Ok(item) => items.push(item),
+            Err(error) => return Err(convert(error, bytes.len())),
+        }
+    }
+    Ok(items)
+}
+
+/// Turn a parser failure into the crate error it stands for.
+fn convert(error: ErrMode<ParseFailure>, supplied: usize) -> Error {
+    match error {
+        ErrMode::Incomplete(needed) => Error::Truncated {
+            expected: supplied.saturating_add(missing(needed)),
+            supplied,
+        },
+        ErrMode::Backtrack(failure) | ErrMode::Cut(failure) => failure.into_error(),
     }
 }
 

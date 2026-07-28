@@ -59,6 +59,10 @@ pub enum Error {
         max: u32,
     },
 
+    /// A file record named a reference type other than 6 (FR-R-055).
+    #[error("file record reference type {0} is not 6")]
+    ReferenceType(u8),
+
     /// A field carried a value its layout does not define (FR-R-027, FR-R-067,
     /// FR-R-076).
     #[error("{field} carries the undefined value {value:#06x}")]

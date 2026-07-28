@@ -11,6 +11,7 @@ use winnow::token::take;
 
 use crate::error::{Error, Result};
 use crate::frame::exception::ExceptionResponse;
+use crate::frame::file::{self, FileRecordRead, FileRecordReadResponse, FileRecordWrite};
 use crate::frame::function::FunctionCode;
 use crate::parse::{self, Input, ParseResult};
 
@@ -110,6 +111,16 @@ pub enum RequestPdu {
         /// Values to write; 1–121 of them (FR-R-038).
         registers: Vec<u16>,
     },
+    /// 20 — Read File Record.
+    ReadFileRecord {
+        /// Sub-requests, 7 bytes each; 1–35 of them (FR-R-050, FR-R-051).
+        records: Vec<FileRecordRead>,
+    },
+    /// 21 — Write File Record.
+    WriteFileRecord {
+        /// Sub-requests (FR-R-053).
+        records: Vec<FileRecordWrite>,
+    },
     /// 24 — Read FIFO Queue.
     ReadFifoQueue {
         /// FIFO pointer address.
@@ -181,6 +192,16 @@ pub enum ResponsePdu {
     ReadWriteMultipleRegisters {
         /// Values read.
         registers: Vec<u16>,
+    },
+    /// 20 — Read File Record.
+    ReadFileRecord {
+        /// Sub-responses, one per sub-request (FR-R-052).
+        records: Vec<FileRecordReadResponse>,
+    },
+    /// 21 — Write File Record — an echo of the request (FR-R-053).
+    WriteFileRecord {
+        /// Sub-requests echoed back.
+        records: Vec<FileRecordWrite>,
     },
     /// 24 — Read FIFO Queue.
     ReadFifoQueue {
@@ -292,7 +313,7 @@ fn register_width(quantity: usize) -> usize {
 }
 
 /// Interpret `data` as big-endian registers (FR-R-003).
-fn registers_from_bytes(data: &[u8]) -> Vec<u16> {
+pub(super) fn registers_from_bytes(data: &[u8]) -> Vec<u16> {
     data.chunks_exact(2)
         .map(|pair| match pair {
             [hi, lo] => u16::from_be_bytes([*hi, *lo]),
@@ -435,6 +456,13 @@ fn encode_echo_quantity(code: u8, address: u16, quantity: u16) -> Result<Vec<u8>
     finish(bytes)
 }
 
+/// Prepend `code` to an already-assembled body and size-check the result.
+fn encode_body(code: u8, body: Vec<u8>) -> Result<Vec<u8>> {
+    let mut bytes = vec![code];
+    bytes.extend_from_slice(&body);
+    finish(bytes)
+}
+
 /// Encode a counted body: the byte count followed by the data (FR-R-023,
 /// FR-R-025).
 fn encode_counted(code: u8, data: &[u8]) -> Result<Vec<u8>> {
@@ -534,6 +562,12 @@ impl RequestPdu {
                         registers: registers_from_bytes(data),
                     }
                 }
+                FunctionCode::ReadFileRecord => Self::ReadFileRecord {
+                    records: file::decode_read_requests(input)?,
+                },
+                FunctionCode::WriteFileRecord => Self::WriteFileRecord {
+                    records: file::decode_write_records(input)?,
+                },
                 FunctionCode::ReadFifoQueue => Self::ReadFifoQueue {
                     address: be_u16.parse_next(input)?,
                 },
@@ -605,6 +639,12 @@ impl RequestPdu {
                 bytes.extend_from_slice(&data);
                 finish(bytes)
             }
+            Self::ReadFileRecord { ref records } => {
+                encode_body(20, file::encode_read_requests(records)?)
+            }
+            Self::WriteFileRecord { ref records } => {
+                encode_body(21, file::encode_write_records(records)?)
+            }
             Self::ReadFifoQueue { address } => {
                 let mut bytes = vec![24];
                 bytes.extend_from_slice(&address.to_be_bytes());
@@ -660,6 +700,12 @@ impl ResponsePdu {
                 FunctionCode::ReadWriteMultipleRegisters => Self::ReadWriteMultipleRegisters {
                     registers: registers(input)?,
                 },
+                FunctionCode::ReadFileRecord => Self::ReadFileRecord {
+                    records: file::decode_read_responses(input)?,
+                },
+                FunctionCode::WriteFileRecord => Self::WriteFileRecord {
+                    records: file::decode_write_records(input)?,
+                },
                 FunctionCode::ReadFifoQueue => Self::ReadFifoQueue {
                     values: fifo_values(input)?,
                 },
@@ -705,6 +751,12 @@ impl ResponsePdu {
             Self::ReadWriteMultipleRegisters { registers } => {
                 encode_counted(23, &registers_to_bytes(registers))
             }
+            Self::ReadFileRecord { records } => {
+                encode_body(20, file::encode_read_responses(records)?)
+            }
+            Self::WriteFileRecord { records } => {
+                encode_body(21, file::encode_write_records(records)?)
+            }
             Self::ReadFifoQueue { values } => {
                 let count = quantity_of("FIFO count", values.len(), 0, MAX_FIFO_COUNT)?;
                 let mut bytes = vec![24];
@@ -737,7 +789,7 @@ fn fifo_values(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
 }
 
 /// Flatten registers to big-endian bytes (FR-R-003).
-fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
+pub(super) fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
     registers
         .iter()
         .flat_map(|register| register.to_be_bytes())
@@ -1370,6 +1422,210 @@ mod tests {
     }
 
     #[test]
+    /// FR-R-050 — the specification's Read File Record request example (§6.14):
+    /// byte count 14, two 7-byte sub-requests.
+    fn ut_read_file_record_spec_example() {
+        let bytes = [
+            0x14, 0x0E, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x06, 0x00, 0x03, 0x00, 0x09,
+            0x00, 0x02,
+        ];
+        let expected = RequestPdu::ReadFileRecord {
+            records: vec![
+                FileRecordRead {
+                    file_number: 4,
+                    record_number: 1,
+                    record_length: 2,
+                },
+                FileRecordRead {
+                    file_number: 3,
+                    record_number: 9,
+                    record_length: 2,
+                },
+            ],
+        };
+        assert_eq!(RequestPdu::decode(&bytes), Ok(expected.clone()));
+        assert_eq!(expected.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-052 — the specification's Read File Record response example
+    /// (§6.14): each sub-response's file response length is its record data
+    /// byte count plus one.
+    fn ut_read_file_record_response_spec_example() {
+        let bytes = [
+            0x14, 0x0C, 0x05, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x05, 0x06, 0x33, 0xCD, 0x00, 0x40,
+        ];
+        let expected = ResponsePdu::ReadFileRecord {
+            records: vec![
+                FileRecordReadResponse {
+                    values: vec![0x0DFE, 0x0020],
+                },
+                FileRecordReadResponse {
+                    values: vec![0x33CD, 0x0040],
+                },
+            ],
+        };
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(expected.clone()));
+        assert_eq!(expected.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-053 — the specification's Write File Record example (§6.15); the
+    /// response is byte-for-byte the request.
+    fn ut_write_file_record_spec_example() {
+        let bytes = [
+            0x15, 0x0D, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x03, 0x06, 0xAF, 0x04, 0xBE, 0x10,
+            0x0D,
+        ];
+        let records = vec![FileRecordWrite {
+            file_number: 4,
+            record_number: 7,
+            values: vec![0x06AF, 0x04BE, 0x100D],
+        }];
+        let request = RequestPdu::WriteFileRecord {
+            records: records.clone(),
+        };
+        let response = ResponsePdu::WriteFileRecord { records };
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-051 — a Read File Record request byte count outside 7–245 is an
+    /// out-of-range error, raised before any body byte is consumed.
+    fn ut_read_file_record_byte_count_out_of_range() {
+        assert_eq!(
+            RequestPdu::decode(&[0x14, 0x00]),
+            Err(Error::OutOfRange {
+                field: "request byte count",
+                value: 0,
+                min: 7,
+                max: 245,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-051 — a Read File Record request byte count that is not a multiple
+    /// of 7 cannot describe whole sub-requests, so it is an illegal value.
+    fn ut_read_file_record_byte_count_not_multiple_of_seven() {
+        assert_eq!(
+            RequestPdu::decode(&[0x14, 0x08, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x00]),
+            Err(Error::IllegalValue {
+                field: "request byte count",
+                value: 8,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-055 — a reference type other than 6 is rejected wherever it appears.
+    fn ut_file_record_reference_type_must_be_six() {
+        assert_eq!(
+            RequestPdu::decode(&[0x14, 0x07, 0x07, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02]),
+            Err(Error::ReferenceType(7))
+        );
+        assert_eq!(
+            ResponsePdu::decode(&[0x14, 0x07, 0x05, 0x05, 0x0D, 0xFE, 0x00, 0x20, 0x00]),
+            Err(Error::ReferenceType(5))
+        );
+    }
+
+    #[test]
+    /// FR-R-057 — a file response length that is not the record data byte count
+    /// plus one cannot be honoured; an even one would claim an odd number of
+    /// data bytes.
+    fn ut_file_response_length_must_cover_whole_registers() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x14, 0x07, 0x06, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x00]),
+            Err(Error::IllegalValue {
+                field: "file response length",
+                value: 6,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-054 — a Write File Record data length below 9 cannot hold a
+    /// sub-request with any data at all.
+    fn ut_write_file_record_data_length_out_of_range() {
+        assert_eq!(
+            RequestPdu::decode(&[0x15, 0x07, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x00]),
+            Err(Error::OutOfRange {
+                field: "request data length",
+                value: 7,
+                min: 9,
+                max: 251,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-056, FR-R-058 — file number 0 and record number 10000 are outside
+    /// the ranges the specification fixes, on decode as well as encode
+    /// (FR-R-133).
+    fn ut_file_and_record_numbers_out_of_range() {
+        let file_zero = Error::OutOfRange {
+            field: "file number",
+            value: 0,
+            min: 1,
+            max: u32::from(u16::MAX),
+        };
+        assert_eq!(
+            RequestPdu::decode(&[0x14, 0x07, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02]),
+            Err(file_zero.clone())
+        );
+        assert_eq!(
+            RequestPdu::ReadFileRecord {
+                records: vec![FileRecordRead {
+                    file_number: 0,
+                    record_number: 1,
+                    record_length: 2,
+                }],
+            }
+            .encode(),
+            Err(file_zero)
+        );
+
+        let record_high = Error::OutOfRange {
+            field: "record number",
+            value: 10_000,
+            min: 0,
+            max: 9_999,
+        };
+        assert_eq!(
+            RequestPdu::decode(&[0x14, 0x07, 0x06, 0x00, 0x04, 0x27, 0x10, 0x00, 0x02]),
+            Err(record_high.clone())
+        );
+        assert_eq!(
+            RequestPdu::ReadFileRecord {
+                records: vec![FileRecordRead {
+                    file_number: 4,
+                    record_number: 10_000,
+                    record_length: 2,
+                }],
+            }
+            .encode(),
+            Err(record_high)
+        );
+    }
+
+    #[test]
+    /// FR-R-052, FR-R-131 — a sub-response claiming more bytes than its region
+    /// holds is truncated input, measured against the stated data length.
+    fn ut_file_record_sub_item_may_not_overrun_its_region() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x14, 0x08, 0x0B, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x00, 0x00]),
+            Err(Error::Truncated {
+                expected: 12,
+                supplied: 8,
+            })
+        );
+    }
+
+    #[test]
     /// FR-R-133 — decode and encode are inverse for every PDU in this stage.
     fn ut_round_trips() {
         let requests: Vec<Vec<u8>> = vec![
@@ -1388,6 +1644,14 @@ mod tests {
                 0x00, 0xFF,
             ],
             vec![0x18, 0x04, 0xDE],
+            vec![
+                0x14, 0x0E, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x06, 0x00, 0x03, 0x00, 0x09,
+                0x00, 0x02,
+            ],
+            vec![
+                0x15, 0x0D, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x03, 0x06, 0xAF, 0x04, 0xBE, 0x10,
+                0x0D,
+            ],
         ];
         for bytes in requests {
             let decoded = RequestPdu::decode(&bytes).expect("valid request");
@@ -1409,6 +1673,13 @@ mod tests {
                 0x17, 0x0C, 0x00, 0xFE, 0x0A, 0xCD, 0x00, 0x01, 0x00, 0x03, 0x00, 0x0D, 0x00, 0xFF,
             ],
             vec![0x18, 0x00, 0x06, 0x00, 0x02, 0x01, 0xB8, 0x12, 0x84],
+            vec![
+                0x14, 0x0C, 0x05, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x05, 0x06, 0x33, 0xCD, 0x00, 0x40,
+            ],
+            vec![
+                0x15, 0x0D, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x03, 0x06, 0xAF, 0x04, 0xBE, 0x10,
+                0x0D,
+            ],
         ];
         for bytes in responses {
             let decoded = ResponsePdu::decode(&bytes).expect("valid response");
