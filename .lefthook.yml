@@ -1,0 +1,49 @@
+pre-commit:
+  piped: true
+  commands:
+
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt -- --check
+      fail_text: |
+        cargo fmt found formatting issues.
+        Run `cargo fmt` to fix them, then re-stage your changes.
+
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-features -- -D warnings
+      fail_text: |
+        cargo clippy found issues.
+        Fix the warnings above, then re-stage your changes.
+
+    # Warning only (never blocks the commit): rust-modbus is spec-driven, so a change
+    # to src/ usually comes with a docs/specs/ update in the same commit. This nudges
+    # when code changed but no spec did -- override by just committing again; it does
+    # not fail.
+    spec-reminder:
+      run: |
+        staged="$(git diff --cached --name-only)"
+        code="$(printf '%s\n' "$staged" | grep -E '^src/' || true)"
+        spec="$(printf '%s\n' "$staged" | grep -E '^docs/specs/' || true)"
+        if [ -n "$code" ] && [ -z "$spec" ]; then
+          echo "note: product code changed but no docs/specs/ file is staged."
+          echo "      If this commit changes behavior, update the area's requirements.md too"
+          echo "      (see AGENTS.md 'Spec-driven'). This is a reminder, not a failure."
+        fi
+        exit 0
+
+    # Warning only: every test that pins observable behavior cites its requirement ID
+    # in a doc comment directly below the #[test] attribute (see AGENTS.md).
+    test-id-reminder:
+      glob: "*.rs"
+      run: |
+        staged="$(git diff --cached --name-only | grep -E '\.rs$' || true)"
+        [ -z "$staged" ] && exit 0
+        if printf '%s\n' "$staged" | xargs grep -l '#\[\(tokio::\)\?test\]' 2>/dev/null | head -1 > /dev/null; then
+          if ! git diff --cached -U1 -- $staged | grep -qE '^\+\s*///\s*(FR|CL|SV|TR|NF)-R-[0-9]+'; then
+            echo "note: tests changed but no requirement ID (FR-R-*/CL-R-*/SV-R-*/TR-R-*/NF-R-*)"
+            echo "      appears in an added doc comment. Tests pinning observable behavior"
+            echo "      cite their requirement (see AGENTS.md). Reminder, not a failure."
+          fi
+        fi
+        exit 0

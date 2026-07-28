@@ -1,0 +1,19 @@
+[package]
+name = "rust-modbus"
+version = "0.1.0"
+edition = "2024"
+description = "Async Modbus client and server over RTU and TCP"
+license = "MIT"
+repository = "https://github.com/TumbleOwlee/rust-modbus"
+keywords = ["modbus", "rtu", "tcp", "async", "industrial"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+
+[lints.clippy]
+# Every fallible call in non-test code documents why it cannot fail via
+# `expect("...")`. Tests are exempt (see clippy.toml).
+unwrap_used = "deny"
+# Wire input is untrusted: no decode path may panic on a peer's bytes.
+indexing_slicing = "deny"
+panic = "deny"
