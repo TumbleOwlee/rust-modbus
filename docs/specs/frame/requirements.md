@@ -470,7 +470,22 @@ FR-R-133 applies to the decoded PDU without qualification.
 
 ---
 
-## 11. Robustness
+## 11. ADU framing abstraction
+
+**FR-R-120** — The frame layer shall expose its three framings behind a single
+abstraction parameterised by the header each carries: RTU and ASCII by a 1-byte
+address (FR-R-096, FR-R-117), TCP by a transaction identifier and a unit
+identifier (FR-R-101). Each framing shall state its maximum ADU length
+(FR-R-091, FR-R-104, FR-R-113) and shall provide decode and encode in both
+directions, the direction stated by the caller as FR-R-005 requires.
+
+**FR-R-121** — Decoding an ADU shall yield its header and its PDU as separate
+values. The frame layer shall not merge the two into a single type, so that a
+caller may route on the header without re-encoding the PDU.
+
+---
+
+## 12. Robustness
 
 **FR-R-130** — No decoding operation shall panic, index out of bounds, abort, or
 allocate a quantity derived from unvalidated input, for any input byte sequence

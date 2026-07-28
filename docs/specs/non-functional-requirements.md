@@ -13,9 +13,22 @@ fabricated ahead of that.
 
 ## 1. Platforms and toolchain
 
-*(TBD — target platforms, MSRV, toolchain channel. The toolchain is currently
-pinned in `rust-toolchain.toml`; state it normatively here when the MSRV policy
-is decided.)*
+**NF-R-001** — The crate shall build for `no_std` targets with `alloc`
+available. The frame area shall depend on `core` and `alloc` only.
+
+**NF-R-002** — The crate shall expose a `std` feature, enabled by default. The
+client, server, and transport areas require it; the frame area shall not.
+
+**NF-R-003** — CI shall build the crate for a bare-metal target
+(`thumbv7em-none-eabi`) with default features disabled, so a dependency on
+`std` cannot be reintroduced unnoticed.
+
+**NF-R-004** — Dependencies shall be declared with `default-features = false`,
+enabling only the features the crate uses.
+
+*(TBD — MSRV and toolchain channel. The toolchain is currently pinned in
+`rust-toolchain.toml`; state it normatively here when the MSRV policy is
+decided.)*
 
 ---
 
