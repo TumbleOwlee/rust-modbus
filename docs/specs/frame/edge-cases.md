@@ -22,6 +22,7 @@ mistaken for an oversight and silently "fixed".
 | Quantity outside its per-function range | out-of-range error, on decode as well as encode (FR-R-021, FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-045) |
 | Register-read response with an odd byte count | illegal-value error naming the byte count (FR-R-046) |
 | Bit-read response, coil count not on the wire | decodes to `8 × byte count` values, padding included (FR-R-044) |
+| Bit-packed request body with non-zero padding above the quantity | illegal-value error naming the byte (FR-R-047) |
 | Write Single Coil value ∉ {`0x0000`, `0xFF00`} | illegal-value error (FR-R-027) |
 | FC24 FIFO count > 31 | out-of-range error, raised before any sizing allocation (FR-R-042) |
 | File record reference type ≠ 6 | reference-type error (FR-R-055) |
@@ -66,6 +67,14 @@ input whatsoever.
 
 ## 4. Known limitations
 
+- **Bit padding is treated differently in requests and responses, on purpose.**
+  A bit-read *response* keeps all `8 × byte count` values including padding
+  (FR-R-044); a bit-write *request* truncates to its quantity and rejects
+  non-zero padding (FR-R-047). The asymmetry is not an oversight: the response
+  carries no quantity field, so its padding bits are indistinguishable from real
+  coil values, while the request's quantity says exactly which bits are padding.
+  Both rules exist to keep decode and encode inverse (FR-R-133). Do not "fix"
+  this into false symmetry.
 - **Custom codes carry no semantics.** `Custom(u8)` preserves bytes; it does not
   know quantities, addresses, or lengths, so nothing beyond the PDU size limit is
   validated. A consumer using vendor codes owns their meaning.

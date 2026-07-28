@@ -9,4 +9,4 @@ mod pdu;
 
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use function::FunctionCode;
-pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu};
+pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};

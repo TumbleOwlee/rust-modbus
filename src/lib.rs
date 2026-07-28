@@ -13,4 +13,5 @@ mod parse;
 pub use error::{Error, Result};
 pub use frame::{
     ExceptionCode, ExceptionResponse, FunctionCode, MAX_PDU_LEN, RequestPdu, ResponsePdu,
+    mask_write_result,
 };

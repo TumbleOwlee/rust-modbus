@@ -189,6 +189,10 @@ decode as well as to encode. A PDU the encoder would reject shall not decode.
 illegal-value error naming the byte count, since no quantity of 16-bit registers
 can produce one.
 
+**FR-R-047** — Decoding a bit-packed request body whose padding bits above the
+stated quantity are not zero shall fail with an illegal-value error naming the
+offending byte.
+
 ---
 
 ## 4. File record access
