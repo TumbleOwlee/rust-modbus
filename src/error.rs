@@ -63,8 +63,8 @@ pub enum Error {
     #[error("file record reference type {0} is not 6")]
     ReferenceType(u8),
 
-    /// A field carried a value its layout does not define (FR-R-027, FR-R-067,
-    /// FR-R-076).
+    /// A field carried a value its layout does not define (FR-R-027, FR-R-046,
+    /// FR-R-057, FR-R-061, FR-R-076).
     #[error("{field} carries the undefined value {value:#06x}")]
     IllegalValue {
         /// The field that was illegal.

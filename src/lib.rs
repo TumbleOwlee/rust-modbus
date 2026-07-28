@@ -12,6 +12,7 @@ mod parse;
 
 pub use error::{Error, Result};
 pub use frame::{
-    ExceptionCode, ExceptionResponse, FileRecordRead, FileRecordReadResponse, FileRecordWrite,
-    FunctionCode, MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result,
+    DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
+    FileRecordReadResponse, FileRecordWrite, FunctionCode, MAX_PDU_LEN, RequestPdu, ResponsePdu,
+    mask_write_result,
 };

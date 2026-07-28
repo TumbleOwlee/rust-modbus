@@ -249,7 +249,9 @@ single byte carrying eight exception status outputs.
 
 **FR-R-061** — A Diagnostics request PDU (function code 8) shall consist of a
 2-byte sub-function code followed by zero or more 16-bit data words. Its response
-shall carry the same sub-function code followed by its own data words.
+shall carry the same sub-function code followed by its own data words. A body
+whose bytes after the sub-function code do not divide into whole 16-bit words
+shall fail to decode with an illegal-value error naming the data length.
 
 **FR-R-062** — The frame layer shall represent as named values exactly the
 Diagnostics sub-functions defined by the specification: 0 Return Query Data,
@@ -262,7 +264,9 @@ Count, 18 Return Bus Character Overrun Count, 20 Clear Overrun Counter and Flag.
 
 **FR-R-063** — Any Diagnostics sub-function code not named in FR-R-062, including
 the reserved range 5–9, shall decode successfully into a general sub-function
-value carrying the raw 16-bit code, and shall not fail the decode.
+value carrying the raw 16-bit code, and shall not fail the decode. Encoding a
+general sub-function value that holds a code FR-R-062 names shall fail with a
+reserved-code error, so no sub-function has two encodings.
 
 **FR-R-064** — A Get Comm Event Counter request PDU (function code 11) shall
 consist of the function code alone. Its response shall consist of a 2-byte status
@@ -271,16 +275,19 @@ word followed by a 2-byte event count.
 **FR-R-065** — A Get Comm Event Log request PDU (function code 12) shall consist
 of the function code alone. Its response shall consist of a 1-byte byte count, a
 2-byte status word, a 2-byte event count, a 2-byte message count, and 0–64 event
-bytes, where the byte count equals the number of event bytes plus six.
+bytes, where the byte count equals the number of event bytes plus six. The byte
+count shall be in the range 6–70 inclusive; a value outside it shall fail to
+decode with an out-of-range error, raised before any event byte is consumed.
 
 **FR-R-066** — A Report Server ID request PDU (function code 17) shall consist of
 the function code alone. Its response shall consist of a 1-byte byte count
 followed by that many bytes: a device-specific server id of unspecified length, a
 run indicator status, and additional device-specific data.
 
-**FR-R-067** — The run indicator status in a Report Server ID response shall be
-`0x00` for OFF and `0xFF` for ON; any other value shall fail to decode with an
-illegal-value error.
+**FR-R-067** — The frame layer shall carry a Report Server ID response body
+whole, without interpreting the server id, run indicator, or additional data
+within it. The run indicator's `0x00`/`0xFF` encoding is the responsibility of
+the server that constructs the body (`SV-R-*`).
 
 **FR-R-068** — The status word in a Get Comm Event Counter or Get Comm Event Log
 response shall be `0xFFFF` while the device is busy processing a program function

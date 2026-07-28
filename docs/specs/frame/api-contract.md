@@ -96,6 +96,7 @@ fixed by `requirements.md`.)*
 *(TBD — the Rust spelling of the failure modes. The modes themselves are
 normative and named by FR-R-006, FR-R-013, FR-R-014, FR-R-015, FR-R-021,
 FR-R-022, FR-R-027, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-043, FR-R-051,
-FR-R-054, FR-R-055, FR-R-056, FR-R-067, FR-R-074, FR-R-076, FR-R-077, FR-R-084,
+FR-R-054, FR-R-055, FR-R-056, FR-R-057, FR-R-058, FR-R-061, FR-R-063,
+FR-R-065, FR-R-074, FR-R-076, FR-R-077, FR-R-084,
 FR-R-085, FR-R-095, FR-R-102, FR-R-105, FR-R-106, FR-R-112, FR-R-115, FR-R-116,
 FR-R-131, FR-R-132. Adding a variant beyond these is a normative change.)*

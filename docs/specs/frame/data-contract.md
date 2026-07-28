@@ -58,7 +58,7 @@ counts the FIFO count field as well as the data (`2×FIFO count + 2`).
 | 8 | sub-function (2), data (`2×n`, n ≥ 0) | sub-function (2), data (`2×n`) |
 | 11 | *(empty)* | status (2), event count (2) |
 | 12 | *(empty)* | byte count (1) = events + 6, status (2), event count (2), message count (2), events (0–64) |
-| 17 | *(empty)* | byte count (1), server id (device-specific), run indicator (1) = `0x00` \| `0xFF`, additional data |
+| 17 | *(empty)* | byte count (1), server id (device-specific), run indicator (1) = `0x00` \| `0xFF`, additional data — the interior is carried, not parsed (FR-R-067) |
 
 Status word (FR-R-068): `0xFFFF` while busy with a program function, `0x0000`
 otherwise; other values are carried, not rejected.

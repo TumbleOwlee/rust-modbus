@@ -7,9 +7,10 @@
 
 use winnow::Parser;
 use winnow::binary::{be_u8, be_u16};
-use winnow::token::take;
+use winnow::token::{rest, take};
 
 use crate::error::{Error, Result};
+use crate::frame::diagnostics::DiagnosticSubFunction;
 use crate::frame::exception::ExceptionResponse;
 use crate::frame::file::{self, FileRecordRead, FileRecordReadResponse, FileRecordWrite};
 use crate::frame::function::FunctionCode;
@@ -111,6 +112,21 @@ pub enum RequestPdu {
         /// Values to write; 1–121 of them (FR-R-038).
         registers: Vec<u16>,
     },
+    /// 7 — Read Exception Status (FR-R-060).
+    ReadExceptionStatus,
+    /// 8 — Diagnostics.
+    Diagnostics {
+        /// Sub-function to run (FR-R-062).
+        sub_function: DiagnosticSubFunction,
+        /// Sub-function data words; may be empty (FR-R-061).
+        data: Vec<u16>,
+    },
+    /// 11 — Get Comm Event Counter (FR-R-064).
+    GetCommEventCounter,
+    /// 12 — Get Comm Event Log (FR-R-065).
+    GetCommEventLog,
+    /// 17 — Report Server ID (FR-R-066).
+    ReportServerId,
     /// 20 — Read File Record.
     ReadFileRecord {
         /// Sub-requests, 7 bytes each; 1–35 of them (FR-R-050, FR-R-051).
@@ -192,6 +208,41 @@ pub enum ResponsePdu {
     ReadWriteMultipleRegisters {
         /// Values read.
         registers: Vec<u16>,
+    },
+    /// 7 — Read Exception Status.
+    ReadExceptionStatus {
+        /// The eight exception status outputs (FR-R-060).
+        status: u8,
+    },
+    /// 8 — Diagnostics.
+    Diagnostics {
+        /// Sub-function echoed back (FR-R-061).
+        sub_function: DiagnosticSubFunction,
+        /// Response data words; may be empty (FR-R-061).
+        data: Vec<u16>,
+    },
+    /// 11 — Get Comm Event Counter.
+    GetCommEventCounter {
+        /// `0xFFFF` while busy, `0x0000` otherwise; carried as-is (FR-R-068).
+        status: u16,
+        /// Event counter (FR-R-064).
+        event_count: u16,
+    },
+    /// 12 — Get Comm Event Log.
+    GetCommEventLog {
+        /// `0xFFFF` while busy, `0x0000` otherwise; carried as-is (FR-R-068).
+        status: u16,
+        /// Event counter (FR-R-065).
+        event_count: u16,
+        /// Message counter (FR-R-065).
+        message_count: u16,
+        /// Event bytes, most recent first; at most 64 (FR-R-065).
+        events: Vec<u8>,
+    },
+    /// 17 — Report Server ID.
+    ReportServerId {
+        /// The device-specific body, carried whole (FR-R-066).
+        data: Vec<u8>,
     },
     /// 20 — Read File Record.
     ReadFileRecord {
@@ -456,6 +507,54 @@ fn encode_echo_quantity(code: u8, address: u16, quantity: u16) -> Result<Vec<u8>
     finish(bytes)
 }
 
+/// Fixed bytes a Get Comm Event Log byte count always covers: the status,
+/// event count, and message count words (FR-R-065).
+const EVENT_LOG_FIXED_BYTES: u32 = 6;
+
+/// Most event bytes a Get Comm Event Log response may carry (FR-R-065).
+const MAX_EVENT_BYTES: u32 = 64;
+
+/// A Diagnostics body: the sub-function code, then whole 16-bit data words
+/// (FR-R-061, FR-R-062).
+fn diagnostic_body(input: &mut Input<'_>) -> ParseResult<(DiagnosticSubFunction, Vec<u16>)> {
+    let sub_function = DiagnosticSubFunction::decode(be_u16.parse_next(input)?);
+    let data = rest.parse_next(input)?;
+    if data.len() % 2 != 0 {
+        return parse::fail(Error::IllegalValue {
+            field: "diagnostic data length",
+            value: u16::try_from(data.len()).unwrap_or(u16::MAX),
+        });
+    }
+    Ok((sub_function, registers_from_bytes(data)))
+}
+
+/// Encode a Diagnostics body under `code` (FR-R-061).
+fn encode_diagnostics(
+    code: u8,
+    sub_function: DiagnosticSubFunction,
+    data: &[u16],
+) -> Result<Vec<u8>> {
+    let mut bytes = vec![code];
+    bytes.extend_from_slice(&sub_function.encode()?.to_be_bytes());
+    bytes.extend_from_slice(&registers_to_bytes(data));
+    finish(bytes)
+}
+
+/// Check a Get Comm Event Log byte count against the range its layout fixes
+/// (FR-R-065).
+fn check_event_log_bytes(byte_count: u32) -> Result<()> {
+    let max = EVENT_LOG_FIXED_BYTES.saturating_add(MAX_EVENT_BYTES);
+    if byte_count < EVENT_LOG_FIXED_BYTES || byte_count > max {
+        return Err(Error::OutOfRange {
+            field: "byte count",
+            value: byte_count,
+            min: EVENT_LOG_FIXED_BYTES,
+            max,
+        });
+    }
+    Ok(())
+}
+
 /// Prepend `code` to an already-assembled body and size-check the result.
 fn encode_body(code: u8, body: Vec<u8>) -> Result<Vec<u8>> {
     let mut bytes = vec![code];
@@ -562,6 +661,14 @@ impl RequestPdu {
                         registers: registers_from_bytes(data),
                     }
                 }
+                FunctionCode::ReadExceptionStatus => Self::ReadExceptionStatus,
+                FunctionCode::Diagnostics => {
+                    let (sub_function, data) = diagnostic_body(input)?;
+                    Self::Diagnostics { sub_function, data }
+                }
+                FunctionCode::GetCommEventCounter => Self::GetCommEventCounter,
+                FunctionCode::GetCommEventLog => Self::GetCommEventLog,
+                FunctionCode::ReportServerId => Self::ReportServerId,
                 FunctionCode::ReadFileRecord => Self::ReadFileRecord {
                     records: file::decode_read_requests(input)?,
                 },
@@ -639,6 +746,14 @@ impl RequestPdu {
                 bytes.extend_from_slice(&data);
                 finish(bytes)
             }
+            Self::ReadExceptionStatus => finish(vec![7]),
+            Self::Diagnostics {
+                sub_function,
+                ref data,
+            } => encode_diagnostics(8, sub_function, data),
+            Self::GetCommEventCounter => finish(vec![11]),
+            Self::GetCommEventLog => finish(vec![12]),
+            Self::ReportServerId => finish(vec![17]),
             Self::ReadFileRecord { ref records } => {
                 encode_body(20, file::encode_read_requests(records)?)
             }
@@ -700,6 +815,37 @@ impl ResponsePdu {
                 FunctionCode::ReadWriteMultipleRegisters => Self::ReadWriteMultipleRegisters {
                     registers: registers(input)?,
                 },
+                FunctionCode::ReadExceptionStatus => Self::ReadExceptionStatus {
+                    status: be_u8.parse_next(input)?,
+                },
+                FunctionCode::Diagnostics => {
+                    let (sub_function, data) = diagnostic_body(input)?;
+                    Self::Diagnostics { sub_function, data }
+                }
+                FunctionCode::GetCommEventCounter => Self::GetCommEventCounter {
+                    status: be_u16.parse_next(input)?,
+                    event_count: be_u16.parse_next(input)?,
+                },
+                FunctionCode::GetCommEventLog => {
+                    let byte_count = u32::from(be_u8.parse_next(input)?);
+                    parse::lift(check_event_log_bytes(byte_count))?;
+                    let status = be_u16.parse_next(input)?;
+                    let event_count = be_u16.parse_next(input)?;
+                    let message_count = be_u16.parse_next(input)?;
+                    let events_len =
+                        usize::try_from(byte_count.saturating_sub(EVENT_LOG_FIXED_BYTES))
+                            .unwrap_or(0);
+                    let events = take(events_len).parse_next(input)?;
+                    Self::GetCommEventLog {
+                        status,
+                        event_count,
+                        message_count,
+                        events: events.to_vec(),
+                    }
+                }
+                FunctionCode::ReportServerId => Self::ReportServerId {
+                    data: counted_bytes(input)?.to_vec(),
+                },
                 FunctionCode::ReadFileRecord => Self::ReadFileRecord {
                     records: file::decode_read_responses(input)?,
                 },
@@ -751,6 +897,34 @@ impl ResponsePdu {
             Self::ReadWriteMultipleRegisters { registers } => {
                 encode_counted(23, &registers_to_bytes(registers))
             }
+            Self::ReadExceptionStatus { status } => finish(vec![7, *status]),
+            Self::Diagnostics { sub_function, data } => encode_diagnostics(8, *sub_function, data),
+            Self::GetCommEventCounter {
+                status,
+                event_count,
+            } => {
+                let mut bytes = vec![11];
+                bytes.extend_from_slice(&status.to_be_bytes());
+                bytes.extend_from_slice(&event_count.to_be_bytes());
+                finish(bytes)
+            }
+            Self::GetCommEventLog {
+                status,
+                event_count,
+                message_count,
+                events,
+            } => {
+                let byte_count = EVENT_LOG_FIXED_BYTES
+                    .saturating_add(u32::try_from(events.len()).unwrap_or(u32::MAX));
+                check_event_log_bytes(byte_count)?;
+                let mut bytes = vec![12, u8::try_from(byte_count).unwrap_or(u8::MAX)];
+                bytes.extend_from_slice(&status.to_be_bytes());
+                bytes.extend_from_slice(&event_count.to_be_bytes());
+                bytes.extend_from_slice(&message_count.to_be_bytes());
+                bytes.extend_from_slice(events);
+                finish(bytes)
+            }
+            Self::ReportServerId { data } => encode_counted(17, data),
             Self::ReadFileRecord { records } => {
                 encode_body(20, file::encode_read_responses(records)?)
             }
@@ -1626,6 +1800,201 @@ mod tests {
     }
 
     #[test]
+    /// FR-R-060 — the specification's Read Exception Status example (§6.7): an
+    /// empty request, a single status byte in reply.
+    fn ut_read_exception_status_spec_example() {
+        assert_eq!(
+            RequestPdu::decode(&[0x07]),
+            Ok(RequestPdu::ReadExceptionStatus)
+        );
+        assert_eq!(RequestPdu::ReadExceptionStatus.encode(), Ok(vec![0x07]));
+
+        let response = ResponsePdu::ReadExceptionStatus { status: 0x6D };
+        assert_eq!(ResponsePdu::decode(&[0x07, 0x6D]), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(vec![0x07, 0x6D]));
+    }
+
+    #[test]
+    /// FR-R-061 — the specification's Diagnostics example (§6.8): Return Query
+    /// Data with one data word, echoed back unchanged.
+    fn ut_diagnostics_spec_example() {
+        let bytes = [0x08, 0x00, 0x00, 0xA5, 0x37];
+        let request = RequestPdu::Diagnostics {
+            sub_function: DiagnosticSubFunction::ReturnQueryData,
+            data: vec![0xA537],
+        };
+        let response = ResponsePdu::Diagnostics {
+            sub_function: DiagnosticSubFunction::ReturnQueryData,
+            data: vec![0xA537],
+        };
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-061 — a Diagnostics body may carry no data words at all.
+    fn ut_diagnostics_without_data_words() {
+        let bytes = [0x08, 0x00, 0x0A];
+        let request = RequestPdu::Diagnostics {
+            sub_function: DiagnosticSubFunction::ClearCountersAndDiagnosticRegister,
+            data: Vec::new(),
+        };
+        assert_eq!(RequestPdu::decode(&bytes), Ok(request.clone()));
+        assert_eq!(request.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-061 — data words are 16 bits, so a body with an odd byte left over
+    /// cannot be honoured.
+    fn ut_diagnostics_odd_data_length_rejected() {
+        assert_eq!(
+            RequestPdu::decode(&[0x08, 0x00, 0x00, 0xA5]),
+            Err(Error::IllegalValue {
+                field: "diagnostic data length",
+                value: 1,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-062 — the fifteen sub-functions the specification defines are each
+    /// a named value, and each maps to its own code.
+    fn ut_all_fifteen_diagnostic_sub_functions_named() {
+        let named: Vec<(u16, DiagnosticSubFunction)> = vec![
+            (0, DiagnosticSubFunction::ReturnQueryData),
+            (1, DiagnosticSubFunction::RestartCommunicationsOption),
+            (2, DiagnosticSubFunction::ReturnDiagnosticRegister),
+            (3, DiagnosticSubFunction::ChangeAsciiInputDelimiter),
+            (4, DiagnosticSubFunction::ForceListenOnlyMode),
+            (
+                10,
+                DiagnosticSubFunction::ClearCountersAndDiagnosticRegister,
+            ),
+            (11, DiagnosticSubFunction::ReturnBusMessageCount),
+            (12, DiagnosticSubFunction::ReturnBusCommunicationErrorCount),
+            (13, DiagnosticSubFunction::ReturnBusExceptionErrorCount),
+            (14, DiagnosticSubFunction::ReturnServerMessageCount),
+            (15, DiagnosticSubFunction::ReturnServerNoResponseCount),
+            (16, DiagnosticSubFunction::ReturnServerNakCount),
+            (17, DiagnosticSubFunction::ReturnServerBusyCount),
+            (18, DiagnosticSubFunction::ReturnBusCharacterOverrunCount),
+            (20, DiagnosticSubFunction::ClearOverrunCounterAndFlag),
+        ];
+        assert_eq!(named.len(), 15);
+        for (raw, code) in named {
+            assert_eq!(DiagnosticSubFunction::decode(raw), code, "code {raw}");
+            assert_eq!(code.encode(), Ok(raw), "code {raw}");
+        }
+    }
+
+    #[test]
+    /// FR-R-063 — an unnamed sub-function code, the reserved range 5–9
+    /// included, decodes as a general value instead of failing.
+    fn ut_unnamed_diagnostic_sub_function_decodes() {
+        for raw in [5u16, 6, 7, 8, 9, 19, 21, 0xFFFF] {
+            assert_eq!(
+                DiagnosticSubFunction::decode(raw),
+                DiagnosticSubFunction::Other(raw),
+                "code {raw}"
+            );
+            assert_eq!(DiagnosticSubFunction::Other(raw).encode(), Ok(raw));
+        }
+    }
+
+    #[test]
+    /// FR-R-063 — a general sub-function value holding a code the crate names
+    /// has two encodings, so encoding it is a reserved-code error.
+    fn ut_diagnostic_other_holding_named_code_is_reserved_error() {
+        assert_eq!(
+            DiagnosticSubFunction::Other(11).encode(),
+            Err(Error::ReservedCode(11))
+        );
+    }
+
+    #[test]
+    /// FR-R-064 — the specification's Get Comm Event Counter example (§6.9): an
+    /// empty request; status `0xFFFF` and event count `0x0108` in reply.
+    fn ut_get_comm_event_counter_spec_example() {
+        assert_eq!(
+            RequestPdu::decode(&[0x0B]),
+            Ok(RequestPdu::GetCommEventCounter)
+        );
+        assert_eq!(RequestPdu::GetCommEventCounter.encode(), Ok(vec![0x0B]));
+
+        let bytes = [0x0B, 0xFF, 0xFF, 0x01, 0x08];
+        let response = ResponsePdu::GetCommEventCounter {
+            status: 0xFFFF,
+            event_count: 0x0108,
+        };
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-068 — a status word that is neither `0x0000` nor `0xFFFF` is
+    /// carried as it stands, not rejected.
+    fn ut_comm_event_status_word_carried_as_is() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x0B, 0x12, 0x34, 0x00, 0x01]),
+            Ok(ResponsePdu::GetCommEventCounter {
+                status: 0x1234,
+                event_count: 1,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-065 — the specification's Get Comm Event Log example (§6.10): byte
+    /// count 8 covering two event bytes plus the six fixed ones.
+    fn ut_get_comm_event_log_spec_example() {
+        assert_eq!(RequestPdu::decode(&[0x0C]), Ok(RequestPdu::GetCommEventLog));
+        assert_eq!(RequestPdu::GetCommEventLog.encode(), Ok(vec![0x0C]));
+
+        let bytes = [0x0C, 0x08, 0x00, 0x00, 0x01, 0x08, 0x01, 0x21, 0x20, 0x00];
+        let response = ResponsePdu::GetCommEventLog {
+            status: 0x0000,
+            event_count: 0x0108,
+            message_count: 0x0121,
+            events: vec![0x20, 0x00],
+        };
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-065 — the byte count covers six fixed bytes plus 0–64 event bytes,
+    /// so it is out of range below 6 or above 70.
+    fn ut_comm_event_log_byte_count_out_of_range() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x0C, 0x05, 0x00, 0x00, 0x01, 0x08, 0x01]),
+            Err(Error::OutOfRange {
+                field: "byte count",
+                value: 5,
+                min: 6,
+                max: 70,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-066 — the Report Server ID body is device-specific, so it is
+    /// carried whole behind its byte count. The bytes are synthetic: the
+    /// specification gives no worked example for a device-specific reply.
+    fn ut_report_server_id_body_is_opaque() {
+        assert_eq!(RequestPdu::decode(&[0x11]), Ok(RequestPdu::ReportServerId));
+        assert_eq!(RequestPdu::ReportServerId.encode(), Ok(vec![0x11]));
+
+        let bytes = [0x11, 0x03, 0xAA, 0xFF, 0x01];
+        let response = ResponsePdu::ReportServerId {
+            data: vec![0xAA, 0xFF, 0x01],
+        };
+        assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
+        assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
     /// FR-R-133 — decode and encode are inverse for every PDU in this stage.
     fn ut_round_trips() {
         let requests: Vec<Vec<u8>> = vec![
@@ -1644,6 +2013,11 @@ mod tests {
                 0x00, 0xFF,
             ],
             vec![0x18, 0x04, 0xDE],
+            vec![0x07],
+            vec![0x08, 0x00, 0x00, 0xA5, 0x37],
+            vec![0x0B],
+            vec![0x0C],
+            vec![0x11],
             vec![
                 0x14, 0x0E, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x06, 0x00, 0x03, 0x00, 0x09,
                 0x00, 0x02,
@@ -1673,6 +2047,11 @@ mod tests {
                 0x17, 0x0C, 0x00, 0xFE, 0x0A, 0xCD, 0x00, 0x01, 0x00, 0x03, 0x00, 0x0D, 0x00, 0xFF,
             ],
             vec![0x18, 0x00, 0x06, 0x00, 0x02, 0x01, 0xB8, 0x12, 0x84],
+            vec![0x07, 0x6D],
+            vec![0x08, 0x00, 0x00, 0xA5, 0x37],
+            vec![0x0B, 0xFF, 0xFF, 0x01, 0x08],
+            vec![0x0C, 0x08, 0x00, 0x00, 0x01, 0x08, 0x01, 0x21, 0x20, 0x00],
+            vec![0x11, 0x03, 0xAA, 0xFF, 0x01],
             vec![
                 0x14, 0x0C, 0x05, 0x06, 0x0D, 0xFE, 0x00, 0x20, 0x05, 0x06, 0x33, 0xCD, 0x00, 0x40,
             ],

@@ -33,7 +33,11 @@ mistaken for an oversight and silently "fixed".
 | File record sub-item overrunning its length-delimited region | truncated-input error measured against the stated length (FR-R-131) |
 | Read device id code outside 1–4 | out-of-range error (FR-R-074) |
 | More-follows indicator ∉ {`0x00`, `0xFF`} | illegal-value error (FR-R-076) |
-| Run indicator status ∉ {`0x00`, `0xFF`} | illegal-value error (FR-R-067) |
+| Run indicator status ∉ {`0x00`, `0xFF`} | carried as-is; the frame layer does not locate it (FR-R-067) |
+| FC17 byte count of 0 | decodes to an empty body; no minimum is specified (FR-R-066) |
+| FC8 body not dividing into whole 16-bit words | illegal-value error naming the data length (FR-R-061) |
+| FC12 byte count outside 6–70 | out-of-range error, raised before any event byte is consumed (FR-R-065) |
+| Encoding a general Diagnostics sub-function holding a named code | reserved-code error (FR-R-063) |
 | MEI 14 object count disagreeing with the objects present | byte-count-mismatch error (FR-R-077) |
 | Unknown MEI type | decodes as a general MEI value with an opaque body (FR-R-071) |
 | Unknown Diagnostics sub-function, including reserved 5–9 | decodes as a general sub-function value (FR-R-063) |
@@ -92,7 +96,9 @@ input whatsoever.
 - **Report Server ID bodies are opaque past the byte count.** The server id
   length is device-specific, so the split between id, run indicator, and
   additional data is not knowable to a generic decoder — the byte count is
-  validated, the interior is not.
+  validated, the interior is not. This is why FR-R-067 places the run
+  indicator's encoding with the server rather than here: nothing at this layer
+  can locate the byte to check it.
 - **Diagnostics data words are not interpreted per sub-function.** The
   specification gives the data field different meanings per sub-function; the
   frame layer carries raw 16-bit words.
