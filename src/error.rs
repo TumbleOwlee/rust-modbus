@@ -45,6 +45,49 @@ pub enum Error {
         actual: usize,
     },
 
+    /// A field fell outside the range its function code fixes (FR-R-021,
+    /// FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-056, FR-R-074).
+    #[error("{field} is {value}, outside the permitted range {min}..={max}")]
+    OutOfRange {
+        /// The field that was out of range.
+        field: &'static str,
+        /// The offending value.
+        value: u32,
+        /// Smallest permitted value.
+        min: u32,
+        /// Largest permitted value.
+        max: u32,
+    },
+
+    /// A field carried a value its layout does not define (FR-R-027, FR-R-067,
+    /// FR-R-076).
+    #[error("{field} carries the undefined value {value:#06x}")]
+    IllegalValue {
+        /// The field that was illegal.
+        field: &'static str,
+        /// The offending value.
+        value: u16,
+    },
+
+    /// A byte-count field disagreed with the data present or with the value its
+    /// quantity field implies (FR-R-043, FR-R-051, FR-R-054, FR-R-077).
+    #[error("byte count mismatch: expected {expected}, got {actual}")]
+    ByteCountMismatch {
+        /// The byte count the layout implies.
+        expected: usize,
+        /// The byte count actually found.
+        actual: usize,
+    },
+
+    /// An encoded PDU exceeded the 253-byte maximum (FR-R-002, FR-R-006).
+    #[error("PDU is {len} bytes, exceeding the {max}-byte maximum")]
+    PduTooLarge {
+        /// The size that would have been emitted.
+        len: usize,
+        /// The maximum permitted size.
+        max: usize,
+    },
+
     /// A structural parse failure with no more specific cause.
     #[error("malformed frame")]
     Malformed,

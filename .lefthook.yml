@@ -11,7 +11,7 @@ pre-commit:
 
     clippy:
       glob: "*.rs"
-      run: cargo clippy --all-features -- -D warnings
+      run: cargo clippy --all-features --all-targets -- -D warnings
       fail_text: |
         cargo clippy found issues.
         Fix the warnings above, then re-stage your changes.

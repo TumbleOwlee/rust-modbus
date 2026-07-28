@@ -19,7 +19,9 @@ mistaken for an oversight and silently "fixed".
 | Trailing bytes after a `Custom` body | none possible — the body is defined as all remaining bytes (FR-R-132) |
 | Encoding `Custom(u8)` with a named code | reserved-code error (FR-R-013) |
 | Byte count disagreeing with data length or with the quantity field | byte-count-mismatch error, raised before any data byte is consumed (FR-R-043) |
-| Quantity outside its per-function range | out-of-range error on encode (FR-R-021, FR-R-022, FR-R-031, FR-R-033, FR-R-038) |
+| Quantity outside its per-function range | out-of-range error, on decode as well as encode (FR-R-021, FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-045) |
+| Register-read response with an odd byte count | illegal-value error naming the byte count (FR-R-046) |
+| Bit-read response, coil count not on the wire | decodes to `8 × byte count` values, padding included (FR-R-044) |
 | Write Single Coil value ∉ {`0x0000`, `0xFF00`} | illegal-value error (FR-R-027) |
 | FC24 FIFO count > 31 | out-of-range error, raised before any sizing allocation (FR-R-042) |
 | File record reference type ≠ 6 | reference-type error (FR-R-055) |

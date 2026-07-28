@@ -8,10 +8,9 @@
 
 mod error;
 mod frame;
-// The parsing primitives have no non-test caller until the first PDU decoder
-// lands. This allow goes away with it.
-#[allow(dead_code)]
 mod parse;
 
 pub use error::{Error, Result};
-pub use frame::{ExceptionCode, ExceptionResponse, FunctionCode};
+pub use frame::{
+    ExceptionCode, ExceptionResponse, FunctionCode, MAX_PDU_LEN, RequestPdu, ResponsePdu,
+};

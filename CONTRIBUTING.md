@@ -60,7 +60,7 @@ Please make sure the following pass locally:
 
 ```sh
 cargo fmt --check
-cargo clippy --all-features -- -D warnings
+cargo clippy --all-features --all-targets -- -D warnings
 cargo check --all-features
 cargo test --all-features
 cargo llvm-cov --all-features --fail-under-lines 80

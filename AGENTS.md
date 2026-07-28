@@ -119,7 +119,7 @@ type (`feat/`, `fix/`, `docs/`).
    commits and the expected coverage impact. **Stop for approval.**
 6. **Implement, stage by stage — test first.** Follow the four-step TDD order above for
    every stage. A stage is a **green checkpoint**: it compiles, `cargo test` passes,
-   `cargo clippy -- -D warnings` passes, and coverage is at or above 80%. **Commit every
+   `cargo clippy --all-targets -- -D warnings` passes, and coverage is at or above 80%. **Commit every
    green stage** — that is what makes the plan resumable after an interrupted session.
    Stage commits are branch-local scaffolding and are squashed away on merge, so keep their
    messages cheap; the squash message is the one that must carry the requirement IDs and
@@ -178,7 +178,7 @@ ugly but intentional. Check it before "fixing" something that looks wrong.
 ```sh
 cargo check --all-features
 cargo test --all-features
-cargo clippy --all-features -- -D warnings
+cargo clippy --all-features --all-targets -- -D warnings
 cargo fmt --check
 cargo llvm-cov --all-features --fail-under-lines 80
 ```

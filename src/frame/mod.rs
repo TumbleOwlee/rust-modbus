@@ -5,6 +5,8 @@
 
 mod exception;
 mod function;
+mod pdu;
 
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use function::FunctionCode;
+pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu};

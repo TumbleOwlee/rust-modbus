@@ -20,6 +20,9 @@ use crate::error::{Error, Result};
 /// The stream every decoder parses over.
 pub(crate) type Input<'a> = Partial<&'a [u8]>;
 
+/// What a parser step in this crate returns.
+pub(crate) type ParseResult<T> = core::result::Result<T, ErrMode<ParseFailure>>;
+
 /// A parse failure, optionally carrying the domain error that caused it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ParseFailure(Option<Error>);
@@ -44,8 +47,13 @@ impl<'a> ParserError<Input<'a>> for ParseFailure {
 }
 
 /// Raise a domain error that must not be backtracked over.
-pub(crate) fn fail<T>(error: Error) -> core::result::Result<T, ErrMode<ParseFailure>> {
-    Err(ErrMode::Cut(ParseFailure(Some(error))))
+pub(crate) fn fail<T>(error: Error) -> ParseResult<T> {
+    lift(Err(error))
+}
+
+/// Lift a fallible crate operation into a parser step, preserving its error.
+pub(crate) fn lift<T>(result: Result<T>) -> ParseResult<T> {
+    result.map_err(|error| ErrMode::Cut(ParseFailure(Some(error))))
 }
 
 /// Run `parser` over `bytes`, requiring it to consume the input exactly.

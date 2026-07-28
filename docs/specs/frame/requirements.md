@@ -177,6 +177,18 @@ of data bytes present, or with the value derived from its quantity field, shall
 fail with a byte-count-mismatch error, and shall do so before any data bytes are
 consumed.
 
+**FR-R-044** — A bit-read response carries no bit count on the wire. Decoding one
+shall yield exactly `8 × byte count` bit values, including the final byte's
+padding bits. Matching the decoded bits against the quantity requested is the
+caller's responsibility.
+
+**FR-R-045** — A quantity outside the range its function code fixes shall fail to
+decode as well as to encode. A PDU the encoder would reject shall not decode.
+
+**FR-R-046** — A register-read response whose byte count is odd shall fail with an
+illegal-value error naming the byte count, since no quantity of 16-bit registers
+can produce one.
+
 ---
 
 ## 4. File record access
