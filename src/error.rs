@@ -59,6 +59,26 @@ pub enum Error {
         max: u32,
     },
 
+    /// An ADU's checksum did not match the bytes it covers (FR-R-095,
+    /// FR-R-115).
+    #[error("checksum mismatch: expected {expected:#06x}, computed {actual:#06x}")]
+    Checksum {
+        /// The checksum computed over the ADU's own bytes.
+        expected: u16,
+        /// The checksum the ADU carried.
+        actual: u16,
+    },
+
+    /// An ADU exceeded the maximum its framing permits (FR-R-091, FR-R-104,
+    /// FR-R-113).
+    #[error("ADU of {len} bytes exceeds the maximum of {max}")]
+    AduTooLarge {
+        /// The oversized length.
+        len: usize,
+        /// The framing's maximum.
+        max: usize,
+    },
+
     /// A file record named a reference type other than 6 (FR-R-055).
     #[error("file record reference type {0} is not 6")]
     ReferenceType(u8),

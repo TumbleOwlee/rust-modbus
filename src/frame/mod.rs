@@ -6,13 +6,17 @@
 mod diagnostics;
 mod exception;
 mod file;
+mod framing;
 mod function;
 mod mei;
 mod pdu;
+mod rtu;
 
 pub use diagnostics::DiagnosticSubFunction;
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use file::{FileRecordRead, FileRecordReadResponse, FileRecordWrite};
+pub use framing::Framing;
 pub use function::FunctionCode;
 pub use mei::{DeviceIdObject, MeiRequest, MeiResponse, ReadDeviceIdCode};
 pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};
+pub use rtu::Rtu;
