@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod error;
-// The parsing primitives have no non-test caller until the first decoder lands
-// in the next stage. This allow goes away with it.
+mod frame;
+// The parsing primitives have no non-test caller until the first PDU decoder
+// lands. This allow goes away with it.
 #[allow(dead_code)]
 mod parse;
 
 pub use error::{Error, Result};
+pub use frame::FunctionCode;

@@ -25,6 +25,16 @@ pub enum Error {
         extra: usize,
     },
 
+    /// A function code that cannot denote a request: 0, or 128–255
+    /// (FR-R-014, FR-R-015).
+    #[error("invalid function code {0}")]
+    InvalidFunctionCode(u8),
+
+    /// A custom or general value was given a code the crate already names, which
+    /// would give one wire byte two representations (FR-R-013, FR-R-084).
+    #[error("code {0} is named and must not be carried as a custom value")]
+    ReservedCode(u8),
+
     /// A structural parse failure with no more specific cause.
     #[error("malformed frame")]
     Malformed,
