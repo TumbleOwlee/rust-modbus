@@ -20,7 +20,7 @@ mod parse;
 mod transport;
 
 #[cfg(feature = "std")]
-pub use client::{Client, ClientConfig, ClientFraming};
+pub use client::{Client, ClientConfig, ClientFraming, CommEventCounter, CommEventLog};
 pub use error::{Error, Result};
 pub use frame::{
     Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode,

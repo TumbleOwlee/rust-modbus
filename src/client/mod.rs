@@ -11,8 +11,9 @@ use crate::error::{Error, Result};
 use alloc::vec::Vec;
 
 use crate::frame::{
-    Address, FunctionCode, Mask, Quantity, RegisterValue, RequestPdu, ResponsePdu, TransactionId,
-    UnitId,
+    Address, DiagnosticSubFunction, ExceptionStatus, FileRecordRead, FileRecordReadResponse,
+    FileRecordWrite, FunctionCode, Mask, MeiRequest, MeiResponse, Quantity, RegisterValue,
+    RequestPdu, ResponsePdu, TransactionId, UnitId,
 };
 use crate::transport::FrameTransport;
 
@@ -403,6 +404,213 @@ where
             other => Err(mismatch(FunctionCode::ReadWriteMultipleRegisters, &other)),
         }
     }
+
+    /// Read the exception status output byte, function code 7 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_exception_status(&mut self, unit: UnitId) -> Result<ExceptionStatus> {
+        let response = self.exchange(unit, RequestPdu::ReadExceptionStatus).await?;
+        match response {
+            ResponsePdu::ReadExceptionStatus { status } => Ok(status),
+            other => Err(mismatch(FunctionCode::ReadExceptionStatus, &other)),
+        }
+    }
+
+    /// Run a diagnostic sub-function, function code 8 (CL-R-060).
+    ///
+    /// The data words are raw: what they mean is the sub-function's to decide
+    /// (FR-R-062), so naming them a domain value would claim more than is true.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn diagnostics(
+        &mut self,
+        unit: UnitId,
+        sub_function: DiagnosticSubFunction,
+        data: &[u16],
+    ) -> Result<Vec<u16>> {
+        let response = self
+            .exchange(
+                unit,
+                RequestPdu::Diagnostics {
+                    sub_function,
+                    data: data.to_vec(),
+                },
+            )
+            .await?;
+        match response {
+            ResponsePdu::Diagnostics { data, .. } => Ok(data),
+            other => Err(mismatch(FunctionCode::Diagnostics, &other)),
+        }
+    }
+
+    /// Get the comm event counter, function code 11 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn get_comm_event_counter(&mut self, unit: UnitId) -> Result<CommEventCounter> {
+        let response = self.exchange(unit, RequestPdu::GetCommEventCounter).await?;
+        match response {
+            ResponsePdu::GetCommEventCounter {
+                status,
+                event_count,
+            } => Ok(CommEventCounter {
+                status,
+                event_count,
+            }),
+            other => Err(mismatch(FunctionCode::GetCommEventCounter, &other)),
+        }
+    }
+
+    /// Get the comm event log, function code 12 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn get_comm_event_log(&mut self, unit: UnitId) -> Result<CommEventLog> {
+        let response = self.exchange(unit, RequestPdu::GetCommEventLog).await?;
+        match response {
+            ResponsePdu::GetCommEventLog {
+                status,
+                event_count,
+                message_count,
+                events,
+            } => Ok(CommEventLog {
+                status,
+                event_count,
+                message_count,
+                events,
+            }),
+            other => Err(mismatch(FunctionCode::GetCommEventLog, &other)),
+        }
+    }
+
+    /// Report the server's identification, function code 17 (CL-R-060).
+    ///
+    /// The body is opaque past its byte count: how it splits into an id, a run
+    /// indicator, and additional data is device-specific.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn report_server_id(&mut self, unit: UnitId) -> Result<Vec<u8>> {
+        let response = self.exchange(unit, RequestPdu::ReportServerId).await?;
+        match response {
+            ResponsePdu::ReportServerId { data } => Ok(data),
+            other => Err(mismatch(FunctionCode::ReportServerId, &other)),
+        }
+    }
+
+    /// Read file records, function code 20 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_file_record(
+        &mut self,
+        unit: UnitId,
+        records: &[FileRecordRead],
+    ) -> Result<Vec<FileRecordReadResponse>> {
+        let response = self
+            .exchange(
+                unit,
+                RequestPdu::ReadFileRecord {
+                    records: records.to_vec(),
+                },
+            )
+            .await?;
+        match response {
+            ResponsePdu::ReadFileRecord { records } => Ok(records),
+            other => Err(mismatch(FunctionCode::ReadFileRecord, &other)),
+        }
+    }
+
+    /// Write file records, function code 21 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::write_single_coil`].
+    pub async fn write_file_record(
+        &mut self,
+        unit: UnitId,
+        records: &[FileRecordWrite],
+    ) -> Result<()> {
+        self.write(
+            unit,
+            RequestPdu::WriteFileRecord {
+                records: records.to_vec(),
+            },
+        )
+        .await
+    }
+
+    /// Read a FIFO queue, function code 24 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_fifo_queue(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+    ) -> Result<Vec<RegisterValue>> {
+        let response = self
+            .exchange(unit, RequestPdu::ReadFifoQueue { address })
+            .await?;
+        match response {
+            ResponsePdu::ReadFifoQueue { values } => Ok(values),
+            other => Err(mismatch(FunctionCode::ReadFifoQueue, &other)),
+        }
+    }
+
+    /// Send an encapsulated interface request, function code 43 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn encapsulated_interface_transport(
+        &mut self,
+        unit: UnitId,
+        request: MeiRequest,
+    ) -> Result<MeiResponse> {
+        let response = self
+            .exchange(unit, RequestPdu::EncapsulatedInterfaceTransport(request))
+            .await?;
+        match response {
+            ResponsePdu::EncapsulatedInterfaceTransport(response) => Ok(response),
+            other => Err(mismatch(
+                FunctionCode::EncapsulatedInterfaceTransport,
+                &other,
+            )),
+        }
+    }
+}
+
+/// The two counters of a Get Comm Event Counter response (FR-R-064).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommEventCounter {
+    /// Non-zero while the server is still processing a program function.
+    pub status: u16,
+    /// Events the server has recorded.
+    pub event_count: u16,
+}
+
+/// A Get Comm Event Log response (FR-R-065).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommEventLog {
+    /// Non-zero while the server is still processing a program function.
+    pub status: u16,
+    /// Events the server has recorded.
+    pub event_count: u16,
+    /// Messages the server has processed.
+    pub message_count: u16,
+    /// The event bytes themselves, most recent first. Their meaning is
+    /// device-specific, so they are carried raw.
+    pub events: Vec<u8>,
 }
 
 /// Keep the bits asked for and drop the padding the wire adds (CL-R-062).
@@ -439,8 +647,10 @@ mod tests {
     use super::*;
     use crate::error::Error;
     use crate::frame::{
-        Address, ExceptionCode, ExceptionResponse, FunctionCode, Mask, MbapHeader, Quantity,
-        RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
+        Address, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, ExceptionStatus,
+        FileNumber, FileRecordRead, FileRecordReadResponse, FileRecordWrite, FunctionCode, Mask,
+        MbapHeader, MeiRequest, MeiResponse, Quantity, ReadDeviceIdCode, RecordLength,
+        RecordNumber, RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
     };
     use crate::transport::FrameTransport;
     use alloc::vec;
@@ -1128,5 +1338,154 @@ mod tests {
 
         assert_eq!(client.call(UnitId(0), read_holding()).await, Ok(None));
         assert_eq!(server.recv_request().await, Ok((UnitId(0), read_holding())));
+    }
+
+    #[tokio::test]
+    /// CL-R-060 — the diagnostic and identification codes each get their own
+    /// typed method: 7, 8, 11, 12 and 17.
+    async fn ut_typed_diagnostic_methods() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 5, |request| match request {
+            RequestPdu::ReadExceptionStatus => ResponsePdu::ReadExceptionStatus {
+                status: ExceptionStatus(0x6D),
+            },
+            RequestPdu::Diagnostics { sub_function, data } => ResponsePdu::Diagnostics {
+                sub_function: *sub_function,
+                data: data.clone(),
+            },
+            RequestPdu::GetCommEventCounter => ResponsePdu::GetCommEventCounter {
+                status: 0xFFFF,
+                event_count: 0x0108,
+            },
+            RequestPdu::GetCommEventLog => ResponsePdu::GetCommEventLog {
+                status: 0x0000,
+                event_count: 0x0108,
+                message_count: 0x0121,
+                events: vec![0x20, 0x00],
+            },
+            _ => ResponsePdu::ReportServerId {
+                data: vec![0x11, 0xFF],
+            },
+        });
+
+        assert_eq!(
+            client.read_exception_status(UnitId(0x11)).await,
+            Ok(ExceptionStatus(0x6D))
+        );
+        assert_eq!(
+            client
+                .diagnostics(
+                    UnitId(0x11),
+                    DiagnosticSubFunction::ReturnQueryData,
+                    &[0xA537],
+                )
+                .await,
+            Ok(vec![0xA537])
+        );
+        assert_eq!(
+            client.get_comm_event_counter(UnitId(0x11)).await,
+            Ok(CommEventCounter {
+                status: 0xFFFF,
+                event_count: 0x0108,
+            })
+        );
+        assert_eq!(
+            client.get_comm_event_log(UnitId(0x11)).await,
+            Ok(CommEventLog {
+                status: 0x0000,
+                event_count: 0x0108,
+                message_count: 0x0121,
+                events: vec![0x20, 0x00],
+            })
+        );
+        assert_eq!(
+            client.report_server_id(UnitId(0x11)).await,
+            Ok(vec![0x11, 0xFF])
+        );
+        assert_eq!(answering.await.expect("the server task finishes").len(), 5);
+    }
+
+    #[tokio::test]
+    /// CL-R-060 — the record, queue and encapsulated-transport codes: 20, 21,
+    /// 24 and 43.
+    async fn ut_typed_record_and_transport_methods() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 4, |request| match request {
+            RequestPdu::ReadFileRecord { .. } => ResponsePdu::ReadFileRecord {
+                // Three registers: a sub-response's data length is at least 7
+                // bytes (FR-R-055), which one register cannot reach.
+                records: vec![FileRecordReadResponse {
+                    values: vec![
+                        RegisterValue(0x0DFE),
+                        RegisterValue(0x0000),
+                        RegisterValue(0x0001),
+                    ],
+                }],
+            },
+            RequestPdu::WriteFileRecord { records } => ResponsePdu::WriteFileRecord {
+                records: records.clone(),
+            },
+            RequestPdu::ReadFifoQueue { .. } => ResponsePdu::ReadFifoQueue {
+                values: vec![RegisterValue(0x01B8)],
+            },
+            _ => {
+                ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::ReadDeviceIdentification {
+                    read_device_id_code: ReadDeviceIdCode::Basic,
+                    conformity_level: 0x01,
+                    more_follows: false,
+                    next_object_id: 0x00,
+                    objects: vec![],
+                })
+            }
+        });
+
+        let read = FileRecordRead {
+            file_number: FileNumber(4),
+            record_number: RecordNumber(1),
+            record_length: RecordLength(1),
+        };
+        assert_eq!(
+            client.read_file_record(UnitId(0x11), &[read]).await,
+            Ok(vec![FileRecordReadResponse {
+                values: vec![
+                    RegisterValue(0x0DFE),
+                    RegisterValue(0x0000),
+                    RegisterValue(0x0001),
+                ],
+            }])
+        );
+
+        let write = FileRecordWrite {
+            file_number: FileNumber(4),
+            record_number: RecordNumber(7),
+            values: vec![RegisterValue(0x06AF)],
+        };
+        assert_eq!(
+            client.write_file_record(UnitId(0x11), &[write]).await,
+            Ok(())
+        );
+        assert_eq!(
+            client.read_fifo_queue(UnitId(0x11), Address(0x04DE)).await,
+            Ok(vec![RegisterValue(0x01B8)])
+        );
+        assert_eq!(
+            client
+                .encapsulated_interface_transport(
+                    UnitId(0x11),
+                    MeiRequest::ReadDeviceIdentification {
+                        read_device_id_code: ReadDeviceIdCode::Basic,
+                        object_id: 0x00,
+                    },
+                )
+                .await,
+            Ok(MeiResponse::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Basic,
+                conformity_level: 0x01,
+                more_follows: false,
+                next_object_id: 0x00,
+                objects: vec![],
+            })
+        );
+        assert_eq!(answering.await.expect("the server task finishes").len(), 4);
     }
 }
