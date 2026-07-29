@@ -122,7 +122,8 @@ connections are taken up, and the peer's address where the transport has one.
 
 **SV-R-032** — The service shall be notified of a new connection before any
 request is read from it, and may refuse it. A refused connection shall be closed
-without reading a request.
+without reading a request. The answer shall be a named choice, not a boolean, so
+that neither the implementor nor the reader must remember which way `true` points.
 
 **SV-R-033** — The service shall be notified exactly once of the end of every
 connection it was notified of, and that notification shall name why the

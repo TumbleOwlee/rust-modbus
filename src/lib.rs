@@ -35,8 +35,8 @@ pub use frame::{
 };
 #[cfg(feature = "std")]
 pub use server::{
-    Connection, ConnectionId, Disconnect, Server, ServerConfig, ServerFraming, ServerHandle,
-    Service,
+    Acceptance, Connection, ConnectionId, Disconnect, Server, ServerConfig, ServerFraming,
+    ServerHandle, Service,
 };
 #[cfg(feature = "std")]
 pub use transport::{

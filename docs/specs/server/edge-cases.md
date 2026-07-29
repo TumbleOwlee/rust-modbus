@@ -35,7 +35,7 @@ starts.
 | A peer that connects and sends nothing | Held open, one task idle, until it closes or shutdown; there is no idle timeout |
 | A peer that closes between ADUs | `Disconnect::Closed` (SV-R-052) |
 | A peer that closes mid-ADU | `ConnectionClosed` to `on_error`, `Disconnect::Failed` (TR-R-014, SV-R-050) |
-| `on_connect` returns `false` | Closed with no request read, `Disconnect::Rejected` (SV-R-032) |
+| `on_connect` returns `Acceptance::Reject` | Closed with no request read, `Disconnect::Rejected` (SV-R-032) |
 | One connection fails | Others unaffected, accepting continues (SV-R-035) |
 | Accept itself fails | Serving returns the error; connections already running are drained first (SV-R-051) |
 | A request in flight at shutdown | Runs to completion and its response is sent (SV-R-042) |

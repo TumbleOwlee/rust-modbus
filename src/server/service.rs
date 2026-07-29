@@ -58,6 +58,18 @@ impl From<ConnectionId> for u64 {
     }
 }
 
+/// Whether a connection is served or closed unread (SV-R-032).
+///
+/// A named choice rather than a `bool`: at the call site neither the implementor
+/// nor the reader has to remember which way `true` points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acceptance {
+    /// Serve it.
+    Accept,
+    /// Close it without reading a request.
+    Reject,
+}
+
 /// Why a connection ended (SV-R-033).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disconnect {
@@ -103,11 +115,12 @@ pub trait Service: Send + Sync + 'static {
 
     /// A connection has been taken up; answer whether to serve it (SV-R-032).
     ///
-    /// Called before any request is read. `false` closes it unread. The default
+    /// Called before any request is read. [`Acceptance::Reject`] closes it
+    /// unread, and the connection ends with [`Disconnect::Rejected`]. The default
     /// accepts.
-    fn on_connect(&self, conn: &Connection) -> impl Future<Output = bool> + Send {
+    fn on_connect(&self, conn: &Connection) -> impl Future<Output = Acceptance> + Send {
         let _ = conn;
-        async { true }
+        async { Acceptance::Accept }
     }
 
     /// A connection has ended, and why (SV-R-033). Called exactly once per
@@ -161,7 +174,7 @@ mod tests {
     /// SV-R-004, SV-R-032 — a service that implements only request handling
     /// accepts connections by default.
     async fn ut_minimal_service_accepts_by_default() {
-        assert!(Minimal.on_connect(&connection()).await);
+        assert_eq!(Minimal.on_connect(&connection()).await, Acceptance::Accept);
     }
 
     #[tokio::test]

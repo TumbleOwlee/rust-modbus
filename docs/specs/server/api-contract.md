@@ -77,8 +77,8 @@ pub trait Service: Send + Sync + 'static {
         request: RequestPdu,
     ) -> impl Future<Output = core::result::Result<ResponsePdu, ExceptionCode>> + Send;
 
-    fn on_connect(&self, conn: &Connection) -> impl Future<Output = bool> + Send {
-        async { true }
+    fn on_connect(&self, conn: &Connection) -> impl Future<Output = Acceptance> + Send {
+        async { Acceptance::Accept }
     }
 
     fn on_disconnect(&self, conn: &Connection, reason: Disconnect)
@@ -109,8 +109,9 @@ fields — and hands one clone to `Server::new`. That is the shape
 
 `on_request` returns `Result<ResponsePdu, ExceptionCode>`: a refusal is expressed
 in the protocol's own vocabulary (SV-R-012), so a service cannot accidentally
-answer a Modbus request with a transport error. `on_connect` returns whether to
-proceed (SV-R-032). `on_error` is separate from `on_disconnect` because most
+answer a Modbus request with a transport error. `on_connect` answers with an
+`Acceptance`, not a `bool` (SV-R-032) — `Acceptance::Reject` reads the same way at
+the call site as in the signature, where `false` would have to be remembered. `on_error` is separate from `on_disconnect` because most
 per-request failures do not end the connection (SV-R-034).
 
 ```rust
@@ -123,9 +124,14 @@ impl Connection {
 
 pub struct ConnectionId(pub u64);   // a domain value type, per FR-R-007
 
+pub enum Acceptance {
+    Accept,           // serve the connection
+    Reject,           // close it unread (SV-R-032)
+}
+
 pub enum Disconnect {
     Closed,           // the peer closed between two ADUs (SV-R-052)
-    Rejected,         // on_connect declined (SV-R-032)
+    Rejected,         // on_connect answered Reject (SV-R-032)
     Failed(Error),    // an I/O failure or an undecodable request (SV-R-050)
     ShuttingDown,     // the handle asked (SV-R-043)
 }

@@ -17,7 +17,7 @@ use crate::transport::FrameTransport;
 
 pub use framing::ServerFraming;
 pub use handle::ServerHandle;
-pub use service::{Connection, ConnectionId, Disconnect, Service};
+pub use service::{Acceptance, Connection, ConnectionId, Disconnect, Service};
 
 /// How a server answers (SV-R-008).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -178,7 +178,7 @@ async fn serve_connection<S, T, F>(
     T: AsyncRead + AsyncWrite + Unpin + Send,
     F: ServerFraming,
 {
-    if !service.on_connect(conn).await {
+    if service.on_connect(conn).await == Acceptance::Reject {
         // Refused before a request is read (SV-R-032).
         service.on_disconnect(conn, Disconnect::Rejected).await;
         return;
@@ -329,7 +329,7 @@ mod tests {
     struct Recorder {
         events: Mutex<Vec<Event>>,
         reply: Reply,
-        accept: bool,
+        accept: Acceptance,
         /// Held open until as many requests are in flight at once (SV-R-030).
         overlap: Option<Arc<tokio::sync::Barrier>>,
         /// Holds every request until the test releases a permit (SV-R-042).
@@ -346,7 +346,7 @@ mod tests {
             Arc::new(Self {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(reply),
-                accept: true,
+                accept: Acceptance::Accept,
                 overlap: None,
                 hold: None,
             })
@@ -358,7 +358,7 @@ mod tests {
             Arc::new(Self {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(|_| Ok(registers())),
-                accept: true,
+                accept: Acceptance::Accept,
                 overlap: Some(Arc::new(tokio::sync::Barrier::new(at_once))),
                 hold: None,
             })
@@ -370,7 +370,7 @@ mod tests {
             Arc::new(Self {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(|_| Ok(registers())),
-                accept: true,
+                accept: Acceptance::Accept,
                 overlap: None,
                 hold: Some(Arc::new(tokio::sync::Semaphore::new(0))),
             })
@@ -400,7 +400,7 @@ mod tests {
             Arc::new(Self {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(|_| Err(ExceptionCode::IllegalFunction)),
-                accept: false,
+                accept: Acceptance::Reject,
                 overlap: None,
                 hold: None,
             })
@@ -439,7 +439,7 @@ mod tests {
             (self.reply)(&request)
         }
 
-        async fn on_connect(&self, conn: &Connection) -> bool {
+        async fn on_connect(&self, conn: &Connection) -> Acceptance {
             self.push(Event::Connect(conn.id(), conn.peer()));
             self.accept
         }
@@ -673,8 +673,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-032 — a refused connection is closed without a request being read,
-    /// and ends with the refusing reason.
+    /// SV-R-032 — a service that answers `Acceptance::Reject` gets a connection
+    /// closed without a request being read, ending with the refusing reason.
     async fn ut_refused_connection_reads_nothing() {
         let service = Recorder::refusing();
         let (serving, mut client) = link(Arc::clone(&service));
