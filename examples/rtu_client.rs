@@ -10,7 +10,9 @@
 //! ```
 //!
 //! Arguments, all optional: the port path, the unit identifier, the first
-//! register address, and how many registers to read.
+//! register address, and how many registers to read. A fifth argument
+//! `broadcast` additionally sends a broadcast write, which is opt-in because it
+//! writes to every device on the bus.
 //!
 //! Opening a port is the only thing the `rtu` feature gates, and it is off by
 //! default so a TCP-only consumer acquires no serial dependency. RTU *framing*
@@ -77,10 +79,18 @@ async fn main() -> rust_modbus::Result<()> {
     // client returns as soon as the bytes are out and cannot tell you whether it
     // worked. Reads may not be broadcast at all — there would be no one reply to
     // return — and this crate refuses them rather than hanging until the timeout.
-    client
-        .write_single_register(UnitId(0), start, RegisterValue(0))
-        .await?;
-    println!("broadcast write sent; no reply is expected");
+    //
+    // Opt-in, because it is not undoable: a broadcast write hits every device on
+    // the bus, and an example that did it by default would overwrite a register
+    // on hardware whose map the reader has not checked yet.
+    if args.next().as_deref() == Some("broadcast") {
+        client
+            .write_single_register(UnitId(0), start, RegisterValue(0))
+            .await?;
+        println!("broadcast write sent to every device on the bus; no reply is expected");
+    } else {
+        println!("pass a fifth argument `broadcast` to also demonstrate a broadcast write");
+    }
 
     Ok(())
 }
