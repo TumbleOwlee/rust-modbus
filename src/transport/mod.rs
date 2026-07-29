@@ -557,3 +557,122 @@ mod ascii_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod rtu_tests {
+    use super::tests::read_holding;
+    use super::*;
+    use crate::error::Error;
+    use crate::frame::{Rtu, Tcp};
+    use tokio::io::{AsyncWriteExt, duplex};
+
+    /// The specification's Read Holding Registers request to server `0x11`, as
+    /// an RTU ADU with the CRC of FR-R-092.
+    const REQUEST_ADU: [u8; 8] = [0x11, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x76, 0x87];
+
+    /// Shorter than the default 19200 8E1 interval of 2.005 ms, so it is a gap
+    /// *within* a frame rather than between two.
+    const SHORT_GAP: Duration = Duration::from_micros(500);
+
+    /// Longer than that interval: the line has gone quiet.
+    const LONG_GAP: Duration = Duration::from_millis(5);
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-011 — an RTU ADU carries no length and no terminator, so the frame
+    /// ends when the line falls silent for 3.5 character times.
+    async fn ut_rtu_boundary_on_idle_gap() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        let receiver = tokio::spawn(async move {
+            let first = server.recv_request().await;
+            let second = server.recv_request().await;
+            (first, second)
+        });
+
+        peer.write_all(&REQUEST_ADU).await.expect("writes first");
+        tokio::time::sleep(LONG_GAP).await;
+        peer.write_all(&REQUEST_ADU).await.expect("writes second");
+
+        let (first, second) = receiver.await.expect("receiver completes");
+        assert_eq!(first, Ok((0x11, read_holding())));
+        assert_eq!(second, Ok((0x11, read_holding())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-011 — a gap shorter than the inter-frame interval is inside a
+    /// frame, not between two: the halves are delivered as one ADU. Were they
+    /// split, neither half would carry a valid CRC.
+    async fn ut_rtu_short_gap_does_not_end_a_frame() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        let receiver = tokio::spawn(async move { server.recv_request().await });
+
+        // Three chunks, so a frame ended at the first lull in traffic would be
+        // short by the third: only waiting out the silence yields the whole ADU.
+        for chunk in REQUEST_ADU.chunks(3) {
+            peer.write_all(chunk).await.expect("writes chunk");
+            tokio::time::sleep(SHORT_GAP).await;
+        }
+
+        assert_eq!(
+            receiver.await.expect("receiver completes"),
+            Ok((0x11, read_holding()))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-011 — the interval comes from the configuration, so a slower line
+    /// tolerates a longer gap inside one frame.
+    async fn ut_rtu_interval_follows_the_configuration() {
+        let config = TransportConfig::from_serial(&SerialConfig {
+            baud_rate: 1_200,
+            ..SerialConfig::default()
+        })
+        .expect("1200 baud has a character time");
+        // 11 bits at 1200 baud: 3.5 characters take 32.08 ms.
+        assert_eq!(
+            config.inter_frame_interval,
+            Duration::from_nanos(32_083_333)
+        );
+
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Rtu>::with_config(server, config);
+
+        let receiver = tokio::spawn(async move { server.recv_request().await });
+
+        // Gaps that would each end a frame at 19200 baud, but not at 1200.
+        for chunk in REQUEST_ADU.chunks(3) {
+            peer.write_all(chunk).await.expect("writes chunk");
+            tokio::time::sleep(LONG_GAP).await;
+        }
+
+        assert_eq!(
+            receiver.await.expect("receiver completes"),
+            Ok((0x11, read_holding()))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-041 — a receive abandoned part-way through an ADU leaves the
+    /// transport desynchronized: the buffer holds a fragment whose extent is
+    /// unknown, so the next receive refuses rather than decode a splice.
+    async fn ut_timeout_mid_adu_marks_desynchronized() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Tcp>::new(server);
+
+        // Half of a TCP ADU: enough to start one, not enough to finish it.
+        peer.write_all(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11])
+            .await
+            .expect("writes head");
+
+        let abandoned = tokio::time::timeout(LONG_GAP, server.recv_request()).await;
+        assert!(abandoned.is_err(), "the receive should not have completed");
+
+        assert_eq!(
+            server.recv_request().await,
+            Err(Error::Timeout { what: "receive" })
+        );
+    }
+}
