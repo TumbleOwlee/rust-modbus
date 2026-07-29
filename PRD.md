@@ -49,8 +49,10 @@ The four combinations are all first-class and none is an afterthought:
   is not in scope unless later specified.
 - **No device-specific quirk layer.** Vendor deviations from the standard are the
   consumer's problem unless a requirement says otherwise.
-- **No persistence.** The server's data store is in-memory; durability is the
-  consumer's concern.
+- **No data model at all.** The server declares a `Service` trait and ships no
+  register tables (SV-R-005), so both storage and durability are the consumer's
+  concern. What a coil or a register *means* is application state wearing a
+  Modbus address, not protocol.
 - **No transport beyond TCP and RTU serial** (no UDP, no RTU-over-TCP gateway
   emulation) unless later specified.
 
