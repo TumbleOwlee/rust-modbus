@@ -26,5 +26,6 @@ pub use frame::{
 };
 #[cfg(feature = "std")]
 pub use transport::{
-    DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TransportConfig,
+    DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,
+    TcpTransport, TransportConfig, connect_tcp,
 };

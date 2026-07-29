@@ -5,6 +5,7 @@
 //! which direction they send and which they receive (TR-R-002).
 
 mod serial;
+mod tcp;
 
 use core::marker::PhantomData;
 use core::time::Duration;
@@ -16,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::frame::{AduBoundary, Framing, RequestPdu, ResponsePdu};
 
 pub use serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
+pub use tcp::{TcpConfig, TcpListener, TcpTransport, connect_tcp};
 
 /// What boundary detection needs that the framing itself cannot supply
 /// (TR-R-011).
