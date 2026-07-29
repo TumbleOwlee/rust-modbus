@@ -29,3 +29,5 @@ pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,
     TcpTransport, TransportConfig, connect_tcp,
 };
+#[cfg(feature = "rtu")]
+pub use transport::{SerialTransport, open_serial};

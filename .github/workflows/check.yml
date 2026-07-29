@@ -21,18 +21,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup component add clippy
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo check --all-features
+
+  # TR-R-032. The `rtu` feature is off by default, so the default build must
+  # keep compiling without the serial backend and the featured build must
+  # compile with it. Checking only `--all-features` would hide a break in
+  # either direction.
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - run: cargo check
+      - run: cargo check --features rtu
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo test --all-features
 
   # NF-R-003. Builds for a bare-metal target with no default features, so the
@@ -54,6 +69,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo llvm-cov --all-features --fail-under-lines 80 --lcov --output-path lcov.info
       - uses: actions/upload-artifact@v4
         if: always()

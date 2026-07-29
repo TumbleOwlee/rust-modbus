@@ -4,6 +4,8 @@
 //! Role-agnostic: a client and a server use the same types, differing only in
 //! which direction they send and which they receive (TR-R-002).
 
+#[cfg(feature = "rtu")]
+mod rtu;
 mod serial;
 mod tcp;
 
@@ -18,6 +20,9 @@ use crate::frame::{AduBoundary, Framing, RequestPdu, ResponsePdu};
 
 pub use serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 pub use tcp::{TcpConfig, TcpListener, TcpTransport, connect_tcp};
+
+#[cfg(feature = "rtu")]
+pub use rtu::{SerialTransport, open_serial};
 
 /// What boundary detection needs that the framing itself cannot supply
 /// (TR-R-011).
