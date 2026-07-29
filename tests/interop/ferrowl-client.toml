@@ -1,0 +1,111 @@
+# A ferrowl Modbus *client* device, pointed at this crate's own server so that a
+# foreign master (ferrowl uses tokio-modbus) drives our responder. It polls all
+# four tables on unit 1, within the address range `examples/interop_server.rs`
+# serves (0-15 per table).
+#
+# Run it with (from this repo's root), in two terminals:
+#
+#   cargo run --example interop_server -- 127.0.0.1:5030 30
+#   ferrowl run --module name=interop-cli,device=tests/interop/ferrowl-client.toml,\
+#     transport=tcp,ip=127.0.0.1,port=5030,role=client --duration 20 --exit-on-error
+#
+# ferrowl's client only *writes* on an operator action (`:set`, which is a TUI
+# command — a Lua `C_Register:Set` writes ferrowl's local memory, not the wire),
+# so this direction covers the read function codes. Writes across the full stack
+# are covered by `tests/server_tcp.rs` and by `tests/interop_tcp.rs`, where we are
+# the client.
+description = "rust-modbus interop client"
+timeout_ms = 1000
+delay_ms = 200
+interval_ms = 500
+
+# One request per table rather than one per register.
+[read_ranges]
+coils = "0-1"
+discrete = "0-1"
+holding = "0-3"
+input = "0-3"
+
+[definitions.coil0]
+slave_id = 1
+kind = "Coil"
+address = 0
+type = "U16"
+access = "ReadWrite"
+
+[definitions.coil1]
+slave_id = 1
+kind = "Coil"
+address = 1
+type = "U16"
+access = "ReadWrite"
+
+[definitions.discrete0]
+slave_id = 1
+kind = "DiscreteInput"
+address = 0
+type = "U16"
+access = "ReadOnly"
+
+[definitions.discrete1]
+slave_id = 1
+kind = "DiscreteInput"
+address = 1
+type = "U16"
+access = "ReadOnly"
+
+[definitions.holding0]
+slave_id = 1
+kind = "HoldingRegister"
+address = 0
+type = "U16"
+access = "ReadWrite"
+
+[definitions.holding1]
+slave_id = 1
+kind = "HoldingRegister"
+address = 1
+type = "U16"
+access = "ReadWrite"
+
+[definitions.holding2]
+slave_id = 1
+kind = "HoldingRegister"
+address = 2
+type = "U16"
+access = "ReadWrite"
+
+[definitions.holding3]
+slave_id = 1
+kind = "HoldingRegister"
+address = 3
+type = "U16"
+access = "ReadWrite"
+
+[definitions.input0]
+slave_id = 1
+kind = "InputRegister"
+address = 0
+type = "U16"
+access = "ReadOnly"
+
+[definitions.input1]
+slave_id = 1
+kind = "InputRegister"
+address = 1
+type = "U16"
+access = "ReadOnly"
+
+[definitions.input2]
+slave_id = 1
+kind = "InputRegister"
+address = 2
+type = "U16"
+access = "ReadOnly"
+
+[definitions.input3]
+slave_id = 1
+kind = "InputRegister"
+address = 3
+type = "U16"
+access = "ReadOnly"

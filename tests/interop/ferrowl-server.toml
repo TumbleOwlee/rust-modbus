@@ -1,0 +1,163 @@
+# A ferrowl Modbus server device matching what `tests/interop_tcp.rs` expects:
+# unit 1, two coils at 0-1, a discrete input at 0, and holding plus input
+# registers at 0-7.
+#
+# Run it with (from this repo's root):
+#
+#   ferrowl run --module name=interop-srv,device=tests/interop/ferrowl-server.toml,\
+#     transport=tcp,ip=127.0.0.1,port=5020,role=server
+#
+# then `cargo test --test interop_tcp -- --ignored --test-threads=1`.
+description = "rust-modbus interop fixture"
+
+[definitions.coil0]
+slave_id = 1
+kind = "Coil"
+address = 0
+type = "U16"
+access = "ReadWrite"
+default = 0
+
+[definitions.coil1]
+slave_id = 1
+kind = "Coil"
+address = 1
+type = "U16"
+access = "ReadWrite"
+default = 0
+
+[definitions.discrete0]
+slave_id = 1
+kind = "DiscreteInput"
+address = 0
+type = "U16"
+access = "ReadOnly"
+default = 1
+
+[definitions.holding0]
+slave_id = 1
+kind = "HoldingRegister"
+address = 0
+type = "U16"
+access = "ReadWrite"
+default = 0
+
+[definitions.input0]
+slave_id = 1
+kind = "InputRegister"
+address = 0
+type = "U16"
+access = "ReadWrite"
+default = 100
+
+[definitions.holding1]
+slave_id = 1
+kind = "HoldingRegister"
+address = 1
+type = "U16"
+access = "ReadWrite"
+default = 1
+
+[definitions.input1]
+slave_id = 1
+kind = "InputRegister"
+address = 1
+type = "U16"
+access = "ReadWrite"
+default = 101
+
+[definitions.holding2]
+slave_id = 1
+kind = "HoldingRegister"
+address = 2
+type = "U16"
+access = "ReadWrite"
+default = 2
+
+[definitions.input2]
+slave_id = 1
+kind = "InputRegister"
+address = 2
+type = "U16"
+access = "ReadWrite"
+default = 102
+
+[definitions.holding3]
+slave_id = 1
+kind = "HoldingRegister"
+address = 3
+type = "U16"
+access = "ReadWrite"
+default = 3
+
+[definitions.input3]
+slave_id = 1
+kind = "InputRegister"
+address = 3
+type = "U16"
+access = "ReadWrite"
+default = 103
+
+[definitions.holding4]
+slave_id = 1
+kind = "HoldingRegister"
+address = 4
+type = "U16"
+access = "ReadWrite"
+default = 4
+
+[definitions.input4]
+slave_id = 1
+kind = "InputRegister"
+address = 4
+type = "U16"
+access = "ReadWrite"
+default = 104
+
+[definitions.holding5]
+slave_id = 1
+kind = "HoldingRegister"
+address = 5
+type = "U16"
+access = "ReadWrite"
+default = 5
+
+[definitions.input5]
+slave_id = 1
+kind = "InputRegister"
+address = 5
+type = "U16"
+access = "ReadWrite"
+default = 105
+
+[definitions.holding6]
+slave_id = 1
+kind = "HoldingRegister"
+address = 6
+type = "U16"
+access = "ReadWrite"
+default = 6
+
+[definitions.input6]
+slave_id = 1
+kind = "InputRegister"
+address = 6
+type = "U16"
+access = "ReadWrite"
+default = 106
+
+[definitions.holding7]
+slave_id = 1
+kind = "HoldingRegister"
+address = 7
+type = "U16"
+access = "ReadWrite"
+default = 7
+
+[definitions.input7]
+slave_id = 1
+kind = "InputRegister"
+address = 7
+type = "U16"
+access = "ReadWrite"
+default = 107
