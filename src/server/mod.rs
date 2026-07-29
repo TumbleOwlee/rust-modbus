@@ -7,6 +7,7 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::task::JoinSet;
 
 use crate::error::{Error, Result};
 use crate::frame::{ExceptionResponse, ResponsePdu, UnitId};
@@ -76,6 +77,40 @@ where
         let conn = Connection::new(self.next_id(), None);
         serve_connection(self.service.as_ref(), &self.config, &conn, &mut transport).await;
         Ok(())
+    }
+
+    /// Serve a listening socket, handling every connection it accepts
+    /// concurrently (SV-R-007, SV-R-030).
+    ///
+    /// Returns when accepting fails. A failure confined to one connection is
+    /// reported to the service and never returned (SV-R-035, SV-R-051).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the listener does. Connections already running are finished
+    /// before the failure is returned.
+    pub async fn serve(self, listener: crate::transport::TcpListener) -> Result<()> {
+        let mut connections = JoinSet::new();
+        loop {
+            match listener.accept().await {
+                Ok((mut transport, peer)) => {
+                    let service = Arc::clone(&self.service);
+                    let config = self.config;
+                    let conn = Connection::new(self.next_id(), Some(peer));
+                    // A task each, so one connection's handler never delays
+                    // another's (SV-R-030).
+                    connections.spawn(async move {
+                        serve_connection(service.as_ref(), &config, &conn, &mut transport).await;
+                    });
+                }
+                Err(error) => {
+                    // The listener is gone, but the connections it accepted are
+                    // still owed their end (SV-R-033).
+                    while connections.join_next().await.is_some() {}
+                    return Err(error);
+                }
+            }
+        }
     }
 
     /// Allocate the next connection identifier (SV-R-031).
@@ -190,7 +225,11 @@ mod tests {
     use alloc::vec::Vec;
     use std::sync::Mutex;
 
+    use core::net::SocketAddr;
+
     use tokio::io::{DuplexStream, duplex};
+
+    use crate::transport::{TcpListener, connect_tcp};
 
     use crate::error::Error;
     use crate::frame::{
@@ -202,7 +241,7 @@ mod tests {
     /// What a test service was asked to do, in order (SV-R-036).
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Event {
-        Connect(ConnectionId),
+        Connect(ConnectionId, Option<SocketAddr>),
         Request(ConnectionId, UnitId, RequestPdu),
         Failed(Error),
         Disconnect(Disconnect),
@@ -220,6 +259,8 @@ mod tests {
         events: Mutex<Vec<Event>>,
         reply: Reply,
         accept: bool,
+        /// Held open until as many requests are in flight at once (SV-R-030).
+        overlap: Option<Arc<tokio::sync::Barrier>>,
     }
 
     impl Recorder {
@@ -233,6 +274,18 @@ mod tests {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(reply),
                 accept: true,
+                overlap: None,
+            })
+        }
+
+        /// A service that answers no request until `at_once` of them are in
+        /// flight together, so a server that serialises them deadlocks.
+        fn overlapping(at_once: usize) -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+                reply: Box::new(|_| Ok(registers())),
+                accept: true,
+                overlap: Some(Arc::new(tokio::sync::Barrier::new(at_once))),
             })
         }
 
@@ -242,6 +295,7 @@ mod tests {
                 events: Mutex::new(Vec::new()),
                 reply: Box::new(|_| Err(ExceptionCode::IllegalFunction)),
                 accept: false,
+                overlap: None,
             })
         }
 
@@ -268,11 +322,14 @@ mod tests {
             request: RequestPdu,
         ) -> core::result::Result<ResponsePdu, ExceptionCode> {
             self.push(Event::Request(conn.id(), unit, request.clone()));
+            if let Some(overlap) = self.overlap.as_ref() {
+                overlap.wait().await;
+            }
             (self.reply)(&request)
         }
 
         async fn on_connect(&self, conn: &Connection) -> bool {
-            self.push(Event::Connect(conn.id()));
+            self.push(Event::Connect(conn.id(), conn.peer()));
             self.accept
         }
 
@@ -353,7 +410,7 @@ mod tests {
         assert_eq!(
             service.events(),
             alloc::vec![
-                Event::Connect(ConnectionId(1)),
+                Event::Connect(ConnectionId(1), None),
                 Event::Request(ConnectionId(1), UnitId(0x11), read_holding()),
                 Event::Disconnect(Disconnect::Closed),
             ]
@@ -523,7 +580,7 @@ mod tests {
         assert_eq!(
             service.events(),
             alloc::vec![
-                Event::Connect(ConnectionId(1)),
+                Event::Connect(ConnectionId(1), None),
                 Event::Disconnect(Disconnect::Rejected),
             ]
         );
@@ -716,5 +773,127 @@ mod tests {
             alloc::vec![UnitId(0), UnitId(1)],
             "the broadcast must reach the service despite the unit filter"
         );
+    }
+
+    /// An ephemeral loopback address: port 0, so the kernel assigns one.
+    fn ephemeral() -> SocketAddr {
+        SocketAddr::from((core::net::Ipv4Addr::LOCALHOST, 0))
+    }
+
+    #[tokio::test]
+    /// SV-R-030 — connections are served concurrently. Every request is held
+    /// until all three have arrived, so a server that answered them one at a
+    /// time would never finish this test.
+    async fn ut_connections_are_served_concurrently() {
+        let service = Recorder::overlapping(3);
+        let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+        let address = listener.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve(listener));
+
+        let mut clients = Vec::new();
+        for _ in 0..3u16 {
+            clients.push(tokio::spawn(async move {
+                let mut client = connect_tcp(address, crate::transport::TcpConfig::default())
+                    .await
+                    .expect("connects");
+                client
+                    .send_request(&header(1, 1), &read_holding())
+                    .await
+                    .expect("writes a request");
+                client.recv_response().await
+            }));
+        }
+
+        for client in clients {
+            assert_eq!(
+                tokio::time::timeout(core::time::Duration::from_secs(5), client)
+                    .await
+                    .expect("three overlapping requests complete")
+                    .expect("the client task finishes"),
+                Ok((header(1, 1), registers()))
+            );
+        }
+        serving.abort();
+    }
+
+    #[tokio::test]
+    /// SV-R-031, SV-R-036 — each accepted connection is identified in accept
+    /// order and carries the peer's address.
+    async fn ut_accepted_connections_are_identified_in_order() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+        let address = listener.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve(listener));
+
+        let mut peers = Vec::new();
+        for transaction in 1..=2u16 {
+            let stream = tokio::net::TcpStream::connect(address)
+                .await
+                .expect("connects");
+            peers.push(
+                stream
+                    .local_addr()
+                    .expect("a connected socket has an address"),
+            );
+            let mut client = FrameTransport::<_, Tcp>::new(stream);
+            client
+                .send_request(&header(transaction, 1), &read_holding())
+                .await
+                .expect("writes a request");
+            assert_eq!(
+                client.recv_response().await,
+                Ok((header(transaction, 1), registers()))
+            );
+        }
+
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Connect(id, peer) => Some((*id, *peer)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            peers
+                .iter()
+                .enumerate()
+                .map(|(index, peer)| {
+                    (
+                        ConnectionId(u64::try_from(index).expect("two fits a u64") + 1),
+                        Some(*peer),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+        serving.abort();
+    }
+
+    #[tokio::test]
+    /// SV-R-035 — one connection failing neither disturbs another nor stops the
+    /// server accepting.
+    async fn ut_one_failed_connection_does_not_disturb_the_others() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+        let address = listener.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve(listener));
+
+        let mut broken = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        tokio::io::AsyncWriteExt::write_all(&mut broken, &[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("writes a malformed request");
+        drop(broken);
+
+        let mut sound = connect_tcp(address, crate::transport::TcpConfig::default())
+            .await
+            .expect("connects after another connection failed");
+        sound
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        assert_eq!(sound.recv_response().await, Ok((header(1, 1), registers())));
+        serving.abort();
     }
 }
