@@ -321,7 +321,7 @@ mod tests {
         }
     }
 
-    fn read_holding() -> RequestPdu {
+    pub(super) fn read_holding() -> RequestPdu {
         RequestPdu::ReadHoldingRegisters {
             address: 0x006B,
             quantity: 3,
@@ -467,5 +467,93 @@ mod tests {
             .expect("writes head");
         drop(peer);
         assert_eq!(server.recv_request().await, Err(Error::ConnectionClosed));
+    }
+}
+
+#[cfg(test)]
+mod ascii_tests {
+    use super::tests::read_holding;
+    use super::*;
+    use crate::error::Error;
+    use crate::frame::Ascii;
+    use alloc::vec;
+    use tokio::io::{AsyncWriteExt, duplex};
+
+    /// The specification's Read Holding Registers request to server `0x11`, as
+    /// an ASCII ADU (FR-R-110).
+    const REQUEST_ADU: &[u8] = b":1103006B00037E\r\n";
+
+    #[tokio::test]
+    /// TR-R-012 — an ASCII ADU opens on `:` and closes on the first CR LF after
+    /// it; bytes arriving before the `:` belong to no ADU and are discarded.
+    async fn ut_ascii_boundary_and_leading_garbage() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let mut bytes = b"line noise\r\n".to_vec();
+        bytes.extend_from_slice(REQUEST_ADU);
+        peer.write_all(&bytes).await.expect("writes");
+
+        assert_eq!(server.recv_request().await, Ok((0x11, read_holding())));
+    }
+
+    #[tokio::test]
+    /// TR-R-004 — the terminator ends the ADU exactly, so a second frame in the
+    /// same read is still there for the next call.
+    async fn ut_ascii_two_frames_in_one_read() {
+        let (mut peer, server) = duplex(128);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let mut bytes = REQUEST_ADU.to_vec();
+        bytes.extend_from_slice(REQUEST_ADU);
+        peer.write_all(&bytes).await.expect("writes");
+
+        for _ in 0..2 {
+            assert_eq!(server.recv_request().await, Ok((0x11, read_holding())));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-012 — a terminator split across two reads still terminates: the CR
+    /// arriving alone is not mistaken for the end, nor missed once the LF
+    /// follows.
+    ///
+    /// The receive runs concurrently and the writes are separated in time, so
+    /// the CR really does arrive in a read of its own -- writing both halves
+    /// back to back would let the pipe coalesce them and test nothing.
+    async fn ut_ascii_split_terminator_still_terminates() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let receiver = tokio::spawn(async move { server.recv_request().await });
+        let (head, tail) = REQUEST_ADU.split_at(REQUEST_ADU.len() - 1);
+        peer.write_all(head).await.expect("writes head");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        peer.write_all(tail).await.expect("writes tail");
+
+        assert_eq!(
+            receiver.await.expect("receiver completes"),
+            Ok((0x11, read_holding()))
+        );
+    }
+
+    #[tokio::test]
+    /// TR-R-013 — an ADU that never terminates does not grow the buffer without
+    /// bound: at the framing's maximum it is an oversized ADU.
+    async fn ut_oversized_adu_does_not_grow_buffer() {
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let mut bytes = vec![b':'];
+        bytes.extend(core::iter::repeat_n(b'0', Ascii::MAX_ADU_LEN - 1));
+        peer.write_all(&bytes).await.expect("writes");
+
+        assert_eq!(
+            server.recv_request().await,
+            Err(Error::AduTooLarge {
+                len: Ascii::MAX_ADU_LEN,
+                max: Ascii::MAX_ADU_LEN,
+            })
+        );
     }
 }

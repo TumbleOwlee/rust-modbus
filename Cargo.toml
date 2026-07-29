@@ -35,7 +35,7 @@ tokio-serial = { version = "5.5", optional = true, default-features = false }
 # samples them. Dev-only -- nothing reaches a consumer's dependency tree.
 proptest = "1"
 # The runtime and the in-memory duplex pair every transport test runs on.
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "test-util"] }
 
 [lints.clippy]
 # Every fallible call in non-test code documents why it cannot fail via
