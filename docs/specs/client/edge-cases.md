@@ -53,6 +53,11 @@ observable at the device.
 - **Broadcast writes cannot be confirmed.** CL-R-051 returns as soon as the
   bytes are written; whether any device acted on them is unobservable by design
   of the protocol, not of this client.
+- **Interop findings are the server's, not the client's.** Verified against an
+  external Modbus TCP server: real servers refuse optional function codes
+  (`IllegalFunction` for code 22) and may perform code 23's read before its
+  write, contrary to §6.17. The client carries the bytes and surfaces what came
+  back; it does not normalise either behavior away.
 - **No unit-id default.** Every method names its unit explicitly (CL-R-003). A
   default would make the most consequential argument of a Modbus request the one
   most easily forgotten.
