@@ -28,7 +28,11 @@ thiserror = { version = "2.0.19", default-features = false }
 winnow = { version = "1.0.4", default-features = false, features = ["alloc", "ascii", "binary"] }
 # The async runtime (ARCHITECTURE.md). Optional so the bare-metal build of
 # NF-R-003 keeps it out entirely.
-tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time"] }
+# `sync`, `rt` and `macros` are the server's: a `watch` channel for shutdown, a
+# `JoinSet` of connection tasks, and `select!`. Without them the crate builds
+# only because `[dev-dependencies]` enables them and Cargo unifies features
+# across targets — a library-only consumer would not compile.
+tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # The only maintained async serial port for Tokio; wraps `serialport`.
 tokio-serial = { version = "5.5", optional = true, default-features = false }
 
