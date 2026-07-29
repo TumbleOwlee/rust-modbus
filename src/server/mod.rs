@@ -1,12 +1,14 @@
 //! Async Modbus server (responder). See `docs/specs/server/`.
 
 mod framing;
+mod handle;
 mod service;
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::error::{Error, Result};
@@ -14,6 +16,7 @@ use crate::frame::{ExceptionResponse, ResponsePdu, UnitId};
 use crate::transport::FrameTransport;
 
 pub use framing::ServerFraming;
+pub use handle::ServerHandle;
 pub use service::{Connection, ConnectionId, Disconnect, Service};
 
 /// How a server answers (SV-R-008).
@@ -38,6 +41,11 @@ pub struct Server<S> {
     config: ServerConfig,
     /// The identifier the next connection will carry (SV-R-031).
     next_connection: AtomicU64,
+    /// Set once shutdown has been requested (SV-R-040).
+    ///
+    /// Receivers are subscribed per connection, so the sender's `closed()` is
+    /// the drain of SV-R-044: it completes when the last of them is gone.
+    shutdown: Arc<watch::Sender<bool>>,
 }
 
 impl<S> Server<S>
@@ -55,7 +63,16 @@ where
             service: Arc::new(service),
             config,
             next_connection: AtomicU64::new(1),
+            shutdown: Arc::new(watch::Sender::new(false)),
         }
+    }
+
+    /// A handle by which this server is shut down (SV-R-040).
+    ///
+    /// Taken before serving, since serving consumes the server.
+    #[must_use]
+    pub fn handle(&self) -> ServerHandle {
+        ServerHandle::new(Arc::clone(&self.shutdown))
     }
 
     /// Serve one already-established transport, such as a serial link
@@ -75,7 +92,15 @@ where
         F: ServerFraming,
     {
         let conn = Connection::new(self.next_id(), None);
-        serve_connection(self.service.as_ref(), &self.config, &conn, &mut transport).await;
+        let mut signal = self.shutdown.subscribe();
+        serve_connection(
+            self.service.as_ref(),
+            &self.config,
+            &conn,
+            &mut transport,
+            &mut signal,
+        )
+        .await;
         Ok(())
     }
 
@@ -90,17 +115,38 @@ where
     /// Fails if the listener does. Connections already running are finished
     /// before the failure is returned.
     pub async fn serve(self, listener: crate::transport::TcpListener) -> Result<()> {
-        let mut connections = JoinSet::new();
+        let mut connections: JoinSet<()> = JoinSet::new();
+        let mut signal = self.shutdown.subscribe();
         loop {
-            match listener.accept().await {
+            let accepted = tokio::select! {
+                // Shutdown wins a tie: SV-R-041 forbids taking up another
+                // connection once it has been requested.
+                biased;
+                () = shutdown_requested(&mut signal) => {
+                    // The connections already accepted are owed their end
+                    // (SV-R-043), and the drain of SV-R-044 waits for them.
+                    while connections.join_next().await.is_some() {}
+                    return Ok(());
+                }
+                accepted = listener.accept() => accepted,
+            };
+            match accepted {
                 Ok((mut transport, peer)) => {
                     let service = Arc::clone(&self.service);
                     let config = self.config;
                     let conn = Connection::new(self.next_id(), Some(peer));
+                    let mut signal = self.shutdown.subscribe();
                     // A task each, so one connection's handler never delays
                     // another's (SV-R-030).
                     connections.spawn(async move {
-                        serve_connection(service.as_ref(), &config, &conn, &mut transport).await;
+                        serve_connection(
+                            service.as_ref(),
+                            &config,
+                            &conn,
+                            &mut transport,
+                            &mut signal,
+                        )
+                        .await;
                     });
                 }
                 Err(error) => {
@@ -126,6 +172,7 @@ async fn serve_connection<S, T, F>(
     config: &ServerConfig,
     conn: &Connection,
     transport: &mut FrameTransport<T, F>,
+    signal: &mut watch::Receiver<bool>,
 ) where
     S: Service,
     T: AsyncRead + AsyncWrite + Unpin + Send,
@@ -136,7 +183,7 @@ async fn serve_connection<S, T, F>(
         service.on_disconnect(conn, Disconnect::Rejected).await;
         return;
     }
-    let reason = exchange(service, config, conn, transport).await;
+    let reason = exchange(service, config, conn, transport, signal).await;
     service.on_disconnect(conn, reason).await;
 }
 
@@ -146,6 +193,7 @@ async fn exchange<S, T, F>(
     config: &ServerConfig,
     conn: &Connection,
     transport: &mut FrameTransport<T, F>,
+    signal: &mut watch::Receiver<bool>,
 ) -> Disconnect
 where
     S: Service,
@@ -153,7 +201,14 @@ where
     F: ServerFraming,
 {
     loop {
-        let (header, request) = match transport.recv_request().await {
+        let received = tokio::select! {
+            // Only the *read* is abandoned: a request already dispatched runs
+            // to completion below (SV-R-041, SV-R-042).
+            biased;
+            () = shutdown_requested(signal) => return Disconnect::ShuttingDown,
+            received = transport.recv_request() => received,
+        };
+        let (header, request) = match received {
             Ok(received) => received,
             // A close between two ADUs is an ordinary end, not a failure
             // (SV-R-052, TR-R-014).
@@ -202,6 +257,22 @@ where
             }
             // The response never reached the wire, so the stream is still
             // aligned and the next request can be answered (SV-R-014).
+        }
+    }
+}
+
+/// Resolve as soon as shutdown has been requested (SV-R-041).
+///
+/// `changed` alone would miss a request made *before* this receiver subscribed,
+/// so the current value is checked first.
+async fn shutdown_requested(signal: &mut watch::Receiver<bool>) {
+    loop {
+        if *signal.borrow_and_update() {
+            return;
+        }
+        if signal.changed().await.is_err() {
+            // The server is gone, which is as final as a shutdown.
+            return;
         }
     }
 }
@@ -261,6 +332,8 @@ mod tests {
         accept: bool,
         /// Held open until as many requests are in flight at once (SV-R-030).
         overlap: Option<Arc<tokio::sync::Barrier>>,
+        /// Holds every request until the test releases a permit (SV-R-042).
+        hold: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     impl Recorder {
@@ -275,6 +348,7 @@ mod tests {
                 reply: Box::new(reply),
                 accept: true,
                 overlap: None,
+                hold: None,
             })
         }
 
@@ -286,7 +360,39 @@ mod tests {
                 reply: Box::new(|_| Ok(registers())),
                 accept: true,
                 overlap: Some(Arc::new(tokio::sync::Barrier::new(at_once))),
+                hold: None,
             })
+        }
+
+        /// A service that answers nothing until the test says so, so a request
+        /// can be caught in flight (SV-R-042).
+        fn holding() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+                reply: Box::new(|_| Ok(registers())),
+                accept: true,
+                overlap: None,
+                hold: Some(Arc::new(tokio::sync::Semaphore::new(0))),
+            })
+        }
+
+        /// Let one held request proceed.
+        fn release(&self) {
+            self.hold
+                .as_ref()
+                .expect("only a holding recorder is released")
+                .add_permits(1);
+        }
+
+        /// Wait until the service has been asked something.
+        async fn awaited_a_request(&self) {
+            while !self
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Request(..)))
+            {
+                tokio::task::yield_now().await;
+            }
         }
 
         /// A service that refuses every connection (SV-R-032).
@@ -296,6 +402,7 @@ mod tests {
                 reply: Box::new(|_| Err(ExceptionCode::IllegalFunction)),
                 accept: false,
                 overlap: None,
+                hold: None,
             })
         }
 
@@ -324,6 +431,10 @@ mod tests {
             self.push(Event::Request(conn.id(), unit, request.clone()));
             if let Some(overlap) = self.overlap.as_ref() {
                 overlap.wait().await;
+            }
+            if let Some(hold) = self.hold.as_ref() {
+                let permit = hold.acquire().await.expect("the test never closes it");
+                permit.forget();
             }
             (self.reply)(&request)
         }
@@ -895,5 +1006,140 @@ mod tests {
             .expect("writes a request");
         assert_eq!(sound.recv_response().await, Ok((header(1, 1), registers())));
         serving.abort();
+    }
+
+    #[tokio::test]
+    /// SV-R-040, SV-R-041, SV-R-043, SV-R-044 — shutdown ends an idle
+    /// connection with the shutting-down reason, and returns only once serving
+    /// has finished.
+    async fn ut_shutdown_ends_an_idle_connection() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, client_end) = duplex(1024);
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end)));
+        let mut client = FrameTransport::<_, Tcp>::new(client_end);
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(1, 1), registers()))
+        );
+
+        handle.shutdown().await;
+        assert!(
+            serving.is_finished(),
+            "shutdown may not return while serving runs (SV-R-044)"
+        );
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Ok(()),
+            "a shutdown is not a serving failure"
+        );
+        assert_eq!(
+            service.events().last(),
+            Some(&Event::Disconnect(Disconnect::ShuttingDown))
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-042, SV-R-044 — a request already dispatched is answered before its
+    /// connection closes, and shutdown waits for it.
+    async fn ut_shutdown_waits_for_a_request_in_flight() {
+        let service = Recorder::holding();
+        let (server_end, client_end) = duplex(1024);
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end)));
+        let mut client = FrameTransport::<_, Tcp>::new(client_end);
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        service.awaited_a_request().await;
+
+        let done = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let shutting = {
+            let done = Arc::clone(&done);
+            tokio::spawn(async move {
+                handle.shutdown().await;
+                done.store(true, Ordering::SeqCst);
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "shutdown must wait for the handler that is still running"
+        );
+
+        service.release();
+        shutting.await.expect("the shutdown task finishes");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(1, 1), registers())),
+            "the request in flight must still be answered"
+        );
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+    }
+
+    #[tokio::test]
+    /// SV-R-041 — once shutdown is requested the listener stops accepting, so a
+    /// later connection gets no service at all.
+    async fn ut_shutdown_stops_accepting() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+        let address = listener.local_addr().expect("reports its address");
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve(listener));
+
+        handle.shutdown().await;
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Ok(()),
+            "a shutdown is not an accept failure"
+        );
+
+        let refused = match connect_tcp(address, crate::transport::TcpConfig::default()).await {
+            // The listening socket is gone with the server.
+            Err(_) => true,
+            // Some platforms complete a queued handshake anyway; nothing answers.
+            Ok(mut client) => {
+                client
+                    .send_request(&header(1, 1), &read_holding())
+                    .await
+                    .is_err()
+                    || client.recv_response().await.is_err()
+            }
+        };
+        assert!(refused, "no request may be served after shutdown");
+    }
+
+    #[tokio::test]
+    /// SV-R-045 — the handle reports the state without changing it.
+    async fn ut_handle_reports_whether_shutdown_was_requested() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, _client_end) = duplex(1024);
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let watcher = handle.clone();
+
+        assert!(!handle.is_shutting_down());
+        assert!(!watcher.is_shutting_down(), "asking may not request it");
+
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end)));
+        handle.shutdown().await;
+        assert!(watcher.is_shutting_down());
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
     }
 }
