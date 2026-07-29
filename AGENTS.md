@@ -231,6 +231,11 @@ failure is caught either way.
 - **Errors are typed, never stringly.** Failures surface as variants of the crate's error
   enum, not formatted strings a caller has to match on by substring. A new failure mode is
   a new variant — and a new variant is a public API change, so it is spec (gate 1).
+- **Domain values are typed, never bare integers.** A unit identifier, a data address, a
+  quantity, a register value, and a transaction identifier are different things that happen
+  to share a width; passing one where another is meant shall not compile. Wrap each in its
+  own transparent newtype at the point it enters the crate's API, and keep raw integers only
+  for genuinely opaque bytes. A new domain value is public API, so it is spec (gate 1).
 - **No panics on wire input.** Malformed, truncated, or hostile bytes from a peer produce
   an error, never a panic, a slice-index panic, or an unbounded allocation. Every decode
   path is written to that standard and tested with truncated input.

@@ -11,6 +11,15 @@ documents what the encoder happens to do is worthless as a check on it.
 All multi-byte numeric fields are big-endian (FR-R-003). "qty" abbreviates
 quantity. Widths are in bytes unless stated.
 
+The layouts below are stated in wire widths. In the API each of these fields is
+a domain value type (FR-R-007) transparently wrapping that width: a 2-byte
+address field is an `Address`, a qty an `Quantity`, a register a
+`RegisterValue`, a mask a `Mask`, the file record fields `FileNumber`,
+`RecordNumber`, `RecordLength`, the 1-byte server address a `UnitId`, and the
+MBAP transaction identifier a `TransactionId`. The wrapper changes no byte on
+the wire; it exists so two fields of equal width and unequal meaning cannot be
+swapped.
+
 ---
 
 ## 1. PDU layouts

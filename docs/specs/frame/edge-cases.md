@@ -113,6 +113,12 @@ input whatsoever.
   inter-character timeout — is transport-area behavior and is not specified here.
   ASCII exists here so frames are readable in test fixtures and comparable
   against upstream tooling.
+- **Domain value types validate nothing.** `Address`, `Quantity`, `UnitId` and
+  the rest (FR-R-007) are transparent wrappers: every value the field's width can
+  hold is constructible, including `UnitId(250)` from the reserved range and a
+  `Quantity` no function code accepts. They prevent swapping two fields of the
+  same width, not choosing a bad value — the range rules stay where they already
+  are, in encoding (FR-R-021, FR-R-027, FR-R-031) and in the server's judgment.
 - **The frame layer validates no address against any device map.** Structural
   validity only; Illegal Data Address is the server area's judgment.
 - **Broadcast is recognised, not enforced.** FR-R-096 names address 0; the rule

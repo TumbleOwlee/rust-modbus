@@ -40,6 +40,14 @@ direction from the bytes.
 **FR-R-006** — Encoding a PDU that would exceed 253 bytes shall fail with a size
 error rather than emit a truncated or oversized PDU.
 
+**FR-R-007** — The frame layer shall represent each domain value it carries — unit
+identifier, transaction identifier, data address, quantity, register value, mask,
+file number, record number, record length, exception status — as a distinct type,
+so that two values of different meaning cannot be interchanged. Each shall be a
+transparent wrapper over its wire representation and shall impose no validation
+beyond that representation's width; a value that is legal on the wire shall be
+constructible.
+
 ---
 
 ## 2. Function code taxonomy
@@ -73,6 +81,10 @@ fail to decode with an invalid-function-code error.
 **FR-R-015** — Function codes 128–255 shall never denote a request. In the
 response direction they denote an exception response per §7; in the request
 direction they shall fail to decode with an invalid-function-code error.
+
+**FR-R-016** — A request or response PDU shall report the function code it
+carries, including the code an exception response is an exception to. A decoded
+PDU shall answer this without being re-encoded.
 
 ---
 

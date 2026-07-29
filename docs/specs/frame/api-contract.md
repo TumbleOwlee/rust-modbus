@@ -103,21 +103,45 @@ crate is `no_std` + `alloc` (NF-R-001), so `Vec` is `alloc::vec::Vec`.
 | `MeiRequest` / `MeiResponse` | enum | the MEI types of §3, plus `Other { mei_type, data }` |
 | `ReadDeviceIdCode` | enum | `Basic`, `Regular`, `Extended`, `Individual` |
 | `DeviceIdObject` | struct | `{ id: u8, value: Vec<u8> }` |
-| `FileRecordRead` | struct | `{ file_number: u16, record_number: u16, record_length: u16 }` |
-| `FileRecordReadResponse` | struct | `{ values: Vec<u16> }` |
-| `FileRecordWrite` | struct | `{ file_number: u16, record_number: u16, values: Vec<u16> }` |
+| `FileRecordRead` | struct | `{ file_number: FileNumber, record_number: RecordNumber, record_length: RecordLength }` |
+| `FileRecordReadResponse` | struct | `{ values: Vec<RegisterValue> }` |
+| `FileRecordWrite` | struct | `{ file_number: FileNumber, record_number: RecordNumber, values: Vec<RegisterValue> }` |
 | `Framing` | trait | the ADU abstraction of FR-R-120 |
 | `Rtu`, `Ascii`, `Tcp` | struct | the three framings of §5, each a `Framing` impl |
-| `MbapHeader` | struct | `{ transaction_id: u16, unit_id: u8 }` |
+| `MbapHeader` | struct | `{ transaction_id: TransactionId, unit_id: UnitId }` |
 | `Error`, `Result<T>` | enum, alias | §7; `Result<T> = core::result::Result<T, Error>` |
-| `mask_write_result` | fn | `(current: u16, and_mask: u16, or_mask: u16) -> u16` (FR-R-045) |
+| `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-045) |
+
+### Domain value types (FR-R-007)
+
+Each is a transparent tuple struct with a public field, deriving `Debug`,
+`Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`, plus `From` in
+both directions with the integer it wraps. There is no fallible constructor:
+every value the wire can carry is constructible, and which of them is *sensible*
+stays the caller's judgement (FR-R-096 leaves addresses 248–255 to the caller).
+
+| Type | Wraps | Carries |
+|---|---|---|
+| `UnitId` | `u8` | the RTU/ASCII server address (FR-R-096, FR-R-117), the MBAP unit id (FR-R-101) |
+| `TransactionId` | `u16` | the MBAP transaction identifier (FR-R-101) |
+| `Address` | `u16` | every starting or single data address (§3, §6) |
+| `Quantity` | `u16` | every count of coils, inputs, or registers (§3) |
+| `RegisterValue` | `u16` | register contents, FIFO contents, file record contents (FR-R-004) |
+| `Mask` | `u16` | the AND and OR masks of Mask Write Register (FR-R-044) |
+| `FileNumber`, `RecordNumber`, `RecordLength` | `u16` | the file record fields of §4 |
+| `ExceptionStatus` | `u8` | the output status byte of Read Exception Status (FR-R-060) |
+
+Coil and discrete-input values stay `bool`: they are already unmixable with a
+16-bit quantity. Diagnostic sub-function payload words, comm-event counters, and
+MEI object bytes stay raw integers — they are opaque data whose meaning the
+sub-function or MEI type decides, so a domain name would claim more than is true.
 
 Coding is symmetric and direction-explicit (FR-R-005): a PDU is not
 self-describing, so the caller states which direction it holds.
 
 ```rust
-impl RequestPdu  { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; }
-impl ResponsePdu { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; }
+impl RequestPdu  { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; pub fn function(&self) -> FunctionCode; }
+impl ResponsePdu { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; pub fn function(&self) -> FunctionCode; }
 
 pub trait Framing {
     type Header: Clone + PartialEq + Debug;
@@ -146,8 +170,12 @@ FR-R-105 before returning `6 + length`; `Ascii` is `Delimited { start: b':',
 end: b"\r\n" }`; `Rtu` is `Silence`, whose duration is a serial-port property and
 therefore belongs to the transport area (TR-R-011), not here.
 
-`Framing::Header` is `u8` for `Rtu` and `Ascii` (the server address, FR-R-096,
-FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN` is 256, 513, and
+`function` reports the code a PDU carries (FR-R-016) without re-encoding it; for
+`ResponsePdu::Exception` it is the code the exception is *to*, not the code with
+the high bit set, since that is the function the caller asked about.
+
+`Framing::Header` is `UnitId` for `Rtu` and `Ascii` (the server address,
+FR-R-096, FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN` is 256, 513, and
 260 respectively (FR-R-091, FR-R-113, FR-R-104).
 
 `FunctionCode`, `ExceptionCode`, and `DiagnosticSubFunction` each expose
