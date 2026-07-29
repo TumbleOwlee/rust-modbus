@@ -19,10 +19,11 @@ mod transport;
 
 pub use error::{Error, Result};
 pub use frame::{
-    AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse,
-    FileRecordRead, FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN,
-    MbapHeader, MeiRequest, MeiResponse, ReadDeviceIdCode, RequestPdu, ResponsePdu, Rtu, Tcp,
-    mask_write_result,
+    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode,
+    ExceptionResponse, ExceptionStatus, FileNumber, FileRecordRead, FileRecordReadResponse,
+    FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, Mask, MbapHeader, MeiRequest, MeiResponse,
+    Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
+    Rtu, Tcp, TransactionId, UnitId, mask_write_result,
 };
 #[cfg(feature = "std")]
 pub use transport::{

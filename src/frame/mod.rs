@@ -13,6 +13,7 @@ mod mei;
 mod pdu;
 mod rtu;
 mod tcp;
+mod value;
 
 pub use ascii::Ascii;
 pub use diagnostics::DiagnosticSubFunction;
@@ -24,3 +25,7 @@ pub use mei::{DeviceIdObject, MeiRequest, MeiResponse, ReadDeviceIdCode};
 pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};
 pub use rtu::Rtu;
 pub use tcp::{MbapHeader, Tcp};
+pub use value::{
+    Address, ExceptionStatus, FileNumber, Mask, Quantity, RecordLength, RecordNumber,
+    RegisterValue, TransactionId, UnitId,
+};
