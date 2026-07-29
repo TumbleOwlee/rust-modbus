@@ -117,7 +117,6 @@ where
     T: AsyncRead + AsyncWrite + Unpin + Send,
     F: ServerFraming,
 {
-    let _ = config;
     loop {
         let (header, request) = match transport.recv_request().await {
             Ok(received) => received,
@@ -134,6 +133,16 @@ where
         };
 
         let unit = F::unit(&header);
+        // A broadcast is dispatched whatever the configuration, and never
+        // answered (SV-R-023). It is tested before the unit filter for exactly
+        // that reason.
+        let broadcast = F::is_broadcast(unit);
+        if !broadcast && config.unit.is_some_and(|configured| configured != unit) {
+            // Another device's request: answering it would corrupt that
+            // exchange (SV-R-021).
+            continue;
+        }
+
         // Kept before the request moves into the service, for the exception
         // response it may need (SV-R-012).
         let function = request.function();
@@ -145,6 +154,11 @@ where
                 exception,
             }),
         };
+
+        if broadcast {
+            // No device answers a broadcast (SV-R-023).
+            continue;
+        }
 
         if let Err(error) = transport.send_response(&header, &response).await {
             service.on_error(conn, &error).await;
@@ -181,7 +195,7 @@ mod tests {
     use crate::error::Error;
     use crate::frame::{
         Address, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, Quantity,
-        RegisterValue, RequestPdu, ResponsePdu, Tcp, TransactionId, UnitId,
+        RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
     };
     use crate::transport::FrameTransport;
 
@@ -571,6 +585,136 @@ mod tests {
                 )))
             ),
             "and must end the connection: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-020, SV-R-021 — a configured unit answers only itself, and a request
+    /// for another unit draws no response without ending the connection.
+    async fn ut_configured_unit_ignores_other_units() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, mut client) = serving(
+            Arc::clone(&service),
+            ServerConfig {
+                unit: Some(UnitId(1)),
+            },
+        );
+
+        client
+            .send_request(&header(1, 2), &read_holding())
+            .await
+            .expect("writes a request to another unit");
+        client
+            .send_request(&header(2, 1), &read_holding())
+            .await
+            .expect("writes a request to the configured unit");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers())),
+            "the first response must be the one to unit 1"
+        );
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|event| matches!(event, Event::Request(..)))
+                .collect::<Vec<_>>(),
+            alloc::vec![&Event::Request(ConnectionId(1), UnitId(1), read_holding())],
+            "the unit that does not match must never reach the service"
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-022 — with no unit configured, every identifier reaches the service.
+    async fn ut_unconfigured_unit_dispatches_every_unit() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, mut client) = link(Arc::clone(&service));
+
+        for unit in [2u8, 7, 247] {
+            client
+                .send_request(&header(u16::from(unit), unit), &read_holding())
+                .await
+                .expect("writes a request");
+            assert_eq!(
+                client.recv_response().await,
+                Ok((header(u16::from(unit), unit), registers()))
+            );
+        }
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Request(_, unit, _) => Some(*unit),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            alloc::vec![UnitId(2), UnitId(7), UnitId(247)]
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-023 — a broadcast is dispatched and never answered, even when the
+    /// server is configured for another unit.
+    async fn ut_broadcast_is_dispatched_but_unanswered() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, client_end) = duplex(1024);
+        let serving = tokio::spawn(
+            Server::with_config(
+                Arc::clone(&service),
+                ServerConfig {
+                    unit: Some(UnitId(1)),
+                },
+            )
+            .serve_link(FrameTransport::<_, Rtu>::new(server_end)),
+        );
+        let mut client = FrameTransport::<_, Rtu>::new(client_end);
+
+        client
+            .send_request(&UnitId(0), &read_holding())
+            .await
+            .expect("broadcasts a request");
+        // RTU frames are separated by silence, not by a length field (TR-R-011):
+        // without a gap the two requests arrive as one malformed ADU.
+        tokio::time::sleep(core::time::Duration::from_millis(5)).await;
+        client
+            .send_request(&UnitId(1), &read_holding())
+            .await
+            .expect("writes a request to the configured unit");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((UnitId(1), registers())),
+            "the only response may be the one to unit 1"
+        );
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Request(_, unit, _) => Some(*unit),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            alloc::vec![UnitId(0), UnitId(1)],
+            "the broadcast must reach the service despite the unit filter"
         );
     }
 }
