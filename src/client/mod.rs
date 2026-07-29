@@ -37,6 +37,17 @@ impl Default for ClientConfig {
     }
 }
 
+/// A client over a TCP socket.
+pub type TcpClient = Client<tokio::net::TcpStream, crate::frame::Tcp>;
+
+/// A client over a serial line in RTU framing.
+#[cfg(feature = "rtu")]
+pub type RtuClient = Client<tokio_serial::SerialStream, crate::frame::Rtu>;
+
+/// A client over a serial line in ASCII framing.
+#[cfg(feature = "rtu")]
+pub type AsciiClient = Client<tokio_serial::SerialStream, crate::frame::Ascii>;
+
 /// A Modbus client (CL-R-001).
 ///
 /// One type for every framing: what differs between RTU, ASCII, and TCP is

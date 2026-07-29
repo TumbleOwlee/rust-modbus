@@ -30,6 +30,7 @@ of mismatched responses therefore cannot hold a request open indefinitely.
 | Peer closes mid-ADU | `ConnectionClosed`; desynchronized |
 | Write fails mid-ADU | The I/O error, unaltered; desynchronized — a truncated ADU is on the wire (CL-R-013) |
 | Any request on a desynchronized client | `Desynchronized`, with nothing written (CL-R-032) |
+| A typed read addressed to unit 0 on RTU/ASCII | `IllegalValue { field: "broadcast read", value: 0 }`, with nothing written (CL-R-052) |
 
 There is **no reconnect and no retry** (CL-R-033). Recovery is `into_inner`, a
 new transport, and a new client. This is deliberate: a retried write is a second

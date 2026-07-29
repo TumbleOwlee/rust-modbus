@@ -146,6 +146,11 @@ Added by this area, all gated on `std`:
 | `UnexpectedFunction` | `expected: FunctionCode, actual: FunctionCode` | CL-R-022 |
 | `Desynchronized` | — | CL-R-031, CL-R-032 |
 
+A broadcast read (CL-R-052) is refused with the frame area's existing
+`IllegalValue { field: "broadcast read", value: 0 }` rather than a variant of its
+own: it is a caller passing a value the operation cannot accept, which is what
+that variant already means.
+
 `Timeout { what: "response" }` is the transport area's existing variant reused,
 not a fourth one: a caller distinguishes a response timeout from a connect
 timeout by the field, and CL-R-031 means the client is desynchronized either way.

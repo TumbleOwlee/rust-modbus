@@ -20,15 +20,26 @@ structural decision to raise, not to make silently.
 |---|---|---|
 | `frame` | Modbus PDU and ADU encode/decode: function codes, request/response bodies, exception responses, CRC-16 (RTU), LRC + hex characters (ASCII), MBAP header (TCP). Pure, no I/O. | [`frame/`](./docs/specs/frame/) |
 | `transport` | Byte-level transports: TCP sockets and RTU serial ports. Owns framing boundaries (where one ADU ends), connection setup and teardown. Role-agnostic. | [`transport/`](./docs/specs/transport/) |
-| `client` | Async initiator: issues requests, matches responses, applies timeouts, handles retry and reconnect. Built on `frame` + `transport`. | [`client/`](./docs/specs/client/) |
+| `client` | Async initiator: issues requests, matches responses, applies timeouts. No retry or reconnect (CL-R-033). Built on `frame` + `transport`. | [`client/`](./docs/specs/client/) |
 | `server` | Async responder: accepts connections, dispatches decoded requests against the data store, generates exception responses. Built on `frame` + `transport`. | [`server/`](./docs/specs/server/) |
 | `error` | The crate's single public error enum. Every fallible path in every module surfaces through it. | cross-cutting |
 
-`frame` and `transport` have landed; `client` and `server` are still to be
+`frame`, `transport` and `client` have landed; `server` is still to be
 specified. Inside `transport`: `mod.rs` holds `FrameTransport` and the boundary
 readers, `tcp.rs` the connector and listener, `serial.rs` the port parameters and
 the inter-frame timing they imply, and `rtu.rs` the port opener behind the `rtu`
 feature.
+
+Inside `client`: `mod.rs` holds `Client` and its request methods, `framing.rs`
+the `ClientFraming` bridge. That bridge exists because the framings disagree on
+exactly three points — how a header is built, when a reply answers a request, and
+which unit identifier broadcasts — so one generic client covers all three
+framings and the differences live in one file.
+
+Domain values (`UnitId`, `Address`, `Quantity`, `RegisterValue`, …) are defined
+in `frame/value.rs` and used by every layer above it. They are transparent
+newtypes (FR-R-007): the wire is unchanged, but two fields of equal width and
+unequal meaning cannot be swapped at a call site.
 
 Where an ADU *ends* belongs to the framing, not to the socket: `Framing::boundary`
 (FR-R-122) describes the rule — a length prefix, a delimiter pair, or silence —
