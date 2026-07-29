@@ -24,8 +24,16 @@ structural decision to raise, not to make silently.
 | `server` | Async responder: accepts connections, dispatches decoded requests against the data store, generates exception responses. Built on `frame` + `transport`. | [`server/`](./docs/specs/server/) |
 | `error` | The crate's single public error enum. Every fallible path in every module surfaces through it. | cross-cutting |
 
-*(Module names are the intended layout for a crate that is still a scaffold;
-adjust this table as the code lands, not the other way round.)*
+`frame` and `transport` have landed; `client` and `server` are still to be
+specified. Inside `transport`: `mod.rs` holds `FrameTransport` and the boundary
+readers, `tcp.rs` the connector and listener, `serial.rs` the port parameters and
+the inter-frame timing they imply, and `rtu.rs` the port opener behind the `rtu`
+feature.
+
+Where an ADU *ends* belongs to the framing, not to the socket: `Framing::boundary`
+(FR-R-122) describes the rule — a length prefix, a delimiter pair, or silence —
+and `transport` is what applies it to a stream. That keeps the frame area free of
+I/O and leaves one place per rule.
 
 ## Data flow
 

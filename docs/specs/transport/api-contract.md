@@ -45,23 +45,41 @@ the whole of the difference between the roles at this layer (TR-R-002).
 RTU inter-frame interval of TR-R-011, derived from a `SerialConfig` or set
 directly. TCP and ASCII boundaries are self-delimiting and ignore it.
 
+```rust
+pub struct TransportConfig { pub inter_frame_interval: Duration }  // 2.005 ms
+
+impl TransportConfig {
+    pub fn from_serial(config: &SerialConfig) -> Result<Self>;
+}
+
+impl SerialConfig {
+    pub fn inter_frame_interval(&self) -> Result<Duration>;
+}
+```
+
+The interval lives on `SerialConfig` as well as on `TransportConfig`, so the
+3.5-character-time rule is computable — and testable — with the `rtu` feature
+off and no port present. `open_serial` derives one from the other, so a port and
+its timing cannot disagree.
+
 ## 2. TCP configuration
 
 ```rust
+pub type TcpTransport = FrameTransport<TcpStream, Tcp>;
+
 pub struct TcpConfig {
     pub connect_timeout: Duration,  // 5 s (TR-R-021)
     pub nodelay: bool,              // true (TR-R-022)
 }
 
-pub async fn connect_tcp(addr: SocketAddr, config: TcpConfig)
-    -> Result<FrameTransport<TcpStream, Tcp>>;
+pub async fn connect_tcp(addr: SocketAddr, config: TcpConfig) -> Result<TcpTransport>;
 
 pub struct TcpListener { /* … */ }
 
 impl TcpListener {
     pub async fn bind(addr: SocketAddr) -> Result<Self>;
     pub fn local_addr(&self) -> Result<SocketAddr>;
-    pub async fn accept(&self) -> Result<(FrameTransport<TcpStream, Tcp>, SocketAddr)>;
+    pub async fn accept(&self) -> Result<(TcpTransport, SocketAddr)>;
 }
 ```
 
@@ -85,8 +103,10 @@ pub enum StopBits { One, Two }
 pub enum FlowControl { None, Software, Hardware }
 
 #[cfg(feature = "rtu")]
-pub fn open_serial<F: Framing>(path: &str, config: SerialConfig)
-    -> Result<FrameTransport<SerialStream, F>>;
+pub type SerialTransport<F> = FrameTransport<SerialStream, F>;
+
+#[cfg(feature = "rtu")]
+pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<SerialTransport<F>>;
 ```
 
 The defaults are the Modbus serial-line defaults (TR-R-031). The enums are the
