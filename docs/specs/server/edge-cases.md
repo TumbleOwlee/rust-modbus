@@ -62,6 +62,11 @@ starts.
 - **No data model at all.** See [`data-contract.md`](./data-contract.md). This is
   the largest deliberate omission in the crate: it means "hello world" for this
   server is an `impl Service` of a dozen lines, not two.
+- **The service is moved into the server, not borrowed.** SV-R-002 takes
+  ownership, and the orphan rule stops a consumer implementing `Service` for
+  `Arc<their type>`. So a consumer that also wants to read its own store keeps its
+  state in `Arc` fields and clones the service. Borrowing instead would tie the
+  server's lifetime to a scope, which a `'static` connection task cannot have.
 - **A rejected connection is closed, not refused.** `on_connect` runs after the
   TCP handshake completed, so a refused peer sees a connection that opens and
   immediately closes. Refusing before the handshake is not something a listener

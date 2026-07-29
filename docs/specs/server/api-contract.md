@@ -27,9 +27,24 @@ impl<S: Service> Server<S> {
     pub async fn serve_link<T, F>(self, transport: FrameTransport<T, F>) -> Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send,
-        F: Framing;
+        F: ServerFraming;
 }
 ```
+
+`ServerFraming` is the seam of SV-R-001 — the mirror of the client's
+`ClientFraming`, since a responder reads a header rather than building one:
+
+```rust
+pub trait ServerFraming: Framing {
+    fn unit(header: &Self::Header) -> UnitId;
+    fn is_broadcast(unit: UnitId) -> bool;
+}
+```
+
+`Rtu` and `Ascii` take the header itself as the unit and broadcast on unit 0
+(FR-R-096, FR-R-117); `Tcp` takes the MBAP header's unit field and never
+broadcasts. Public because it bounds a public method, unsealed because `Framing`
+is.
 
 `serve` accepts connections and handles each concurrently (SV-R-030);
 `serve_link` runs one already-established transport, which is how a serial line
@@ -84,6 +99,13 @@ an `async fn` in a trait does not promise a `Send` future, and without that
 promise a connection cannot be spawned. The trait is consequently not
 object-safe; `Server<S>` is generic over it, which is what shared, concurrent
 dispatch wants in any case. It is unsealed.
+
+A server **owns** its service (SV-R-002), and the orphan rule forbids a consumer
+from writing `impl Service for Arc<MyType>` outside this crate. A consumer that
+wants to keep a view of its own state therefore implements `Service` for a type
+that is cheap to clone and *shares* when cloned — state behind `Arc<Mutex<…>>`
+fields — and hands one clone to `Server::new`. That is the shape
+`tests/server_tcp.rs` demonstrates.
 
 `on_request` returns `Result<ResponsePdu, ExceptionCode>`: a refusal is expressed
 in the protocol's own vocabulary (SV-R-012), so a service cannot accidentally
