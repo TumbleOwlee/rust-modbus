@@ -479,6 +479,21 @@ fn registers(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
         .collect())
 }
 
+/// Reject input larger than a PDU can be, before it is decoded (FR-R-002).
+///
+/// The bound belongs on the decode side as much as on the encode side: a
+/// function code whose layout consumes all remaining bytes (FR-R-012) would
+/// otherwise accept a PDU that could never be re-encoded, breaking FR-R-133.
+fn check_size(pdu: &[u8]) -> Result<()> {
+    if pdu.len() > MAX_PDU_LEN {
+        return Err(Error::PduTooLarge {
+            len: pdu.len(),
+            max: MAX_PDU_LEN,
+        });
+    }
+    Ok(())
+}
+
 /// Finish an encoded PDU, rejecting one that exceeds the maximum (FR-R-006).
 fn finish(bytes: Vec<u8>) -> Result<Vec<u8>> {
     if bytes.len() > MAX_PDU_LEN {
@@ -615,6 +630,7 @@ impl RequestPdu {
     /// that whatever decodes re-encodes identically, so a PDU the encoder would
     /// reject must not decode either.
     pub fn decode(pdu: &[u8]) -> Result<Self> {
+        check_size(pdu)?;
         parse::run(pdu, |input: &mut Input<'_>| {
             let code = parse::lift(FunctionCode::decode(be_u8.parse_next(input)?))?;
             let request = match code {
@@ -814,6 +830,7 @@ impl RequestPdu {
 impl ResponsePdu {
     /// Decode a response PDU.
     pub fn decode(pdu: &[u8]) -> Result<Self> {
+        check_size(pdu)?;
         if pdu.first().is_some_and(|byte| byte & 0x80 != 0) {
             return ExceptionResponse::decode(pdu).map(Self::Exception);
         }
@@ -1334,6 +1351,23 @@ mod tests {
         };
         let bytes = response.encode().expect("125 registers fit");
         assert_eq!(bytes.len(), 252);
+    }
+
+    #[test]
+    /// FR-R-006 — decoding holds to the same 253-byte bound as encoding: a PDU
+    /// the encoder would reject on its size must not decode either, or the
+    /// round trip of FR-R-133 could not hold.
+    fn ut_oversized_pdu_does_not_decode() {
+        // A custom function code consumes all remaining bytes (FR-R-012), so
+        // nothing but the length bound can reject this.
+        let mut bytes = vec![0x09u8];
+        bytes.extend(core::iter::repeat_n(0x00, MAX_PDU_LEN));
+        let expected = Error::PduTooLarge {
+            len: 254,
+            max: MAX_PDU_LEN,
+        };
+        assert_eq!(RequestPdu::decode(&bytes), Err(expected.clone()));
+        assert_eq!(ResponsePdu::decode(&bytes), Err(expected));
     }
 
     #[test]
