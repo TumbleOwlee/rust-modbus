@@ -96,7 +96,7 @@ point per `NF-R-021`:
 | `NF-R-011` | `forbid(unsafe_code)` in `src/lib.rs` |
 | `NF-R-013` | `[lints.clippy]` in `Cargo.toml`, `clippy.toml`, and the `clippy` CI job |
 | `NF-R-015` | `deny.toml` and the `deny` CI job |
-| `NF-R-016`…`NF-R-019` | Release process, `CHANGELOG.md`, and review |
+| `NF-R-016`, `NF-R-017`, `NF-R-018`, `NF-R-019` | Release process, `CHANGELOG.md`, and review. `NF-R-018`'s "every combination compiles" half is checked by the `features` and `bare-metal` CI jobs; what a feature may *mean* is a review judgment |
 | `NF-R-020`, `NF-R-021`, `NF-R-023`, `NF-R-024` | Conventions on the test suite itself; a test cannot assert its own naming or its own port choice |
 | `NF-R-022` | The `coverage` CI job |
 
