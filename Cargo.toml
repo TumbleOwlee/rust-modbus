@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Async Modbus client and server over RTU and TCP"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/TumbleOwlee/rust-modbus"
 keywords = ["modbus", "rtu", "tcp", "async", "industrial"]
 categories = ["network-programming", "asynchronous"]
