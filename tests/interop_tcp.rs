@@ -187,22 +187,42 @@ async fn it_interop_compound_register_access() {
 
 #[tokio::test]
 #[ignore = "needs an external Modbus server on 127.0.0.1:5020"]
-/// CL-R-060 — a multiple-coil write, read back through code 1.
+/// CL-R-060, CL-R-062 — a multiple-coil write, read back through code 1.
+///
+/// Written twice with the two coils opposed, so a server that packed the bits
+/// in the wrong order, or dropped the second one, cannot pass: `[true, false]`
+/// and `[false, true]` are each other's mirror.
 async fn it_interop_writes_multiple_coils() {
     let mut client = client().await;
-    let coils = [true, false, true, true];
 
-    match client.write_multiple_coils(UNIT, Address(0), &coils).await {
-        Ok(()) => {
-            let read = client
-                .read_coils(UNIT, Address(0), Quantity(4))
+    for coils in [[true, false], [false, true]] {
+        client
+            .write_multiple_coils(UNIT, Address(0), &coils)
+            .await
+            .expect("writes two coils");
+        assert_eq!(
+            client
+                .read_coils(UNIT, Address(0), Quantity(2))
                 .await
-                .expect("reads back");
-            assert_eq!(read, coils.to_vec());
-        }
-        // A server exposing a single coil may legitimately refuse four.
-        Err(error) => println!("multiple-coil write refused: {error}"),
+                .expect("reads back"),
+            coils.to_vec(),
+            "bit order must survive the round trip"
+        );
     }
+
+    // A single-coil write must leave its neighbour alone (FR-R-024 packs them
+    // into one byte, so an off-by-one in the packing shows up here).
+    client
+        .write_single_coil(UNIT, Address(1), true)
+        .await
+        .expect("writes the second coil");
+    assert_eq!(
+        client
+            .read_coils(UNIT, Address(0), Quantity(2))
+            .await
+            .expect("reads back"),
+        vec![false, true]
+    );
 }
 
 #[tokio::test]
