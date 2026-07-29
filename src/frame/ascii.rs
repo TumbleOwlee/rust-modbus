@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use crate::error::{Error, Result};
 use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
+use crate::frame::value::UnitId;
 
 /// ASCII framing (FR-R-110).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,7 @@ const OVERHEAD: usize = 7;
 impl Framing for Ascii {
     /// The 1-byte server address, with the same semantics as RTU's
     /// (FR-R-117).
-    type Header = u8;
+    type Header = UnitId;
 
     const MAX_ADU_LEN: usize = 513;
 
@@ -60,7 +61,7 @@ impl Framing for Ascii {
 ///
 /// The LRC is verified before the PDU is looked at, so a corrupted frame never
 /// reaches the PDU decoder (FR-R-115).
-fn split(bytes: &[u8]) -> Result<(u8, Vec<u8>)> {
+fn split(bytes: &[u8]) -> Result<(UnitId, Vec<u8>)> {
     if bytes.len() > Ascii::MAX_ADU_LEN {
         return Err(Error::AduTooLarge {
             len: bytes.len(),
@@ -121,7 +122,7 @@ fn split(bytes: &[u8]) -> Result<(u8, Vec<u8>)> {
             supplied: bytes.len(),
         });
     };
-    Ok((address, pdu.to_vec()))
+    Ok((UnitId(address), pdu.to_vec()))
 }
 
 /// Frame an encoded PDU as an ASCII ADU (FR-R-110, FR-R-111, FR-R-114).
@@ -129,9 +130,9 @@ fn split(bytes: &[u8]) -> Result<(u8, Vec<u8>)> {
 /// No size check is needed: a PDU is at most 253 bytes (FR-R-002), which with
 /// the address and LRC is 255 encoded bytes, so 510 characters plus the 3 of
 /// overhead is exactly the 513 of FR-R-113.
-fn wrap(address: u8, pdu: &[u8]) -> Vec<u8> {
+fn wrap(address: UnitId, pdu: &[u8]) -> Vec<u8> {
     let mut covered = Vec::with_capacity(pdu.len().saturating_add(1));
-    covered.push(address);
+    covered.push(address.0);
     covered.extend_from_slice(pdu);
 
     let mut bytes = Vec::with_capacity(covered.len().saturating_mul(2).saturating_add(OVERHEAD));
@@ -199,6 +200,7 @@ mod tests {
     use crate::frame::exception::{ExceptionCode, ExceptionResponse};
     use crate::frame::function::FunctionCode;
     use crate::frame::rtu::Rtu;
+    use crate::frame::value::{Address, Quantity, RegisterValue};
     use alloc::vec;
 
     /// The specification's Read Holding Registers request to server `0x11`,
@@ -207,8 +209,8 @@ mod tests {
 
     fn read_holding() -> RequestPdu {
         RequestPdu::ReadHoldingRegisters {
-            address: 0x006B,
-            quantity: 3,
+            address: Address(0x006B),
+            quantity: Quantity(3),
         }
     }
 
@@ -218,10 +220,10 @@ mod tests {
     fn ut_ascii_request_spec_example() {
         assert_eq!(
             Ascii::decode_request(READ_HOLDING_REQUEST),
-            Ok((0x11, read_holding()))
+            Ok((UnitId(0x11), read_holding()))
         );
         assert_eq!(
-            Ascii::encode_request(&0x11, &read_holding()),
+            Ascii::encode_request(&UnitId(0x11), &read_holding()),
             Ok(READ_HOLDING_REQUEST.to_vec())
         );
     }
@@ -231,10 +233,20 @@ mod tests {
     fn ut_ascii_response_spec_example() {
         let bytes = b":110306022B0000006455\r\n";
         let pdu = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0x022B, 0x0000, 0x0064],
+            registers: vec![
+                RegisterValue(0x022B),
+                RegisterValue(0x0000),
+                RegisterValue(0x0064),
+            ],
         };
-        assert_eq!(Ascii::decode_response(bytes), Ok((0x11, pdu.clone())));
-        assert_eq!(Ascii::encode_response(&0x11, &pdu), Ok(bytes.to_vec()));
+        assert_eq!(
+            Ascii::decode_response(bytes),
+            Ok((UnitId(0x11), pdu.clone()))
+        );
+        assert_eq!(
+            Ascii::encode_response(&UnitId(0x11), &pdu),
+            Ok(bytes.to_vec())
+        );
     }
 
     #[test]
@@ -243,7 +255,7 @@ mod tests {
     fn ut_ascii_lowercase_reencodes_uppercase() {
         let lowercase = b":1103006b00037e\r\n";
         let (address, pdu) = Ascii::decode_request(lowercase).expect("lowercase decodes");
-        assert_eq!((address, pdu.clone()), (0x11, read_holding()));
+        assert_eq!((address, pdu.clone()), (UnitId(0x11), read_holding()));
 
         // The re-encoding is of what was decoded, not of a literal, so the
         // chain FR-R-119 describes is the one under test.
@@ -270,9 +282,9 @@ mod tests {
             function: FunctionCode::ReadHoldingRegisters,
             exception: ExceptionCode::IllegalDataAddress,
         });
-        let bytes = Ascii::encode_response(&0x11, &pdu).expect("encodes");
+        let bytes = Ascii::encode_response(&UnitId(0x11), &pdu).expect("encodes");
         assert_eq!(bytes, b":1183026A\r\n".to_vec());
-        assert_eq!(Ascii::decode_response(&bytes), Ok((0x11, pdu)));
+        assert_eq!(Ascii::decode_response(&bytes), Ok((UnitId(0x11), pdu)));
     }
 
     #[test]
@@ -350,8 +362,8 @@ mod tests {
     /// the same PDU; only the framing around them differs.
     fn ut_ascii_and_rtu_agree_on_address_and_pdu() {
         for address in [0x00u8, 0x01, 0xF7, 0xFF] {
-            let ascii = Ascii::encode_request(&address, &read_holding()).expect("encodes");
-            let rtu = Rtu::encode_request(&address, &read_holding()).expect("encodes");
+            let ascii = Ascii::encode_request(&UnitId(address), &read_holding()).expect("encodes");
+            let rtu = Rtu::encode_request(&UnitId(address), &read_holding()).expect("encodes");
             assert_eq!(
                 Ascii::decode_request(&ascii),
                 Rtu::decode_request(&rtu),

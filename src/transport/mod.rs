@@ -316,6 +316,7 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::error::Error;
+    use crate::frame::{Address, Quantity, TransactionId, UnitId};
     use crate::frame::{MbapHeader, Tcp};
     use alloc::vec;
     use tokio::io::{AsyncWriteExt, duplex};
@@ -323,15 +324,15 @@ mod tests {
     /// The MBAP header of every fixture below: transaction 1, unit `0x11`.
     fn header() -> MbapHeader {
         MbapHeader {
-            transaction_id: 1,
-            unit_id: 0x11,
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
         }
     }
 
     pub(super) fn read_holding() -> RequestPdu {
         RequestPdu::ReadHoldingRegisters {
-            address: 0x006B,
-            quantity: 3,
+            address: Address(0x006B),
+            quantity: Quantity(3),
         }
     }
 
@@ -483,6 +484,7 @@ mod ascii_tests {
     use super::*;
     use crate::error::Error;
     use crate::frame::Ascii;
+    use crate::frame::UnitId;
     use alloc::vec;
     use tokio::io::{AsyncWriteExt, duplex};
 
@@ -501,7 +503,10 @@ mod ascii_tests {
         bytes.extend_from_slice(REQUEST_ADU);
         peer.write_all(&bytes).await.expect("writes");
 
-        assert_eq!(server.recv_request().await, Ok((0x11, read_holding())));
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
     }
 
     #[tokio::test]
@@ -516,7 +521,10 @@ mod ascii_tests {
         peer.write_all(&bytes).await.expect("writes");
 
         for _ in 0..2 {
-            assert_eq!(server.recv_request().await, Ok((0x11, read_holding())));
+            assert_eq!(
+                server.recv_request().await,
+                Ok((UnitId(0x11), read_holding()))
+            );
         }
     }
 
@@ -540,7 +548,7 @@ mod ascii_tests {
 
         assert_eq!(
             receiver.await.expect("receiver completes"),
-            Ok((0x11, read_holding()))
+            Ok((UnitId(0x11), read_holding()))
         );
     }
 
@@ -570,6 +578,7 @@ mod rtu_tests {
     use super::tests::read_holding;
     use super::*;
     use crate::error::Error;
+    use crate::frame::UnitId;
     use crate::frame::{Rtu, Tcp};
     use tokio::io::{AsyncWriteExt, duplex};
 
@@ -602,8 +611,8 @@ mod rtu_tests {
         peer.write_all(&REQUEST_ADU).await.expect("writes second");
 
         let (first, second) = receiver.await.expect("receiver completes");
-        assert_eq!(first, Ok((0x11, read_holding())));
-        assert_eq!(second, Ok((0x11, read_holding())));
+        assert_eq!(first, Ok((UnitId(0x11), read_holding())));
+        assert_eq!(second, Ok((UnitId(0x11), read_holding())));
     }
 
     #[tokio::test(start_paused = true)]
@@ -625,7 +634,7 @@ mod rtu_tests {
 
         assert_eq!(
             receiver.await.expect("receiver completes"),
-            Ok((0x11, read_holding()))
+            Ok((UnitId(0x11), read_holding()))
         );
     }
 
@@ -657,7 +666,7 @@ mod rtu_tests {
 
         assert_eq!(
             receiver.await.expect("receiver completes"),
-            Ok((0x11, read_holding()))
+            Ok((UnitId(0x11), read_holding()))
         );
     }
 

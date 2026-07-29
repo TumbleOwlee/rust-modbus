@@ -17,6 +17,7 @@ use winnow::token::take;
 
 use crate::error::{Error, Result};
 use crate::frame::pdu::{registers_from_bytes, registers_to_bytes};
+use crate::frame::value::{FileNumber, RecordLength, RecordNumber, RegisterValue};
 use crate::parse::{self, Input, ParseResult};
 
 /// The only reference type Modbus defines for file records (FR-R-055).
@@ -47,18 +48,18 @@ const MAX_WRITE_DATA_LEN: u32 = 251;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRecordRead {
     /// File to read from; 1–65535 (FR-R-056).
-    pub file_number: u16,
+    pub file_number: FileNumber,
     /// First record within the file; 0–9999 (FR-R-056).
-    pub record_number: u16,
+    pub record_number: RecordNumber,
     /// Number of registers to read.
-    pub record_length: u16,
+    pub record_length: RecordLength,
 }
 
 /// A Read File Record sub-response (FR-R-052).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRecordReadResponse {
     /// Record data read.
-    pub values: Vec<u16>,
+    pub values: Vec<RegisterValue>,
 }
 
 /// A Write File Record sub-request, echoed unchanged in the response
@@ -66,20 +67,20 @@ pub struct FileRecordReadResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRecordWrite {
     /// File to write to; 1–65535 (FR-R-056).
-    pub file_number: u16,
+    pub file_number: FileNumber,
     /// First record within the file; 0–9999 (FR-R-056).
-    pub record_number: u16,
+    pub record_number: RecordNumber,
     /// Record data to write.
-    pub values: Vec<u16>,
+    pub values: Vec<RegisterValue>,
 }
 
 impl FileRecordRead {
     /// Parse one 7-byte sub-request (FR-R-050).
     fn parse(input: &mut Input<'_>) -> ParseResult<Self> {
         reference_type(input)?;
-        let file_number = be_u16.parse_next(input)?;
-        let record_number = be_u16.parse_next(input)?;
-        let record_length = be_u16.parse_next(input)?;
+        let file_number = FileNumber(be_u16.parse_next(input)?);
+        let record_number = RecordNumber(be_u16.parse_next(input)?);
+        let record_length = RecordLength(be_u16.parse_next(input)?);
         parse::lift(check_numbers(file_number, record_number))?;
         Ok(Self {
             file_number,
@@ -92,9 +93,9 @@ impl FileRecordRead {
     fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
         check_numbers(self.file_number, self.record_number)?;
         out.push(REFERENCE_TYPE);
-        out.extend_from_slice(&self.file_number.to_be_bytes());
-        out.extend_from_slice(&self.record_number.to_be_bytes());
-        out.extend_from_slice(&self.record_length.to_be_bytes());
+        out.extend_from_slice(&self.file_number.0.to_be_bytes());
+        out.extend_from_slice(&self.record_number.0.to_be_bytes());
+        out.extend_from_slice(&self.record_length.0.to_be_bytes());
         Ok(())
     }
 }
@@ -143,8 +144,8 @@ impl FileRecordWrite {
     /// Parse one sub-request (FR-R-053).
     fn parse(input: &mut Input<'_>) -> ParseResult<Self> {
         reference_type(input)?;
-        let file_number = be_u16.parse_next(input)?;
-        let record_number = be_u16.parse_next(input)?;
+        let file_number = FileNumber(be_u16.parse_next(input)?);
+        let record_number = RecordNumber(be_u16.parse_next(input)?);
         let record_length = be_u16.parse_next(input)?;
         parse::lift(check_numbers(file_number, record_number))?;
         let data = take(usize::from(record_length).saturating_mul(2)).parse_next(input)?;
@@ -165,8 +166,8 @@ impl FileRecordWrite {
             max: MAX_WRITE_DATA_LEN,
         })?;
         out.push(REFERENCE_TYPE);
-        out.extend_from_slice(&self.file_number.to_be_bytes());
-        out.extend_from_slice(&self.record_number.to_be_bytes());
+        out.extend_from_slice(&self.file_number.0.to_be_bytes());
+        out.extend_from_slice(&self.record_number.0.to_be_bytes());
         out.extend_from_slice(&record_length.to_be_bytes());
         out.extend_from_slice(&registers_to_bytes(&self.values));
         Ok(())
@@ -301,16 +302,16 @@ fn reference_type(input: &mut Input<'_>) -> ParseResult<()> {
 ///
 /// Applied on decode as well as encode: FR-R-133 requires that whatever decodes
 /// re-encodes identically, so a value the encoder rejects must not decode.
-fn check_numbers(file_number: u16, record_number: u16) -> Result<()> {
+fn check_numbers(file_number: FileNumber, record_number: RecordNumber) -> Result<()> {
     check_bounds(
         "file number",
-        u32::from(file_number),
+        u32::from(file_number.0),
         1,
         u32::from(u16::MAX),
     )?;
     check_bounds(
         "record number",
-        u32::from(record_number),
+        u32::from(record_number.0),
         0,
         MAX_RECORD_NUMBER,
     )

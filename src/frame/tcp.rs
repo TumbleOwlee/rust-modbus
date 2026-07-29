@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use crate::error::{Error, Result};
 use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
+use crate::frame::value::{TransactionId, UnitId};
 
 /// What identifies a peer and a transaction over TCP (FR-R-101).
 ///
@@ -15,10 +16,10 @@ use crate::frame::pdu::{RequestPdu, ResponsePdu};
 pub struct MbapHeader {
     /// Echoed back by the server, so a client can match a response to the
     /// request it answers.
-    pub transaction_id: u16,
+    pub transaction_id: TransactionId,
     /// Identifies the target device behind a gateway; the TCP analogue of the
     /// RTU address.
-    pub unit_id: u8,
+    pub unit_id: UnitId,
 }
 
 /// TCP framing (FR-R-100).
@@ -154,8 +155,8 @@ fn split(bytes: &[u8]) -> Result<(MbapHeader, &[u8])> {
 
     Ok((
         MbapHeader {
-            transaction_id: u16::from_be_bytes([head[0], head[1]]),
-            unit_id: head[6],
+            transaction_id: TransactionId(u16::from_be_bytes([head[0], head[1]])),
+            unit_id: UnitId(head[6]),
         },
         pdu,
     ))
@@ -177,10 +178,10 @@ fn wrap(header: &MbapHeader, pdu: &[u8]) -> Result<Vec<u8>> {
         });
     }
     let mut bytes = Vec::with_capacity(pdu.len().saturating_add(HEADER_LEN));
-    bytes.extend_from_slice(&header.transaction_id.to_be_bytes());
+    bytes.extend_from_slice(&header.transaction_id.0.to_be_bytes());
     bytes.extend_from_slice(&PROTOCOL_MODBUS.to_be_bytes());
     bytes.extend_from_slice(&length.to_be_bytes());
-    bytes.push(header.unit_id);
+    bytes.push(header.unit_id.0);
     bytes.extend_from_slice(pdu);
     Ok(bytes)
 }
@@ -188,6 +189,7 @@ fn wrap(header: &MbapHeader, pdu: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::value::{Address, Quantity, RegisterValue};
     use alloc::vec;
 
     /// A Read Holding Registers request to unit `0x11`, transaction 1. The
@@ -199,8 +201,8 @@ mod tests {
 
     fn header() -> MbapHeader {
         MbapHeader {
-            transaction_id: 0x0001,
-            unit_id: 0x11,
+            transaction_id: TransactionId(0x0001),
+            unit_id: UnitId(0x11),
         }
     }
 
@@ -209,8 +211,8 @@ mod tests {
     /// the length field counting the unit identifier and the PDU.
     fn ut_tcp_request_spec_example() {
         let pdu = RequestPdu::ReadHoldingRegisters {
-            address: 0x006B,
-            quantity: 3,
+            address: Address(0x006B),
+            quantity: Quantity(3),
         };
         assert_eq!(
             Tcp::decode_request(&READ_HOLDING_REQUEST),
@@ -227,7 +229,11 @@ mod tests {
     /// the caller: an 8-byte response PDU yields a length of 9.
     fn ut_tcp_response_length_is_derived() {
         let pdu = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0x022B, 0x0000, 0x0064],
+            registers: vec![
+                RegisterValue(0x022B),
+                RegisterValue(0x0000),
+                RegisterValue(0x0064),
+            ],
         };
         let bytes = [
             0x00, 0x01, 0x00, 0x00, 0x00, 0x09, 0x11, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00,

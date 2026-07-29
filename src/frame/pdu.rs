@@ -18,6 +18,7 @@ use crate::frame::exception::ExceptionResponse;
 use crate::frame::file::{self, FileRecordRead, FileRecordReadResponse, FileRecordWrite};
 use crate::frame::function::FunctionCode;
 use crate::frame::mei::{self, MeiRequest, MeiResponse};
+use crate::frame::value::{Address, ExceptionStatus, Mask, Quantity, RegisterValue};
 use crate::parse::{self, Input, ParseResult};
 
 /// Maximum PDU size, inclusive of the function code (FR-R-002).
@@ -41,35 +42,35 @@ pub enum RequestPdu {
     /// 1 — Read Coils.
     ReadCoils {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of coils, 1–2000 (FR-R-021).
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 2 — Read Discrete Inputs.
     ReadDiscreteInputs {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of inputs, 1–2000 (FR-R-021).
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 3 — Read Holding Registers.
     ReadHoldingRegisters {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of registers, 1–125 (FR-R-022).
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 4 — Read Input Registers.
     ReadInputRegisters {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of registers, 1–125 (FR-R-022).
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 5 — Write Single Coil.
     WriteSingleCoil {
         /// Output address.
-        address: u16,
+        address: Address,
         /// Coil state. Encodes as `0xFF00` or `0x0000` and nothing else
         /// (FR-R-026).
         value: bool,
@@ -77,44 +78,44 @@ pub enum RequestPdu {
     /// 6 — Write Single Register.
     WriteSingleRegister {
         /// Register address.
-        address: u16,
+        address: Address,
         /// Value to write; any 16-bit value is permitted (FR-R-028).
-        value: u16,
+        value: RegisterValue,
     },
     /// 15 — Write Multiple Coils.
     WriteMultipleCoils {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Coil states; 1–1968 of them (FR-R-031).
         coils: Vec<bool>,
     },
     /// 16 — Write Multiple Registers.
     WriteMultipleRegisters {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Values to write; 1–123 of them (FR-R-033).
-        registers: Vec<u16>,
+        registers: Vec<RegisterValue>,
     },
     /// 22 — Mask Write Register.
     MaskWriteRegister {
         /// Reference address.
-        address: u16,
+        address: Address,
         /// AND mask.
-        and_mask: u16,
+        and_mask: Mask,
         /// OR mask.
-        or_mask: u16,
+        or_mask: Mask,
     },
     /// 23 — Read/Write Multiple Registers. The write is performed before the
     /// read (FR-R-037).
     ReadWriteMultipleRegisters {
         /// Starting address of the read.
-        read_address: u16,
+        read_address: Address,
         /// Number of registers to read; 1–125 (FR-R-038).
-        read_quantity: u16,
+        read_quantity: Quantity,
         /// Starting address of the write.
-        write_address: u16,
+        write_address: Address,
         /// Values to write; 1–121 of them (FR-R-038).
-        registers: Vec<u16>,
+        registers: Vec<RegisterValue>,
     },
     /// 7 — Read Exception Status (FR-R-060).
     ReadExceptionStatus,
@@ -144,7 +145,7 @@ pub enum RequestPdu {
     /// 24 — Read FIFO Queue.
     ReadFifoQueue {
         /// FIFO pointer address.
-        address: u16,
+        address: Address,
     },
     /// 43 — Encapsulated Interface Transport (FR-R-070).
     EncapsulatedInterfaceTransport(MeiRequest),
@@ -174,59 +175,59 @@ pub enum ResponsePdu {
     /// 3 — Read Holding Registers.
     ReadHoldingRegisters {
         /// Register values.
-        registers: Vec<u16>,
+        registers: Vec<RegisterValue>,
     },
     /// 4 — Read Input Registers.
     ReadInputRegisters {
         /// Register values.
-        registers: Vec<u16>,
+        registers: Vec<RegisterValue>,
     },
     /// 5 — Write Single Coil; echoes the request (FR-R-029).
     WriteSingleCoil {
         /// Output address.
-        address: u16,
+        address: Address,
         /// Coil state.
         value: bool,
     },
     /// 6 — Write Single Register; echoes the request (FR-R-029).
     WriteSingleRegister {
         /// Register address.
-        address: u16,
+        address: Address,
         /// Value written.
-        value: u16,
+        value: RegisterValue,
     },
     /// 15 — Write Multiple Coils; echoes address and quantity (FR-R-034).
     WriteMultipleCoils {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of coils written.
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 16 — Write Multiple Registers; echoes address and quantity (FR-R-034).
     WriteMultipleRegisters {
         /// Starting address.
-        address: u16,
+        address: Address,
         /// Number of registers written.
-        quantity: u16,
+        quantity: Quantity,
     },
     /// 22 — Mask Write Register; echoes the request (FR-R-035).
     MaskWriteRegister {
         /// Reference address.
-        address: u16,
+        address: Address,
         /// AND mask.
-        and_mask: u16,
+        and_mask: Mask,
         /// OR mask.
-        or_mask: u16,
+        or_mask: Mask,
     },
     /// 23 — Read/Write Multiple Registers.
     ReadWriteMultipleRegisters {
         /// Values read.
-        registers: Vec<u16>,
+        registers: Vec<RegisterValue>,
     },
     /// 7 — Read Exception Status.
     ReadExceptionStatus {
         /// The eight exception status outputs (FR-R-060).
-        status: u8,
+        status: ExceptionStatus,
     },
     /// 8 — Diagnostics.
     Diagnostics {
@@ -271,7 +272,7 @@ pub enum ResponsePdu {
     /// 24 — Read FIFO Queue.
     ReadFifoQueue {
         /// Queued values; at most 31 (FR-R-042).
-        values: Vec<u16>,
+        values: Vec<RegisterValue>,
     },
     /// 43 — Encapsulated Interface Transport (FR-R-070).
     EncapsulatedInterfaceTransport(MeiResponse),
@@ -293,8 +294,8 @@ pub enum ResponsePdu {
 /// Applying it to stored data is the server's behavior; defining it is the frame
 /// layer's.
 #[must_use]
-pub fn mask_write_result(current: u16, and_mask: u16, or_mask: u16) -> u16 {
-    (current & and_mask) | (or_mask & !and_mask)
+pub fn mask_write_result(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue {
+    RegisterValue((current.0 & and_mask.0) | (or_mask.0 & !and_mask.0))
 }
 
 /// Unpack `bytes` least significant bit first, yielding `8 × len` values
@@ -387,13 +388,27 @@ fn register_width(quantity: usize) -> usize {
     quantity * 2
 }
 
-/// Interpret `data` as big-endian registers (FR-R-003).
-pub(super) fn registers_from_bytes(data: &[u8]) -> Vec<u16> {
+/// Interpret `data` as big-endian 16-bit words (FR-R-003).
+///
+/// Distinct from `registers_from_bytes`: a diagnostic data word is opaque,
+/// whose meaning its sub-function decides, so it is not a `RegisterValue`.
+fn words_from_bytes(data: &[u8]) -> Vec<u16> {
     data.chunks_exact(2)
         .map(|pair| match pair {
             [hi, lo] => u16::from_be_bytes([*hi, *lo]),
             // Unreachable: `chunks_exact(2)` yields only two-element slices.
             _ => 0,
+        })
+        .collect()
+}
+
+/// Interpret `data` as big-endian registers (FR-R-003).
+pub(super) fn registers_from_bytes(data: &[u8]) -> Vec<RegisterValue> {
+    data.chunks_exact(2)
+        .map(|pair| match pair {
+            [hi, lo] => RegisterValue(u16::from_be_bytes([*hi, *lo])),
+            // Unreachable: `chunks_exact(2)` yields only two-element slices.
+            _ => RegisterValue(0),
         })
         .collect()
 }
@@ -435,16 +450,16 @@ fn counted_bytes<'a>(input: &mut Input<'a>) -> ParseResult<&'a [u8]> {
 
 /// Decode a read request body: a starting address and a quantity, the quantity
 /// checked against its function code's range (FR-R-020).
-fn read_request(input: &mut Input<'_>, min: u16, max: u16) -> ParseResult<(u16, u16)> {
+fn read_request(input: &mut Input<'_>, min: u16, max: u16) -> ParseResult<(Address, Quantity)> {
     let address = be_u16.parse_next(input)?;
     let quantity = be_u16.parse_next(input)?;
     parse::lift(check_range("quantity", quantity, min, max))?;
-    Ok((address, quantity))
+    Ok((Address(address), Quantity(quantity)))
 }
 
 /// Decode a single-write body, mapping the coil value through its two legal
 /// encodings (FR-R-026, FR-R-027).
-fn single_coil(input: &mut Input<'_>) -> ParseResult<(u16, bool)> {
+fn single_coil(input: &mut Input<'_>) -> ParseResult<(Address, bool)> {
     let address = be_u16.parse_next(input)?;
     let raw = be_u16.parse_next(input)?;
     let value = match raw {
@@ -457,11 +472,11 @@ fn single_coil(input: &mut Input<'_>) -> ParseResult<(u16, bool)> {
             });
         }
     };
-    Ok((address, value))
+    Ok((Address(address), value))
 }
 
 /// Decode a register-read response body (FR-R-025).
-fn registers(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
+fn registers(input: &mut Input<'_>) -> ParseResult<Vec<RegisterValue>> {
     let data = counted_bytes(input)?;
     if data.len() % 2 != 0 {
         return parse::fail(Error::IllegalValue {
@@ -469,14 +484,7 @@ fn registers(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
             value: u16::try_from(data.len()).unwrap_or(u16::MAX),
         });
     }
-    Ok(data
-        .chunks_exact(2)
-        .map(|pair| match pair {
-            [hi, lo] => u16::from_be_bytes([*hi, *lo]),
-            // Unreachable: `chunks_exact(2)` yields only two-element slices.
-            _ => 0,
-        })
-        .collect())
+    Ok(registers_from_bytes(data))
 }
 
 /// Reject input larger than a PDU can be, before it is decoded (FR-R-002).
@@ -506,32 +514,43 @@ fn finish(bytes: Vec<u8>) -> Result<Vec<u8>> {
 }
 
 /// Encode a read request body (FR-R-020).
-fn encode_read(code: u8, address: u16, quantity: u16, min: u16, max: u16) -> Result<Vec<u8>> {
-    check_range("quantity", quantity, min, max)?;
+fn encode_read(
+    code: u8,
+    address: Address,
+    quantity: Quantity,
+    min: u16,
+    max: u16,
+) -> Result<Vec<u8>> {
+    check_range("quantity", quantity.0, min, max)?;
     let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.to_be_bytes());
-    bytes.extend_from_slice(&quantity.to_be_bytes());
+    bytes.extend_from_slice(&address.0.to_be_bytes());
+    bytes.extend_from_slice(&quantity.0.to_be_bytes());
     finish(bytes)
 }
 
 /// Encode a single-write body (FR-R-026, FR-R-028).
-fn encode_single(code: u8, address: u16, value: u16) -> Result<Vec<u8>> {
+fn encode_single(code: u8, address: Address, value: u16) -> Result<Vec<u8>> {
     let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.to_be_bytes());
+    bytes.extend_from_slice(&address.0.to_be_bytes());
     bytes.extend_from_slice(&value.to_be_bytes());
     finish(bytes)
 }
 
 /// Encode an address, a quantity, a byte count and the data (FR-R-030,
 /// FR-R-032).
-fn encode_quantified(code: u8, address: u16, quantity: u16, data: &[u8]) -> Result<Vec<u8>> {
+fn encode_quantified(
+    code: u8,
+    address: Address,
+    quantity: Quantity,
+    data: &[u8],
+) -> Result<Vec<u8>> {
     let count = u8::try_from(data.len()).map_err(|_| Error::PduTooLarge {
         len: data.len() + 6,
         max: MAX_PDU_LEN,
     })?;
     let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.to_be_bytes());
-    bytes.extend_from_slice(&quantity.to_be_bytes());
+    bytes.extend_from_slice(&address.0.to_be_bytes());
+    bytes.extend_from_slice(&quantity.0.to_be_bytes());
     bytes.push(count);
     bytes.extend_from_slice(data);
     finish(bytes)
@@ -539,10 +558,10 @@ fn encode_quantified(code: u8, address: u16, quantity: u16, data: &[u8]) -> Resu
 
 /// Encode an address and a quantity, the shape of a multiple-write response
 /// (FR-R-034).
-fn encode_echo_quantity(code: u8, address: u16, quantity: u16) -> Result<Vec<u8>> {
+fn encode_echo_quantity(code: u8, address: Address, quantity: Quantity) -> Result<Vec<u8>> {
     let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.to_be_bytes());
-    bytes.extend_from_slice(&quantity.to_be_bytes());
+    bytes.extend_from_slice(&address.0.to_be_bytes());
+    bytes.extend_from_slice(&quantity.0.to_be_bytes());
     finish(bytes)
 }
 
@@ -564,7 +583,7 @@ fn diagnostic_body(input: &mut Input<'_>) -> ParseResult<(DiagnosticSubFunction,
             value: u16::try_from(data.len()).unwrap_or(u16::MAX),
         });
     }
-    Ok((sub_function, registers_from_bytes(data)))
+    Ok((sub_function, words_from_bytes(data)))
 }
 
 /// Encode a Diagnostics body under `code` (FR-R-061).
@@ -575,7 +594,7 @@ fn encode_diagnostics(
 ) -> Result<Vec<u8>> {
     let mut bytes = vec![code];
     bytes.extend_from_slice(&sub_function.encode()?.to_be_bytes());
-    bytes.extend_from_slice(&registers_to_bytes(data));
+    bytes.extend_from_slice(&words_to_bytes(data));
     finish(bytes)
 }
 
@@ -655,12 +674,12 @@ impl RequestPdu {
                     Self::WriteSingleCoil { address, value }
                 }
                 FunctionCode::WriteSingleRegister => {
-                    let address = be_u16.parse_next(input)?;
-                    let value = be_u16.parse_next(input)?;
+                    let address = Address(be_u16.parse_next(input)?);
+                    let value = RegisterValue(be_u16.parse_next(input)?);
                     Self::WriteSingleRegister { address, value }
                 }
                 FunctionCode::WriteMultipleCoils => {
-                    let address = be_u16.parse_next(input)?;
+                    let address = Address(be_u16.parse_next(input)?);
                     let (quantity, data) =
                         quantified_bytes(input, "quantity", 1, MAX_WRITE_BITS, bit_width)?;
                     Self::WriteMultipleCoils {
@@ -669,7 +688,7 @@ impl RequestPdu {
                     }
                 }
                 FunctionCode::WriteMultipleRegisters => {
-                    let address = be_u16.parse_next(input)?;
+                    let address = Address(be_u16.parse_next(input)?);
                     let (_, data) = quantified_bytes(
                         input,
                         "quantity",
@@ -683,12 +702,12 @@ impl RequestPdu {
                     }
                 }
                 FunctionCode::MaskWriteRegister => Self::MaskWriteRegister {
-                    address: be_u16.parse_next(input)?,
-                    and_mask: be_u16.parse_next(input)?,
-                    or_mask: be_u16.parse_next(input)?,
+                    address: Address(be_u16.parse_next(input)?),
+                    and_mask: Mask(be_u16.parse_next(input)?),
+                    or_mask: Mask(be_u16.parse_next(input)?),
                 },
                 FunctionCode::ReadWriteMultipleRegisters => {
-                    let read_address = be_u16.parse_next(input)?;
+                    let read_address = Address(be_u16.parse_next(input)?);
                     let read_quantity = be_u16.parse_next(input)?;
                     parse::lift(check_range(
                         "read quantity",
@@ -696,7 +715,7 @@ impl RequestPdu {
                         1,
                         MAX_READ_REGISTERS,
                     ))?;
-                    let write_address = be_u16.parse_next(input)?;
+                    let write_address = Address(be_u16.parse_next(input)?);
                     let (_, data) = quantified_bytes(
                         input,
                         "write quantity",
@@ -706,7 +725,7 @@ impl RequestPdu {
                     )?;
                     Self::ReadWriteMultipleRegisters {
                         read_address,
-                        read_quantity,
+                        read_quantity: Quantity(read_quantity),
                         write_address,
                         registers: registers_from_bytes(data),
                     }
@@ -726,7 +745,7 @@ impl RequestPdu {
                     records: file::decode_write_records(input)?,
                 },
                 FunctionCode::ReadFifoQueue => Self::ReadFifoQueue {
-                    address: be_u16.parse_next(input)?,
+                    address: Address(be_u16.parse_next(input)?),
                 },
                 FunctionCode::EncapsulatedInterfaceTransport => {
                     Self::EncapsulatedInterfaceTransport(mei::decode_request(input)?)
@@ -758,17 +777,22 @@ impl RequestPdu {
             Self::WriteSingleCoil { address, value } => {
                 encode_single(5, address, if value { COIL_ON } else { COIL_OFF })
             }
-            Self::WriteSingleRegister { address, value } => encode_single(6, address, value),
+            Self::WriteSingleRegister { address, value } => encode_single(6, address, value.0),
             Self::WriteMultipleCoils { address, ref coils } => {
                 let quantity = quantity_of("quantity", coils.len(), 1, MAX_WRITE_BITS)?;
-                encode_quantified(15, address, quantity, &bits_to_bytes(coils))
+                encode_quantified(15, address, Quantity(quantity), &bits_to_bytes(coils))
             }
             Self::WriteMultipleRegisters {
                 address,
                 ref registers,
             } => {
                 let quantity = quantity_of("quantity", registers.len(), 1, MAX_WRITE_REGISTERS)?;
-                encode_quantified(16, address, quantity, &registers_to_bytes(registers))
+                encode_quantified(
+                    16,
+                    address,
+                    Quantity(quantity),
+                    &registers_to_bytes(registers),
+                )
             }
             Self::MaskWriteRegister {
                 address,
@@ -776,9 +800,9 @@ impl RequestPdu {
                 or_mask,
             } => {
                 let mut bytes = vec![22];
-                bytes.extend_from_slice(&address.to_be_bytes());
-                bytes.extend_from_slice(&and_mask.to_be_bytes());
-                bytes.extend_from_slice(&or_mask.to_be_bytes());
+                bytes.extend_from_slice(&address.0.to_be_bytes());
+                bytes.extend_from_slice(&and_mask.0.to_be_bytes());
+                bytes.extend_from_slice(&or_mask.0.to_be_bytes());
                 finish(bytes)
             }
             Self::ReadWriteMultipleRegisters {
@@ -787,13 +811,13 @@ impl RequestPdu {
                 write_address,
                 ref registers,
             } => {
-                check_range("read quantity", read_quantity, 1, MAX_READ_REGISTERS)?;
+                check_range("read quantity", read_quantity.0, 1, MAX_READ_REGISTERS)?;
                 let write_quantity =
                     quantity_of("write quantity", registers.len(), 1, MAX_RW_WRITE_REGISTERS)?;
                 let mut bytes = vec![23];
-                bytes.extend_from_slice(&read_address.to_be_bytes());
-                bytes.extend_from_slice(&read_quantity.to_be_bytes());
-                bytes.extend_from_slice(&write_address.to_be_bytes());
+                bytes.extend_from_slice(&read_address.0.to_be_bytes());
+                bytes.extend_from_slice(&read_quantity.0.to_be_bytes());
+                bytes.extend_from_slice(&write_address.0.to_be_bytes());
                 bytes.extend_from_slice(&write_quantity.to_be_bytes());
                 let data = registers_to_bytes(registers);
                 bytes.push(u8::try_from(data.len()).unwrap_or(u8::MAX));
@@ -816,7 +840,7 @@ impl RequestPdu {
             }
             Self::ReadFifoQueue { address } => {
                 let mut bytes = vec![24];
-                bytes.extend_from_slice(&address.to_be_bytes());
+                bytes.extend_from_slice(&address.0.to_be_bytes());
                 finish(bytes)
             }
             Self::EncapsulatedInterfaceTransport(ref request) => {
@@ -854,28 +878,28 @@ impl ResponsePdu {
                     Self::WriteSingleCoil { address, value }
                 }
                 FunctionCode::WriteSingleRegister => {
-                    let address = be_u16.parse_next(input)?;
-                    let value = be_u16.parse_next(input)?;
+                    let address = Address(be_u16.parse_next(input)?);
+                    let value = RegisterValue(be_u16.parse_next(input)?);
                     Self::WriteSingleRegister { address, value }
                 }
                 FunctionCode::WriteMultipleCoils => Self::WriteMultipleCoils {
-                    address: be_u16.parse_next(input)?,
-                    quantity: be_u16.parse_next(input)?,
+                    address: Address(be_u16.parse_next(input)?),
+                    quantity: Quantity(be_u16.parse_next(input)?),
                 },
                 FunctionCode::WriteMultipleRegisters => Self::WriteMultipleRegisters {
-                    address: be_u16.parse_next(input)?,
-                    quantity: be_u16.parse_next(input)?,
+                    address: Address(be_u16.parse_next(input)?),
+                    quantity: Quantity(be_u16.parse_next(input)?),
                 },
                 FunctionCode::MaskWriteRegister => Self::MaskWriteRegister {
-                    address: be_u16.parse_next(input)?,
-                    and_mask: be_u16.parse_next(input)?,
-                    or_mask: be_u16.parse_next(input)?,
+                    address: Address(be_u16.parse_next(input)?),
+                    and_mask: Mask(be_u16.parse_next(input)?),
+                    or_mask: Mask(be_u16.parse_next(input)?),
                 },
                 FunctionCode::ReadWriteMultipleRegisters => Self::ReadWriteMultipleRegisters {
                     registers: registers(input)?,
                 },
                 FunctionCode::ReadExceptionStatus => Self::ReadExceptionStatus {
-                    status: be_u8.parse_next(input)?,
+                    status: ExceptionStatus(be_u8.parse_next(input)?),
                 },
                 FunctionCode::Diagnostics => {
                     let (sub_function, data) = diagnostic_body(input)?;
@@ -940,7 +964,7 @@ impl ResponsePdu {
             Self::WriteSingleCoil { address, value } => {
                 encode_single(5, *address, if *value { COIL_ON } else { COIL_OFF })
             }
-            Self::WriteSingleRegister { address, value } => encode_single(6, *address, *value),
+            Self::WriteSingleRegister { address, value } => encode_single(6, *address, value.0),
             Self::WriteMultipleCoils { address, quantity } => {
                 encode_echo_quantity(15, *address, *quantity)
             }
@@ -953,15 +977,15 @@ impl ResponsePdu {
                 or_mask,
             } => {
                 let mut bytes = vec![22];
-                bytes.extend_from_slice(&address.to_be_bytes());
-                bytes.extend_from_slice(&and_mask.to_be_bytes());
-                bytes.extend_from_slice(&or_mask.to_be_bytes());
+                bytes.extend_from_slice(&address.0.to_be_bytes());
+                bytes.extend_from_slice(&and_mask.0.to_be_bytes());
+                bytes.extend_from_slice(&or_mask.0.to_be_bytes());
                 finish(bytes)
             }
             Self::ReadWriteMultipleRegisters { registers } => {
                 encode_counted(23, &registers_to_bytes(registers))
             }
-            Self::ReadExceptionStatus { status } => finish(vec![7, *status]),
+            Self::ReadExceptionStatus { status } => finish(vec![7, status.0]),
             Self::Diagnostics { sub_function, data } => encode_diagnostics(8, *sub_function, data),
             Self::GetCommEventCounter {
                 status,
@@ -1015,7 +1039,7 @@ impl ResponsePdu {
 
 /// Decode a Read FIFO Queue response body: a two-byte byte count, a FIFO count,
 /// and the queued values (FR-R-041, FR-R-042).
-fn fifo_values(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
+fn fifo_values(input: &mut Input<'_>) -> ParseResult<Vec<RegisterValue>> {
     let byte_count = be_u16.parse_next(input)?;
     let count = be_u16.parse_next(input)?;
     parse::lift(check_range("FIFO count", count, 0, MAX_FIFO_COUNT))?;
@@ -1031,11 +1055,16 @@ fn fifo_values(input: &mut Input<'_>) -> ParseResult<Vec<u16>> {
 }
 
 /// Flatten registers to big-endian bytes (FR-R-003).
-pub(super) fn registers_to_bytes(registers: &[u16]) -> Vec<u8> {
+pub(super) fn registers_to_bytes(registers: &[RegisterValue]) -> Vec<u8> {
     registers
         .iter()
-        .flat_map(|register| register.to_be_bytes())
+        .flat_map(|register| register.0.to_be_bytes())
         .collect()
+}
+
+/// Flatten opaque 16-bit words to big-endian bytes (FR-R-003).
+fn words_to_bytes(words: &[u16]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_be_bytes()).collect()
 }
 
 #[cfg(test)]
@@ -1043,6 +1072,7 @@ mod tests {
     use super::*;
     use crate::frame::exception::ExceptionCode;
     use crate::frame::mei::{DeviceIdObject, ReadDeviceIdCode};
+    use crate::frame::value::{FileNumber, Mask, RecordLength, RecordNumber};
 
     /// Coil states of the Read Coils response in the specification's worked
     /// example: bytes `CD 6B 05`, least significant bit first (§6.1).
@@ -1059,8 +1089,8 @@ mod tests {
     /// (§6.1): address 19, quantity 19.
     fn ut_read_coils_request_bytes() {
         let request = RequestPdu::ReadCoils {
-            address: 19,
-            quantity: 19,
+            address: Address(19),
+            quantity: Quantity(19),
         };
         let bytes = vec![0x01, 0x00, 0x13, 0x00, 0x13];
         assert_eq!(request.encode(), Ok(bytes.clone()));
@@ -1102,8 +1132,8 @@ mod tests {
     /// from the specification's example (§6.2): address 196, quantity 22.
     fn ut_read_discrete_inputs_spec_example() {
         let request = RequestPdu::ReadDiscreteInputs {
-            address: 196,
-            quantity: 22,
+            address: Address(196),
+            quantity: Quantity(22),
         };
         let request_bytes = vec![0x02, 0x00, 0xC4, 0x00, 0x16];
         assert_eq!(request.encode(), Ok(request_bytes.clone()));
@@ -1120,15 +1150,19 @@ mod tests {
     /// Holding Registers example (§6.3): address 107, quantity 3.
     fn ut_read_holding_registers_spec_example() {
         let request = RequestPdu::ReadHoldingRegisters {
-            address: 107,
-            quantity: 3,
+            address: Address(107),
+            quantity: Quantity(3),
         };
         let request_bytes = vec![0x03, 0x00, 0x6B, 0x00, 0x03];
         assert_eq!(request.encode(), Ok(request_bytes.clone()));
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0x022B, 0x0000, 0x0064],
+            registers: vec![
+                RegisterValue(0x022B),
+                RegisterValue(0x0000),
+                RegisterValue(0x0064),
+            ],
         };
         let response_bytes = vec![0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64];
         assert_eq!(response.encode(), Ok(response_bytes.clone()));
@@ -1140,15 +1174,15 @@ mod tests {
     /// Bytes from the specification's example (§6.4): address 8, quantity 1.
     fn ut_read_input_registers_spec_example() {
         let request = RequestPdu::ReadInputRegisters {
-            address: 8,
-            quantity: 1,
+            address: Address(8),
+            quantity: Quantity(1),
         };
         let request_bytes = vec![0x04, 0x00, 0x08, 0x00, 0x01];
         assert_eq!(request.encode(), Ok(request_bytes.clone()));
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::ReadInputRegisters {
-            registers: vec![0x000A],
+            registers: vec![RegisterValue(0x000A)],
         };
         let response_bytes = vec![0x04, 0x02, 0x00, 0x0A];
         assert_eq!(response.encode(), Ok(response_bytes.clone()));
@@ -1161,7 +1195,7 @@ mod tests {
     /// FR-R-029 — the response echoes the request byte for byte.
     fn ut_write_single_coil_spec_example() {
         let request = RequestPdu::WriteSingleCoil {
-            address: 172,
+            address: Address(172),
             value: true,
         };
         let bytes = vec![0x05, 0x00, 0xAC, 0xFF, 0x00];
@@ -1169,7 +1203,7 @@ mod tests {
         assert_eq!(RequestPdu::decode(&bytes), Ok(request));
 
         let response = ResponsePdu::WriteSingleCoil {
-            address: 172,
+            address: Address(172),
             value: true,
         };
         assert_eq!(response.encode(), Ok(bytes.clone()));
@@ -1180,7 +1214,7 @@ mod tests {
     /// FR-R-026 — an OFF coil encodes as `0x0000`.
     fn ut_write_single_coil_off() {
         let request = RequestPdu::WriteSingleCoil {
-            address: 172,
+            address: Address(172),
             value: false,
         };
         let bytes = vec![0x05, 0x00, 0xAC, 0x00, 0x00];
@@ -1216,8 +1250,8 @@ mod tests {
     /// specification's example (§6.6): address 1, value 3.
     fn ut_write_single_register_spec_example() {
         let request = RequestPdu::WriteSingleRegister {
-            address: 1,
-            value: 3,
+            address: Address(1),
+            value: RegisterValue(3),
         };
         let bytes = vec![0x06, 0x00, 0x01, 0x00, 0x03];
         assert_eq!(request.encode(), Ok(bytes.clone()));
@@ -1227,7 +1261,10 @@ mod tests {
             let [hi, lo] = value.to_be_bytes();
             assert_eq!(
                 RequestPdu::decode(&[0x06, 0x00, 0x01, hi, lo]),
-                Ok(RequestPdu::WriteSingleRegister { address: 1, value }),
+                Ok(RequestPdu::WriteSingleRegister {
+                    address: Address(1),
+                    value: RegisterValue(value)
+                }),
                 "value {value:#06x}"
             );
         }
@@ -1246,8 +1283,8 @@ mod tests {
             };
             assert_eq!(
                 RequestPdu::ReadCoils {
-                    address: 0,
-                    quantity
+                    address: Address(0),
+                    quantity: Quantity(quantity)
                 }
                 .encode(),
                 Err(expected.clone()),
@@ -1275,8 +1312,8 @@ mod tests {
             };
             assert_eq!(
                 RequestPdu::ReadHoldingRegisters {
-                    address: 0,
-                    quantity
+                    address: Address(0),
+                    quantity: Quantity(quantity)
                 }
                 .encode(),
                 Err(expected.clone()),
@@ -1331,7 +1368,7 @@ mod tests {
     fn ut_pdu_exceeding_max_is_rejected() {
         // 126 registers would need 1 + 1 + 252 = 254 bytes.
         let response = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0; 126],
+            registers: vec![RegisterValue(0); 126],
         };
         assert_eq!(
             response.encode(),
@@ -1347,7 +1384,7 @@ mod tests {
     /// the 253-byte maximum.
     fn ut_max_size_pdu_is_accepted() {
         let response = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0; 125],
+            registers: vec![RegisterValue(0); 125],
         };
         let bytes = response.encode().expect("125 registers fit");
         assert_eq!(bytes.len(), 252);
@@ -1423,7 +1460,7 @@ mod tests {
             true, false, true, true, false, false, true, true, true, false,
         ];
         let request = RequestPdu::WriteMultipleCoils {
-            address: 19,
+            address: Address(19),
             coils: coils.clone(),
         };
         let request_bytes = vec![0x0F, 0x00, 0x13, 0x00, 0x0A, 0x02, 0xCD, 0x01];
@@ -1431,8 +1468,8 @@ mod tests {
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::WriteMultipleCoils {
-            address: 19,
-            quantity: 10,
+            address: Address(19),
+            quantity: Quantity(10),
         };
         let response_bytes = vec![0x0F, 0x00, 0x13, 0x00, 0x0A];
         assert_eq!(response.encode(), Ok(response_bytes.clone()));
@@ -1464,7 +1501,7 @@ mod tests {
             };
             assert_eq!(
                 RequestPdu::WriteMultipleCoils {
-                    address: 0,
+                    address: Address(0),
                     coils: vec![false; quantity],
                 }
                 .encode(),
@@ -1481,16 +1518,16 @@ mod tests {
     /// Bytes from the specification's example (§6.12): address 1, 2 registers.
     fn ut_write_multiple_registers_spec_example() {
         let request = RequestPdu::WriteMultipleRegisters {
-            address: 1,
-            registers: vec![0x000A, 0x0102],
+            address: Address(1),
+            registers: vec![RegisterValue(0x000A), RegisterValue(0x0102)],
         };
         let request_bytes = vec![0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x01, 0x02];
         assert_eq!(request.encode(), Ok(request_bytes.clone()));
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::WriteMultipleRegisters {
-            address: 1,
-            quantity: 2,
+            address: Address(1),
+            quantity: Quantity(2),
         };
         let response_bytes = vec![0x10, 0x00, 0x01, 0x00, 0x02];
         assert_eq!(response.encode(), Ok(response_bytes.clone()));
@@ -1510,8 +1547,8 @@ mod tests {
             };
             assert_eq!(
                 RequestPdu::WriteMultipleRegisters {
-                    address: 0,
-                    registers: vec![0; quantity],
+                    address: Address(0),
+                    registers: vec![RegisterValue(0); quantity],
                 }
                 .encode(),
                 Err(expected),
@@ -1526,18 +1563,18 @@ mod tests {
     /// Bytes from the specification's example (§6.16).
     fn ut_mask_write_register_spec_example() {
         let request = RequestPdu::MaskWriteRegister {
-            address: 4,
-            and_mask: 0x00F2,
-            or_mask: 0x0025,
+            address: Address(4),
+            and_mask: Mask(0x00F2),
+            or_mask: Mask(0x0025),
         };
         let bytes = vec![0x16, 0x00, 0x04, 0x00, 0xF2, 0x00, 0x25];
         assert_eq!(request.encode(), Ok(bytes.clone()));
         assert_eq!(RequestPdu::decode(&bytes), Ok(request));
 
         let response = ResponsePdu::MaskWriteRegister {
-            address: 4,
-            and_mask: 0x00F2,
-            or_mask: 0x0025,
+            address: Address(4),
+            and_mask: Mask(0x00F2),
+            or_mask: Mask(0x0025),
         };
         assert_eq!(response.encode(), Ok(bytes.clone()));
         assert_eq!(ResponsePdu::decode(&bytes), Ok(response));
@@ -1548,11 +1585,20 @@ mod tests {
     /// `(current AND and_mask) OR (or_mask AND NOT and_mask)`. The worked
     /// example (§6.16) takes current `0x0012` to `0x0017`.
     fn ut_mask_write_result_formula() {
-        assert_eq!(mask_write_result(0x0012, 0x00F2, 0x0025), 0x0017);
+        assert_eq!(
+            mask_write_result(RegisterValue(0x0012), Mask(0x00F2), Mask(0x0025)),
+            RegisterValue(0x0017)
+        );
         // An all-ones AND mask leaves the register untouched.
-        assert_eq!(mask_write_result(0xABCD, 0xFFFF, 0x1234), 0xABCD);
+        assert_eq!(
+            mask_write_result(RegisterValue(0xABCD), Mask(0xFFFF), Mask(0x1234)),
+            RegisterValue(0xABCD)
+        );
         // An all-zeros AND mask replaces it with the OR mask.
-        assert_eq!(mask_write_result(0xABCD, 0x0000, 0x1234), 0x1234);
+        assert_eq!(
+            mask_write_result(RegisterValue(0xABCD), Mask(0x0000), Mask(0x1234)),
+            RegisterValue(0x1234)
+        );
     }
 
     #[test]
@@ -1563,10 +1609,14 @@ mod tests {
     /// many data bytes. Bytes from the specification's example (§6.17).
     fn ut_read_write_multiple_registers_spec_example() {
         let request = RequestPdu::ReadWriteMultipleRegisters {
-            read_address: 4,
-            read_quantity: 6,
-            write_address: 15,
-            registers: vec![0x00FF, 0x00FF, 0x00FF],
+            read_address: Address(4),
+            read_quantity: Quantity(6),
+            write_address: Address(15),
+            registers: vec![
+                RegisterValue(0x00FF),
+                RegisterValue(0x00FF),
+                RegisterValue(0x00FF),
+            ],
         };
         let request_bytes = vec![
             0x17, 0x00, 0x04, 0x00, 0x06, 0x00, 0x0F, 0x00, 0x03, 0x06, 0x00, 0xFF, 0x00, 0xFF,
@@ -1576,7 +1626,14 @@ mod tests {
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::ReadWriteMultipleRegisters {
-            registers: vec![0x00FE, 0x0ACD, 0x0001, 0x0003, 0x000D, 0x00FF],
+            registers: vec![
+                RegisterValue(0x00FE),
+                RegisterValue(0x0ACD),
+                RegisterValue(0x0001),
+                RegisterValue(0x0003),
+                RegisterValue(0x000D),
+                RegisterValue(0x00FF),
+            ],
         };
         let response_bytes = vec![
             0x17, 0x0C, 0x00, 0xFE, 0x0A, 0xCD, 0x00, 0x01, 0x00, 0x03, 0x00, 0x0D, 0x00, 0xFF,
@@ -1590,10 +1647,10 @@ mod tests {
     fn ut_read_write_multiple_registers_quantities_out_of_range() {
         assert_eq!(
             RequestPdu::ReadWriteMultipleRegisters {
-                read_address: 0,
-                read_quantity: 126,
-                write_address: 0,
-                registers: vec![0; 1],
+                read_address: Address(0),
+                read_quantity: Quantity(126),
+                write_address: Address(0),
+                registers: vec![RegisterValue(0); 1],
             }
             .encode(),
             Err(Error::OutOfRange {
@@ -1605,10 +1662,10 @@ mod tests {
         );
         assert_eq!(
             RequestPdu::ReadWriteMultipleRegisters {
-                read_address: 0,
-                read_quantity: 1,
-                write_address: 0,
-                registers: vec![0; 122],
+                read_address: Address(0),
+                read_quantity: Quantity(1),
+                write_address: Address(0),
+                registers: vec![RegisterValue(0); 122],
             }
             .encode(),
             Err(Error::OutOfRange {
@@ -1625,13 +1682,15 @@ mod tests {
     /// FR-R-041 — its response carries a two-byte byte count, a FIFO count, and
     /// the queued values. Bytes from the specification's example (§6.18).
     fn ut_read_fifo_queue_spec_example() {
-        let request = RequestPdu::ReadFifoQueue { address: 0x04DE };
+        let request = RequestPdu::ReadFifoQueue {
+            address: Address(0x04DE),
+        };
         let request_bytes = vec![0x18, 0x04, 0xDE];
         assert_eq!(request.encode(), Ok(request_bytes.clone()));
         assert_eq!(RequestPdu::decode(&request_bytes), Ok(request));
 
         let response = ResponsePdu::ReadFifoQueue {
-            values: vec![0x01B8, 0x1284],
+            values: vec![RegisterValue(0x01B8), RegisterValue(0x1284)],
         };
         let response_bytes = vec![0x18, 0x00, 0x06, 0x00, 0x02, 0x01, 0xB8, 0x12, 0x84];
         assert_eq!(response.encode(), Ok(response_bytes.clone()));
@@ -1692,14 +1751,14 @@ mod tests {
         let expected = RequestPdu::ReadFileRecord {
             records: vec![
                 FileRecordRead {
-                    file_number: 4,
-                    record_number: 1,
-                    record_length: 2,
+                    file_number: FileNumber(4),
+                    record_number: RecordNumber(1),
+                    record_length: RecordLength(2),
                 },
                 FileRecordRead {
-                    file_number: 3,
-                    record_number: 9,
-                    record_length: 2,
+                    file_number: FileNumber(3),
+                    record_number: RecordNumber(9),
+                    record_length: RecordLength(2),
                 },
             ],
         };
@@ -1718,10 +1777,10 @@ mod tests {
         let expected = ResponsePdu::ReadFileRecord {
             records: vec![
                 FileRecordReadResponse {
-                    values: vec![0x0DFE, 0x0020],
+                    values: vec![RegisterValue(0x0DFE), RegisterValue(0x0020)],
                 },
                 FileRecordReadResponse {
-                    values: vec![0x33CD, 0x0040],
+                    values: vec![RegisterValue(0x33CD), RegisterValue(0x0040)],
                 },
             ],
         };
@@ -1738,9 +1797,13 @@ mod tests {
             0x0D,
         ];
         let records = vec![FileRecordWrite {
-            file_number: 4,
-            record_number: 7,
-            values: vec![0x06AF, 0x04BE, 0x100D],
+            file_number: FileNumber(4),
+            record_number: RecordNumber(7),
+            values: vec![
+                RegisterValue(0x06AF),
+                RegisterValue(0x04BE),
+                RegisterValue(0x100D),
+            ],
         }];
         let request = RequestPdu::WriteFileRecord {
             records: records.clone(),
@@ -1840,9 +1903,9 @@ mod tests {
         assert_eq!(
             RequestPdu::ReadFileRecord {
                 records: vec![FileRecordRead {
-                    file_number: 0,
-                    record_number: 1,
-                    record_length: 2,
+                    file_number: FileNumber(0),
+                    record_number: RecordNumber(1),
+                    record_length: RecordLength(2),
                 }],
             }
             .encode(),
@@ -1862,9 +1925,9 @@ mod tests {
         assert_eq!(
             RequestPdu::ReadFileRecord {
                 records: vec![FileRecordRead {
-                    file_number: 4,
-                    record_number: 10_000,
-                    record_length: 2,
+                    file_number: FileNumber(4),
+                    record_number: RecordNumber(10_000),
+                    record_length: RecordLength(2),
                 }],
             }
             .encode(),
@@ -1895,7 +1958,9 @@ mod tests {
         );
         assert_eq!(RequestPdu::ReadExceptionStatus.encode(), Ok(vec![0x07]));
 
-        let response = ResponsePdu::ReadExceptionStatus { status: 0x6D };
+        let response = ResponsePdu::ReadExceptionStatus {
+            status: ExceptionStatus(0x6D),
+        };
         assert_eq!(ResponsePdu::decode(&[0x07, 0x6D]), Ok(response.clone()));
         assert_eq!(response.encode(), Ok(vec![0x07, 0x6D]));
     }

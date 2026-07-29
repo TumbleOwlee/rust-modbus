@@ -8,8 +8,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use rust_modbus::{
-    Error, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, RequestPdu, ResponsePdu,
-    TcpConfig, TcpListener, connect_tcp,
+    Address, Error, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, Quantity,
+    RegisterValue, RequestPdu, ResponsePdu, TcpConfig, TcpListener, TransactionId, UnitId,
+    connect_tcp,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -19,21 +20,25 @@ fn ephemeral() -> SocketAddr {
 
 fn header() -> MbapHeader {
     MbapHeader {
-        transaction_id: 7,
-        unit_id: 0x11,
+        transaction_id: TransactionId(7),
+        unit_id: UnitId(0x11),
     }
 }
 
 fn request() -> RequestPdu {
     RequestPdu::ReadHoldingRegisters {
-        address: 0x006B,
-        quantity: 3,
+        address: Address(0x006B),
+        quantity: Quantity(3),
     }
 }
 
 fn response() -> ResponsePdu {
     ResponsePdu::ReadHoldingRegisters {
-        registers: vec![0x022B, 0x0000, 0x0064],
+        registers: vec![
+            RegisterValue(0x022B),
+            RegisterValue(0x0000),
+            RegisterValue(0x0064),
+        ],
     }
 }
 

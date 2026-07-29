@@ -6,6 +6,7 @@ use crc::{CRC_16_MODBUS, Crc};
 use crate::error::{Error, Result};
 use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
+use crate::frame::value::UnitId;
 
 /// RTU framing (FR-R-090).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +21,7 @@ const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);
 
 impl Framing for Rtu {
     /// The 1-byte server address (FR-R-096).
-    type Header = u8;
+    type Header = UnitId;
 
     const MAX_ADU_LEN: usize = 256;
 
@@ -54,7 +55,7 @@ impl Framing for Rtu {
 ///
 /// The CRC is verified before the PDU is looked at, so a corrupted frame never
 /// reaches the PDU decoder (FR-R-095).
-fn split(bytes: &[u8]) -> Result<(u8, &[u8])> {
+fn split(bytes: &[u8]) -> Result<(UnitId, &[u8])> {
     if bytes.len() > Rtu::MAX_ADU_LEN {
         return Err(Error::AduTooLarge {
             len: bytes.len(),
@@ -83,16 +84,16 @@ fn split(bytes: &[u8]) -> Result<(u8, &[u8])> {
     if expected != actual {
         return Err(Error::Checksum { expected, actual });
     }
-    Ok((address, pdu))
+    Ok((UnitId(address), pdu))
 }
 
 /// Wrap an encoded PDU in its address and CRC (FR-R-090, FR-R-094).
 ///
 /// No size check is needed: a PDU is at most 253 bytes (FR-R-002) and the
 /// overhead is 3, so an encoded ADU cannot exceed the 256 of FR-R-091.
-fn wrap(address: u8, pdu: &[u8]) -> Vec<u8> {
+fn wrap(address: UnitId, pdu: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(pdu.len().saturating_add(OVERHEAD));
-    bytes.push(address);
+    bytes.push(address.0);
     bytes.extend_from_slice(pdu);
     bytes.extend_from_slice(&CRC.checksum(&bytes).to_le_bytes());
     bytes
@@ -101,6 +102,7 @@ fn wrap(address: u8, pdu: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::value::{Address, Quantity, RegisterValue};
     use alloc::vec;
 
     /// The specification's Read Holding Registers request to server `0x11`,
@@ -117,15 +119,15 @@ mod tests {
     /// the address and the whole PDU.
     fn ut_rtu_request_spec_example() {
         let pdu = RequestPdu::ReadHoldingRegisters {
-            address: 0x006B,
-            quantity: 3,
+            address: Address(0x006B),
+            quantity: Quantity(3),
         };
         assert_eq!(
             Rtu::decode_request(&READ_HOLDING_REQUEST),
-            Ok((0x11, pdu.clone()))
+            Ok((UnitId(0x11), pdu.clone()))
         );
         assert_eq!(
-            Rtu::encode_request(&0x11, &pdu),
+            Rtu::encode_request(&UnitId(0x11), &pdu),
             Ok(READ_HOLDING_REQUEST.to_vec())
         );
     }
@@ -135,14 +137,18 @@ mod tests {
     /// within it differs.
     fn ut_rtu_response_spec_example() {
         let pdu = ResponsePdu::ReadHoldingRegisters {
-            registers: vec![0x022B, 0x0000, 0x0064],
+            registers: vec![
+                RegisterValue(0x022B),
+                RegisterValue(0x0000),
+                RegisterValue(0x0064),
+            ],
         };
         assert_eq!(
             Rtu::decode_response(&READ_HOLDING_RESPONSE),
-            Ok((0x11, pdu.clone()))
+            Ok((UnitId(0x11), pdu.clone()))
         );
         assert_eq!(
-            Rtu::encode_response(&0x11, &pdu),
+            Rtu::encode_response(&UnitId(0x11), &pdu),
             Ok(READ_HOLDING_RESPONSE.to_vec())
         );
     }
@@ -182,14 +188,14 @@ mod tests {
     /// server, and 248–255 are left for the caller to judge.
     fn ut_rtu_every_address_decodes() {
         let pdu = RequestPdu::ReadHoldingRegisters {
-            address: 0x006B,
-            quantity: 3,
+            address: Address(0x006B),
+            quantity: Quantity(3),
         };
         for address in [0x00u8, 0x01, 0xF7, 0xF8, 0xFF] {
-            let bytes = Rtu::encode_request(&address, &pdu).expect("encodes");
+            let bytes = Rtu::encode_request(&UnitId(address), &pdu).expect("encodes");
             assert_eq!(
                 Rtu::decode_request(&bytes),
-                Ok((address, pdu.clone())),
+                Ok((UnitId(address), pdu.clone())),
                 "address {address:#04x}"
             );
         }

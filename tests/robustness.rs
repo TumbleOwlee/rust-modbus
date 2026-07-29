@@ -6,7 +6,10 @@
 //! input rather than as a fixture list that only samples them.
 
 use proptest::prelude::*;
-use rust_modbus::{Ascii, Error, Framing, RequestPdu, ResponsePdu, Rtu, Tcp};
+use rust_modbus::{
+    Address, Ascii, Error, Framing, Quantity, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId,
+    UnitId,
+};
 
 /// Byte sequences up to a little over the largest ADU any framing permits
 /// (513, FR-R-113), so oversized input is generated as well as undersized.
@@ -76,20 +79,20 @@ proptest! {
 /// wire format live in each framing's unit tests.
 fn valid_adus() -> Vec<(&'static str, Vec<u8>)> {
     let request = RequestPdu::ReadHoldingRegisters {
-        address: 0x006B,
-        quantity: 3,
+        address: Address(0x006B),
+        quantity: Quantity(3),
     };
     vec![
         (
             "RTU",
-            Rtu::encode_request(&0x11, &request).expect("RTU encodes"),
+            Rtu::encode_request(&UnitId(0x11), &request).expect("RTU encodes"),
         ),
         (
             "TCP",
             Tcp::encode_request(
                 &rust_modbus::MbapHeader {
-                    transaction_id: 1,
-                    unit_id: 0x11,
+                    transaction_id: TransactionId(1),
+                    unit_id: UnitId(0x11),
                 },
                 &request,
             )
@@ -97,7 +100,7 @@ fn valid_adus() -> Vec<(&'static str, Vec<u8>)> {
         ),
         (
             "ASCII",
-            Ascii::encode_request(&0x11, &request).expect("ASCII encodes"),
+            Ascii::encode_request(&UnitId(0x11), &request).expect("ASCII encodes"),
         ),
     ]
 }
@@ -107,8 +110,8 @@ fn valid_adus() -> Vec<(&'static str, Vec<u8>)> {
 /// trailing-bytes error naming the surplus, rather than silently ignoring it.
 fn it_surplus_pdu_bytes_are_rejected() {
     let pdu = RequestPdu::ReadHoldingRegisters {
-        address: 0x006B,
-        quantity: 3,
+        address: Address(0x006B),
+        quantity: Quantity(3),
     }
     .encode()
     .expect("encodes");
@@ -129,8 +132,8 @@ fn it_surplus_pdu_bytes_are_rejected() {
 /// decode of a valid ADU re-encodes to the bytes it came from.
 fn it_valid_adus_reencode_identically() {
     let request = RequestPdu::ReadHoldingRegisters {
-        address: 0x006B,
-        quantity: 3,
+        address: Address(0x006B),
+        quantity: Quantity(3),
     };
     for (name, bytes) in valid_adus() {
         match name {
