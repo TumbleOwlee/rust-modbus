@@ -44,8 +44,8 @@ fn decode_every_way(bytes: &[u8]) {
 
 proptest! {
     #[test]
-    /// FR-R-130 — no decoding operation panics, indexes out of bounds, or
-    /// aborts, for any input byte sequence whatsoever.
+    /// FR-R-130, NF-R-012 — no decoding operation panics, indexes out of
+    /// bounds, or aborts, for any input byte sequence whatsoever.
     fn it_decoding_arbitrary_bytes_never_panics(bytes in arbitrary_bytes()) {
         decode_every_way(&bytes);
     }
@@ -65,8 +65,10 @@ proptest! {
 
 proptest! {
     #[test]
-    /// FR-R-130 — the ASCII decoder holds to the same standard on input drawn
-    /// from its own alphabet, which reaches deeper into it than random bytes.
+    /// FR-R-130, NF-R-014 — the ASCII decoder holds to the same standard on
+    /// input drawn from its own alphabet, which reaches deeper into it than
+    /// random bytes: NF-R-014 requires that generated input, not a fixture list
+    /// alone, is what pins the no-panic posture.
     fn it_decoding_hexadecimal_bytes_never_panics(bytes in hexish_bytes()) {
         decode_every_way(&bytes);
     }

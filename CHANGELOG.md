@@ -37,6 +37,18 @@ until it ships.
   permissive allow-list and the reasoning for each non-standard licence in the
   tree live in `deny.toml`.
 
+- A `README.md`, crate-level documentation with runnable doctests, and three
+  examples: `tcp_client`, `rtu_client` (needs the `rtu` feature and hardware),
+  and `interop_server`.
+
+### Fixed
+
+- The `tokio` dependency now declares the `sync`, `rt`, and `macros` features the
+  server uses. Without them a consumer that depended on the library alone could
+  not compile it; every local test command masked the omission, because
+  `[dev-dependencies]` enabled those features and Cargo unifies them across
+  targets.
+
 ### Security
 
 - No `unsafe` code anywhere in the crate, enforced by `forbid(unsafe_code)`

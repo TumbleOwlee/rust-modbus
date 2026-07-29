@@ -176,6 +176,7 @@
 //! `SV-R-*`, `TR-R-*`, `NF-R-*`) refer to it. `PRD.md` states what the library
 //! is and is not for, and `ARCHITECTURE.md` maps the modules.
 
+// NF-R-011: no `unsafe` anywhere, enforced by the compiler rather than by review.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 // NF-R-001, NF-R-002: `core` + `alloc` always; `std` only where the transport,

@@ -52,10 +52,14 @@ not depend on values a peer controls. Neither a decoder nor a transport shall
 allocate a buffer sized from a length field that has not yet been validated
 against that maximum.
 
-**NF-R-009** — Encoding a frame shall reserve each destination buffer's capacity
-in advance from the already-known frame length, rather than growing the buffer as
-bytes are appended. The number of allocations per encoded frame shall be a small
-constant, independent of the frame's contents.
+**NF-R-009** — Encoding a frame shall allocate a bounded number of buffers, none
+of them sized from a value a peer controls. The ADU layer knows the finished
+frame's length before it writes a byte and shall reserve each destination
+buffer's capacity in advance. The PDU layer does not — a body's length is settled
+only as the body is built — and may grow its buffer; it shall append whole fields
+rather than allocating per byte, and every buffer it produces is bounded by the
+maximum PDU length (FR-R-002). Reserving at the PDU layer as well is an
+optimisation this crate has not made, not a requirement it meets.
 
 **NF-R-010** — The crate asserts **no** throughput, latency, or
 allocation-count figure. It ships no benchmark suite, and no performance number

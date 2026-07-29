@@ -671,7 +671,7 @@ mod tests {
     use crate::transport::FrameTransport;
     use alloc::vec;
     use core::time::Duration;
-    use tokio::io::{DuplexStream, duplex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
     /// A client and the transport a test server answers it on.
     fn pair() -> (Client<DuplexStream, Tcp>, FrameTransport<DuplexStream, Tcp>) {
@@ -880,6 +880,49 @@ mod tests {
         );
         assert!(client.is_desynchronized());
         silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-023 — a response that cannot be decoded fails with the frame area's
+    /// own decoding error, unaltered, and leaves the client unusable: the ADU's
+    /// length was trusted to read it off the stream, so once its contents turn
+    /// out to be nonsense there is no way to know where the next response
+    /// starts. The reply below is a well-formed MBAP header (transaction 1,
+    /// length 3, unit 0x11) around a PDU claiming function 3 with a byte count
+    /// of 4 but only one register following it.
+    async fn ut_undecodable_response_desynchronizes() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        let mut server = server;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            server
+                .write_all(&[
+                    0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x11, 0x03, 0x04, 0x00, 0x2A,
+                ])
+                .await
+                .expect("the reply is written");
+            server
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::ByteCountMismatch {
+                expected: 4,
+                actual: 2
+            }),
+            "the frame area's own error reaches the caller unaltered"
+        );
+        assert!(
+            client.is_desynchronized(),
+            "the stream's alignment is unknown after a malformed response"
+        );
+        let _ = answering.await;
     }
 
     #[tokio::test(start_paused = true)]

@@ -77,8 +77,38 @@ could observe.
 area.** The requirement is real, but its test lives with the per-area requirement
 that owns the behavior, cited by *that* ID.
 
-*(Populate this list as such requirements appear. Anything not on it is expected
-to carry a citing test.)*
+Anything not listed below is expected to carry a citing test.
+
+**Kind 1 — design posture, platform, toolchain, versioning.** Every
+non-functional requirement except `NF-R-012` and `NF-R-014`, which *are* pinned,
+by the property tests in `tests/robustness.rs`. Each of the rest states a fact
+about the build, the toolchain, or the release process, and names its enforcement
+point per `NF-R-021`:
+
+| Requirements | Enforced by |
+|---|---|
+| `NF-R-001`, `NF-R-002` | The `no_std`/feature attributes in `src/lib.rs`, and the bare-metal CI job |
+| `NF-R-003` | The `bare-metal` CI job |
+| `NF-R-004` | The comment above `[dependencies]` in `Cargo.toml` |
+| `NF-R-005`, `NF-R-007` | `rust-version` in `Cargo.toml` and the `msrv` CI job |
+| `NF-R-006` | `rust-toolchain.toml` |
+| `NF-R-008`, `NF-R-009`, `NF-R-010` | Design posture. No benchmark gates CI, by decision (`NF-R-010`) |
+| `NF-R-011` | `forbid(unsafe_code)` in `src/lib.rs` |
+| `NF-R-013` | `[lints.clippy]` in `Cargo.toml`, `clippy.toml`, and the `clippy` CI job |
+| `NF-R-015` | `deny.toml` and the `deny` CI job |
+| `NF-R-016`…`NF-R-019` | Release process, `CHANGELOG.md`, and review |
+| `NF-R-020`, `NF-R-021`, `NF-R-023`, `NF-R-024` | Conventions on the test suite itself; a test cannot assert its own naming or its own port choice |
+| `NF-R-022` | The `coverage` CI job |
+
+**Kind 2 — cross-cutting restatements asserted under the owning area:**
+
+| Requirement | Asserted under |
+|---|---|
+| `FR-R-120` | Each framing's own requirements — `FR-R-091`, `FR-R-104`, `FR-R-113` pin the maximum lengths and both directions per framing |
+| `CL-R-003` | The framing requirements that put the identifier on the wire: `FR-R-096`, `FR-R-101`, `FR-R-117` |
+| `SV-R-005` | Structural: nothing to test is the point. Recorded in `server/data-contract.md`, and a shipped data model would be a visible addition to `server/api-contract.md` |
+| `SV-R-006` | The `std` gate on the server module, checked by the bare-metal CI job, whose comment cites it |
+| `TR-R-032` | The `rtu` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 
 ## Keeping specs true
 
