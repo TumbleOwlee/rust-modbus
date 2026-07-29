@@ -281,3 +281,77 @@ fn opaque_body(mei_type: u8, data: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(data);
     bytes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Read Device Identification response carrying `objects`, otherwise the
+    /// shape of the specification's example (§6.21): basic conformity, no
+    /// continuation.
+    fn response(objects: Vec<DeviceIdObject>) -> MeiResponse {
+        MeiResponse::ReadDeviceIdentification {
+            read_device_id_code: ReadDeviceIdCode::Basic,
+            conformity_level: 0x01,
+            more_follows: false,
+            next_object_id: 0x00,
+            objects,
+        }
+    }
+
+    #[test]
+    /// FR-R-078 — the object count is a single wire byte (FR-R-075), so 256
+    /// objects cannot be expressed; encoding them fails with an out-of-range
+    /// error naming that field rather than truncating the count and emitting a
+    /// frame no peer could parse.
+    fn ut_device_id_response_object_count_above_255_rejected() {
+        let objects = (0..256u32)
+            .map(|index| DeviceIdObject {
+                id: u8::try_from(index % 256).expect("a byte"),
+                value: vec![],
+            })
+            .collect();
+
+        assert_eq!(
+            encode_response(&response(objects)),
+            Err(Error::OutOfRange {
+                field: "object count",
+                value: 256,
+                min: 0,
+                max: 255,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-078 — an object's length is a single wire byte too (FR-R-075), so a
+    /// 256-byte object value fails to encode with an out-of-range error naming
+    /// the length field. 255 bytes is the largest value that fits, and encodes.
+    fn ut_device_id_response_object_value_above_255_bytes_rejected() {
+        let too_long = response(vec![DeviceIdObject {
+            id: 0x00,
+            value: vec![0x41; 256],
+        }]);
+        assert_eq!(
+            encode_response(&too_long),
+            Err(Error::OutOfRange {
+                field: "object length",
+                value: 256,
+                min: 0,
+                max: 255,
+            })
+        );
+
+        let at_limit = response(vec![DeviceIdObject {
+            id: 0x00,
+            value: vec![0x41; 255],
+        }]);
+        let encoded = encode_response(&at_limit).expect("255 bytes fit the length byte");
+        assert_eq!(
+            encoded.get(..8),
+            Some([MEI_READ_DEVICE_ID, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0xFF].as_slice()),
+            "header, one object, its id and its 0xFF length"
+        );
+        assert_eq!(encoded.len(), 6 + 2 + 255);
+    }
+}

@@ -1174,6 +1174,70 @@ mod tests {
     }
 
     #[test]
+    /// FR-R-001 — a PDU is a 1-byte function code followed by a
+    /// function-specific data body: byte 0 is the code, and every byte after it
+    /// is the body, with nothing between them and nothing appended. The
+    /// function codes and bodies here are read off the specification's own
+    /// worked examples (§6.3 Read Holding Registers, §6.6 Write Single
+    /// Register, §6.17 Report Server ID), including the Report Server ID
+    /// request, whose body is empty — a bare function code is still a PDU.
+    fn ut_pdu_is_a_function_code_then_its_body() {
+        let cases: Vec<(Vec<u8>, u8, Vec<u8>)> = vec![
+            (
+                RequestPdu::ReadHoldingRegisters {
+                    address: Address(107),
+                    quantity: Quantity(3),
+                }
+                .encode()
+                .expect("encodes"),
+                0x03,
+                vec![0x00, 0x6B, 0x00, 0x03],
+            ),
+            (
+                RequestPdu::WriteSingleRegister {
+                    address: Address(1),
+                    value: RegisterValue(3),
+                }
+                .encode()
+                .expect("encodes"),
+                0x06,
+                vec![0x00, 0x01, 0x00, 0x03],
+            ),
+            (
+                RequestPdu::ReportServerId.encode().expect("encodes"),
+                0x11,
+                vec![],
+            ),
+            (
+                ResponsePdu::ReadHoldingRegisters {
+                    registers: vec![
+                        RegisterValue(0x022B),
+                        RegisterValue(0x0000),
+                        RegisterValue(0x0064),
+                    ],
+                }
+                .encode()
+                .expect("encodes"),
+                0x03,
+                vec![0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64],
+            ),
+        ];
+
+        for (encoded, code, body) in cases {
+            let (first, rest) = encoded
+                .split_first()
+                .expect("a PDU always carries its function code");
+            assert_eq!(*first, code, "function code of {encoded:?}");
+            assert_eq!(rest, body.as_slice(), "body of {encoded:?}");
+            assert_eq!(
+                FunctionCode::decode(*first),
+                Ok(FunctionCode::decode(code).expect("a named code")),
+                "byte 0 of {encoded:?} is the function code"
+            );
+        }
+    }
+
+    #[test]
     /// FR-R-020 — a read request is a 2-byte starting address followed by a
     /// 2-byte quantity. Bytes from the specification's Read Coils example
     /// (§6.1): address 19, quantity 19.
@@ -2233,6 +2297,44 @@ mod tests {
         };
         assert_eq!(ResponsePdu::decode(&bytes), Ok(response.clone()));
         assert_eq!(response.encode(), Ok(bytes.to_vec()));
+    }
+
+    #[test]
+    /// FR-R-067 — the frame layer carries a Report Server ID response body
+    /// whole and interprets nothing inside it: not the server id, not the run
+    /// indicator, not the additional data. Nothing at this layer can even
+    /// locate the run indicator, since the server id's length is
+    /// device-specific, so a body whose third byte is neither `0x00` nor
+    /// `0xFF` — the only two values the run indicator is allowed by FR-R-066 to
+    /// take — must still round-trip verbatim rather than being rejected. The
+    /// body is synthetic; the specification gives no worked example for a
+    /// device-specific reply.
+    fn ut_report_server_id_body_is_not_interpreted() {
+        // "AB", then 0x42 where a run indicator would sit if the server id were
+        // two bytes long, then additional data.
+        let body = vec![0x41, 0x42, 0x42, 0x7F, 0x00, 0xFF, 0x99];
+        let mut bytes = vec![0x11, 0x07];
+        bytes.extend_from_slice(&body);
+
+        let decoded = ResponsePdu::decode(&bytes).expect("an opaque body decodes");
+        assert_eq!(
+            decoded,
+            ResponsePdu::ReportServerId { data: body.clone() },
+            "the body is carried verbatim, illegal run indicator included"
+        );
+        assert_eq!(
+            decoded.encode(),
+            Ok(bytes.clone()),
+            "and re-encodes to the same bytes"
+        );
+
+        // A body that is *only* an odd run-indicator byte still round-trips:
+        // there is no field the frame layer could validate it as.
+        let lone = vec![0x11, 0x01, 0x42];
+        assert_eq!(
+            ResponsePdu::decode(&lone),
+            Ok(ResponsePdu::ReportServerId { data: vec![0x42] })
+        );
     }
 
     /// The specification's Read Device Identification response example

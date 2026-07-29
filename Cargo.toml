@@ -19,6 +19,9 @@ std = ["dep:tokio"]
 # dependency; the frame area's RTU *framing* is not gated, only opening a port.
 rtu = ["std", "dep:tokio-serial"]
 
+# NF-R-004. Every dependency below carries `default-features = false` and names
+# only the features the crate actually uses. This table is where that
+# requirement is enforced; there is no Rust test that can state it.
 [dependencies]
 crc = { version = "3.4.0", default-features = false }
 thiserror = { version = "2.0.19", default-features = false }
