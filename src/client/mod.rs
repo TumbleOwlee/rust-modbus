@@ -8,7 +8,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
 
 use crate::error::{Error, Result};
-use crate::frame::{RequestPdu, ResponsePdu, TransactionId, UnitId};
+use alloc::vec::Vec;
+
+use crate::frame::{
+    Address, FunctionCode, Mask, Quantity, RegisterValue, RequestPdu, ResponsePdu, TransactionId,
+    UnitId,
+};
 use crate::transport::FrameTransport;
 
 pub use framing::ClientFraming;
@@ -153,6 +158,271 @@ where
             return Ok(Some(response));
         }
     }
+
+    /// Issue a request whose answer the caller needs (CL-R-052).
+    ///
+    /// Every typed method funnels through here, so the exception mapping of
+    /// CL-R-040 and the broadcast rule of CL-R-052 each exist once.
+    async fn exchange(&mut self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu> {
+        if F::is_broadcast(unit) {
+            // Rejected before `call`, so nothing reaches the wire (CL-R-052).
+            return Err(Error::IllegalValue {
+                field: "broadcast read",
+                value: 0,
+            });
+        }
+        let response = self
+            .call(unit, request)
+            .await?
+            .ok_or(Error::Desynchronized)?;
+        match response {
+            ResponsePdu::Exception(exception) => Err(Error::Exception {
+                function: exception.function,
+                exception: exception.exception,
+            }),
+            response => Ok(response),
+        }
+    }
+
+    /// Issue a request whose answer carries nothing but an echo (CL-R-064).
+    ///
+    /// A broadcast is written and not awaited (CL-R-051).
+    async fn write(&mut self, unit: UnitId, request: RequestPdu) -> Result<()> {
+        if F::is_broadcast(unit) {
+            self.call(unit, request).await?;
+            return Ok(());
+        }
+        self.exchange(unit, request).await?;
+        Ok(())
+    }
+
+    /// Read coils, function code 1 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// Fails on an exception response, on a transport failure, on a timeout, or
+    /// if `unit` is a broadcast address (CL-R-052).
+    pub async fn read_coils(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<bool>> {
+        let response = self
+            .exchange(unit, RequestPdu::ReadCoils { address, quantity })
+            .await?;
+        match response {
+            ResponsePdu::ReadCoils { coils } => Ok(truncate(coils, quantity)),
+            other => Err(mismatch(FunctionCode::ReadCoils, &other)),
+        }
+    }
+
+    /// Read discrete inputs, function code 2 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_discrete_inputs(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<bool>> {
+        let response = self
+            .exchange(unit, RequestPdu::ReadDiscreteInputs { address, quantity })
+            .await?;
+        match response {
+            ResponsePdu::ReadDiscreteInputs { inputs } => Ok(truncate(inputs, quantity)),
+            other => Err(mismatch(FunctionCode::ReadDiscreteInputs, &other)),
+        }
+    }
+
+    /// Read holding registers, function code 3 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_holding_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<RegisterValue>> {
+        let response = self
+            .exchange(unit, RequestPdu::ReadHoldingRegisters { address, quantity })
+            .await?;
+        match response {
+            ResponsePdu::ReadHoldingRegisters { registers } => Ok(registers),
+            other => Err(mismatch(FunctionCode::ReadHoldingRegisters, &other)),
+        }
+    }
+
+    /// Read input registers, function code 4 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`].
+    pub async fn read_input_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<RegisterValue>> {
+        let response = self
+            .exchange(unit, RequestPdu::ReadInputRegisters { address, quantity })
+            .await?;
+        match response {
+            ResponsePdu::ReadInputRegisters { registers } => Ok(registers),
+            other => Err(mismatch(FunctionCode::ReadInputRegisters, &other)),
+        }
+    }
+
+    /// Write a single coil, function code 5 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// Fails on an exception response, on a transport failure, or on a timeout.
+    /// A broadcast is written and not awaited (CL-R-051).
+    pub async fn write_single_coil(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        value: bool,
+    ) -> Result<()> {
+        self.write(unit, RequestPdu::WriteSingleCoil { address, value })
+            .await
+    }
+
+    /// Write a single register, function code 6 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::write_single_coil`].
+    pub async fn write_single_register(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        value: RegisterValue,
+    ) -> Result<()> {
+        self.write(unit, RequestPdu::WriteSingleRegister { address, value })
+            .await
+    }
+
+    /// Write multiple coils, function code 15 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::write_single_coil`].
+    pub async fn write_multiple_coils(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        coils: &[bool],
+    ) -> Result<()> {
+        self.write(
+            unit,
+            RequestPdu::WriteMultipleCoils {
+                address,
+                coils: coils.to_vec(),
+            },
+        )
+        .await
+    }
+
+    /// Write multiple registers, function code 16 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::write_single_coil`].
+    pub async fn write_multiple_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        registers: &[RegisterValue],
+    ) -> Result<()> {
+        self.write(
+            unit,
+            RequestPdu::WriteMultipleRegisters {
+                address,
+                registers: registers.to_vec(),
+            },
+        )
+        .await
+    }
+
+    /// Mask-write a register, function code 22 (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::write_single_coil`].
+    pub async fn mask_write_register(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        and_mask: Mask,
+        or_mask: Mask,
+    ) -> Result<()> {
+        self.write(
+            unit,
+            RequestPdu::MaskWriteRegister {
+                address,
+                and_mask,
+                or_mask,
+            },
+        )
+        .await
+    }
+
+    /// Write then read registers in one exchange, function code 23
+    /// (CL-R-060).
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::read_coils`]: the read half means a broadcast cannot serve.
+    pub async fn read_write_multiple_registers(
+        &mut self,
+        unit: UnitId,
+        read_address: Address,
+        read_quantity: Quantity,
+        write_address: Address,
+        registers: &[RegisterValue],
+    ) -> Result<Vec<RegisterValue>> {
+        let response = self
+            .exchange(
+                unit,
+                RequestPdu::ReadWriteMultipleRegisters {
+                    read_address,
+                    read_quantity,
+                    write_address,
+                    registers: registers.to_vec(),
+                },
+            )
+            .await?;
+        match response {
+            ResponsePdu::ReadWriteMultipleRegisters { registers } => Ok(registers),
+            other => Err(mismatch(FunctionCode::ReadWriteMultipleRegisters, &other)),
+        }
+    }
+}
+
+/// Keep the bits asked for and drop the padding the wire adds (CL-R-062).
+///
+/// A bit response carries whole bytes and no quantity of its own (FR-R-044), so
+/// only the request knows where the real values end.
+fn truncate(mut bits: Vec<bool>, quantity: Quantity) -> Vec<bool> {
+    bits.truncate(usize::from(quantity.0));
+    bits
+}
+
+/// The failure for a response whose body is not its function code's.
+///
+/// `call` has already matched the code (CL-R-022), so this is unreachable for a
+/// well-formed response; it exists because a panic on peer input is forbidden.
+fn mismatch(expected: FunctionCode, actual: &ResponsePdu) -> Error {
+    Error::UnexpectedFunction {
+        expected,
+        actual: actual.function(),
+    }
 }
 
 /// The identifier following `current`, wrapping to 1 rather than to 0
@@ -169,8 +439,8 @@ mod tests {
     use super::*;
     use crate::error::Error;
     use crate::frame::{
-        Address, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, Quantity,
-        RegisterValue, RequestPdu, ResponsePdu, Tcp, TransactionId, UnitId,
+        Address, ExceptionCode, ExceptionResponse, FunctionCode, Mask, MbapHeader, Quantity,
+        RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
     };
     use crate::transport::FrameTransport;
     use alloc::vec;
@@ -489,5 +759,374 @@ mod tests {
                 response_timeout: Duration::from_secs(1),
             }
         );
+    }
+
+    /// Answer `count` requests with whatever `reply` makes of each, and hand
+    /// back the requests as received.
+    fn responder(
+        mut server: FrameTransport<DuplexStream, Tcp>,
+        count: usize,
+        reply: fn(&RequestPdu) -> ResponsePdu,
+    ) -> tokio::task::JoinHandle<Vec<RequestPdu>> {
+        tokio::spawn(async move {
+            let mut seen = vec![];
+            for _ in 0..count {
+                let (header, request) = server.recv_request().await.expect("receives");
+                let response = reply(&request);
+                server
+                    .send_response(&header, &response)
+                    .await
+                    .expect("responds");
+                seen.push(request);
+            }
+            seen
+        })
+    }
+
+    #[tokio::test]
+    /// CL-R-060 — each typed read issues its own function code and returns the
+    /// values, in the domain types of FR-R-007 rather than bare integers.
+    async fn ut_typed_reads_issue_their_own_function() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 4, |request| match request {
+            RequestPdu::ReadCoils { .. } => ResponsePdu::ReadCoils {
+                coils: vec![true, false, true, false, false, false, false, false],
+            },
+            RequestPdu::ReadDiscreteInputs { .. } => ResponsePdu::ReadDiscreteInputs {
+                inputs: vec![false, true, false, false, false, false, false, false],
+            },
+            RequestPdu::ReadHoldingRegisters { .. } => ResponsePdu::ReadHoldingRegisters {
+                registers: vec![RegisterValue(0x022B), RegisterValue(0x0064)],
+            },
+            _ => ResponsePdu::ReadInputRegisters {
+                registers: vec![RegisterValue(0x000A)],
+            },
+        });
+
+        assert_eq!(
+            client
+                .read_coils(UnitId(0x11), Address(0x0013), Quantity(3))
+                .await,
+            Ok(vec![true, false, true])
+        );
+        assert_eq!(
+            client
+                .read_discrete_inputs(UnitId(0x11), Address(0x00C4), Quantity(2))
+                .await,
+            Ok(vec![false, true])
+        );
+        assert_eq!(
+            client
+                .read_holding_registers(UnitId(0x11), Address(0x006B), Quantity(2))
+                .await,
+            Ok(vec![RegisterValue(0x022B), RegisterValue(0x0064)])
+        );
+        assert_eq!(
+            client
+                .read_input_registers(UnitId(0x11), Address(0x0008), Quantity(1))
+                .await,
+            Ok(vec![RegisterValue(0x000A)])
+        );
+
+        let seen = answering.await.expect("the server task finishes");
+        assert_eq!(
+            seen,
+            vec![
+                RequestPdu::ReadCoils {
+                    address: Address(0x0013),
+                    quantity: Quantity(3),
+                },
+                RequestPdu::ReadDiscreteInputs {
+                    address: Address(0x00C4),
+                    quantity: Quantity(2),
+                },
+                RequestPdu::ReadHoldingRegisters {
+                    address: Address(0x006B),
+                    quantity: Quantity(2),
+                },
+                RequestPdu::ReadInputRegisters {
+                    address: Address(0x0008),
+                    quantity: Quantity(1),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-062 — a bit read returns exactly the quantity asked for. The wire
+    /// carries whole bytes (FR-R-044), so a 3-coil read arrives as 8 values and
+    /// the 5 padding bits are the caller's to never see.
+    async fn ut_bit_reads_discard_padding() {
+        let (mut client, server) = pair();
+        // Every padding bit set, so keeping one would be visible.
+        let answering = responder(server, 1, |_| ResponsePdu::ReadCoils {
+            coils: vec![true, false, true, true, true, true, true, true],
+        });
+
+        assert_eq!(
+            client
+                .read_coils(UnitId(0x11), Address(0), Quantity(3))
+                .await,
+            Ok(vec![true, false, true])
+        );
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-060 — each typed write issues its own function code, and returns
+    /// nothing: the echoed fields are not the caller's business (CL-R-064).
+    async fn ut_typed_writes_issue_their_own_function() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 6, |request| match request {
+            RequestPdu::WriteSingleCoil { address, value } => ResponsePdu::WriteSingleCoil {
+                address: *address,
+                value: *value,
+            },
+            RequestPdu::WriteSingleRegister { address, value } => {
+                ResponsePdu::WriteSingleRegister {
+                    address: *address,
+                    value: *value,
+                }
+            }
+            RequestPdu::WriteMultipleCoils { address, coils } => ResponsePdu::WriteMultipleCoils {
+                address: *address,
+                quantity: Quantity(u16::try_from(coils.len()).expect("small")),
+            },
+            RequestPdu::WriteMultipleRegisters { address, registers } => {
+                ResponsePdu::WriteMultipleRegisters {
+                    address: *address,
+                    quantity: Quantity(u16::try_from(registers.len()).expect("small")),
+                }
+            }
+            RequestPdu::MaskWriteRegister {
+                address,
+                and_mask,
+                or_mask,
+            } => ResponsePdu::MaskWriteRegister {
+                address: *address,
+                and_mask: *and_mask,
+                or_mask: *or_mask,
+            },
+            _ => ResponsePdu::ReadWriteMultipleRegisters {
+                registers: vec![RegisterValue(0x00FF)],
+            },
+        });
+
+        assert_eq!(
+            client
+                .write_single_coil(UnitId(0x11), Address(0x00AC), true)
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            client
+                .write_single_register(UnitId(0x11), Address(0x0001), RegisterValue(0x0003))
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            client
+                .write_multiple_coils(UnitId(0x11), Address(0x0013), &[true, false])
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            client
+                .write_multiple_registers(
+                    UnitId(0x11),
+                    Address(0x0001),
+                    &[RegisterValue(0x000A), RegisterValue(0x0102)],
+                )
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            client
+                .mask_write_register(UnitId(0x11), Address(0x0004), Mask(0x00F2), Mask(0x0025))
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            client
+                .read_write_multiple_registers(
+                    UnitId(0x11),
+                    Address(0x0003),
+                    Quantity(1),
+                    Address(0x000E),
+                    &[RegisterValue(0x00FF)],
+                )
+                .await,
+            Ok(vec![RegisterValue(0x00FF)])
+        );
+
+        let seen = answering.await.expect("the server task finishes");
+        assert_eq!(seen.len(), 6);
+        assert_eq!(
+            seen.get(2).expect("six requests were seen"),
+            &RequestPdu::WriteMultipleCoils {
+                address: Address(0x0013),
+                coils: vec![true, false],
+            }
+        );
+        assert_eq!(
+            seen.get(5).expect("six requests were seen"),
+            &RequestPdu::ReadWriteMultipleRegisters {
+                read_address: Address(0x0003),
+                read_quantity: Quantity(1),
+                write_address: Address(0x000E),
+                registers: vec![RegisterValue(0x00FF)],
+            }
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-040, CL-R-042 — a typed method surfaces an exception as a failure
+    /// carrying both codes, never as a success, and the client stays usable.
+    async fn ut_typed_method_fails_on_an_exception() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 2, |_| {
+            ResponsePdu::Exception(ExceptionResponse {
+                function: FunctionCode::ReadHoldingRegisters,
+                exception: ExceptionCode::IllegalDataAddress,
+            })
+        });
+
+        assert_eq!(
+            client
+                .read_holding_registers(UnitId(0x11), Address(0x9999), Quantity(1))
+                .await,
+            Err(Error::Exception {
+                function: FunctionCode::ReadHoldingRegisters,
+                exception: ExceptionCode::IllegalDataAddress,
+            })
+        );
+        assert!(!client.is_desynchronized());
+        assert!(
+            client
+                .read_holding_registers(UnitId(0x11), Address(0x9999), Quantity(1))
+                .await
+                .is_err()
+        );
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-041 — an exception code the crate does not name is a legal thing
+    /// for a server to send, so it reaches the caller unaltered.
+    async fn ut_unnamed_exception_code_reaches_the_caller() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 1, |_| {
+            ResponsePdu::Exception(ExceptionResponse {
+                function: FunctionCode::ReadCoils,
+                exception: ExceptionCode::Other(0x7F),
+            })
+        });
+
+        assert_eq!(
+            client
+                .read_coils(UnitId(0x11), Address(0), Quantity(1))
+                .await,
+            Err(Error::Exception {
+                function: FunctionCode::ReadCoils,
+                exception: ExceptionCode::Other(0x7F),
+            })
+        );
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-064 — an echo that disagrees with what was sent is not an error
+    /// here. It is a server defect the caller can detect through `call`; the
+    /// client does not fail a completed exchange over it.
+    async fn ut_echoed_fields_are_not_compared() {
+        let (mut client, server) = pair();
+        let answering = responder(server, 1, |_| ResponsePdu::WriteSingleRegister {
+            address: Address(0xDEAD),
+            value: RegisterValue(0xBEEF),
+        });
+
+        assert_eq!(
+            client
+                .write_single_register(UnitId(0x11), Address(0x0001), RegisterValue(0x0003))
+                .await,
+            Ok(())
+        );
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-063 — range rules belong to the frame area (FR-R-022), so a typed
+    /// method surfaces them from encoding rather than checking them itself.
+    async fn ut_range_validation_comes_from_encoding() {
+        let (mut client, _server) = pair();
+        assert_eq!(
+            client
+                .read_holding_registers(UnitId(0x11), Address(0), Quantity(126))
+                .await,
+            Err(Error::OutOfRange {
+                field: "quantity",
+                value: 126,
+                min: 1,
+                max: 125,
+            })
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-051 — a broadcast write is written and not awaited: no server
+    /// answers unit 0, so waiting for one would only ever time out.
+    async fn ut_broadcast_write_is_not_awaited() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        client
+            .write_single_coil(UnitId(0), Address(0x00AC), true)
+            .await
+            .expect("returns without a response");
+        assert_eq!(
+            server.recv_request().await,
+            Ok((
+                UnitId(0),
+                RequestPdu::WriteSingleCoil {
+                    address: Address(0x00AC),
+                    value: true,
+                }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-052 — a broadcast read fails before anything is written: an answer
+    /// that cannot arrive is a caller error, not a silent no-op.
+    async fn ut_broadcast_read_is_rejected_before_writing() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        assert_eq!(
+            client.read_coils(UnitId(0), Address(0), Quantity(1)).await,
+            Err(Error::IllegalValue {
+                field: "broadcast read",
+                value: 0,
+            })
+        );
+        drop(client);
+        assert!(
+            server.recv_request().await.is_err(),
+            "nothing may reach the wire"
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-053 — the raw path can express a broadcast the typed methods
+    /// forbid, and says so by yielding no response rather than failing.
+    async fn ut_broadcast_call_yields_no_response() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        assert_eq!(client.call(UnitId(0), read_holding()).await, Ok(None));
+        assert_eq!(server.recv_request().await, Ok((UnitId(0), read_holding())));
     }
 }
