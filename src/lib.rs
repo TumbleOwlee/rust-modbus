@@ -14,6 +14,8 @@ extern crate alloc;
 mod error;
 mod frame;
 mod parse;
+#[cfg(feature = "std")]
+mod transport;
 
 pub use error::{Error, Result};
 pub use frame::{
@@ -22,3 +24,5 @@ pub use frame::{
     MeiRequest, MeiResponse, ReadDeviceIdCode, RequestPdu, ResponsePdu, Rtu, Tcp,
     mask_write_result,
 };
+#[cfg(feature = "std")]
+pub use transport::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
