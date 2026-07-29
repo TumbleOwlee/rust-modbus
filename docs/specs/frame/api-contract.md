@@ -126,8 +126,25 @@ pub trait Framing {
     fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>>;
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)>;
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>>;
+    fn boundary() -> AduBoundary;
+}
+
+pub enum AduBoundary {
+    /// Read `prefix` bytes, then `total` yields the whole ADU's length.
+    Prefixed { prefix: usize, total: fn(&[u8]) -> Result<usize> },
+    /// The ADU runs from `start` to the first `end` following it.
+    Delimited { start: u8, end: &'static [u8] },
+    /// The ADU ends when the line goes quiet.
+    Silence,
 }
 ```
+
+`boundary` states where an ADU ends (FR-R-122) without performing any I/O, so
+the rule stays testable on byte vectors and available on `no_std`. `Tcp` is
+`Prefixed { prefix: 6, .. }` with `total` validating the MBAP length per
+FR-R-105 before returning `6 + length`; `Ascii` is `Delimited { start: b':',
+end: b"\r\n" }`; `Rtu` is `Silence`, whose duration is a serial-port property and
+therefore belongs to the transport area (TR-R-011), not here.
 
 `Framing::Header` is `u8` for `Rtu` and `Ascii` (the server address, FR-R-096,
 FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN` is 256, 513, and

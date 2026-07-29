@@ -19,10 +19,12 @@ mod transport;
 
 pub use error::{Error, Result};
 pub use frame::{
-    Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
-    FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, MbapHeader,
-    MeiRequest, MeiResponse, ReadDeviceIdCode, RequestPdu, ResponsePdu, Rtu, Tcp,
+    AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse,
+    FileRecordRead, FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN,
+    MbapHeader, MeiRequest, MeiResponse, ReadDeviceIdCode, RequestPdu, ResponsePdu, Rtu, Tcp,
     mask_write_result,
 };
 #[cfg(feature = "std")]
-pub use transport::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
+pub use transport::{
+    DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TransportConfig,
+};

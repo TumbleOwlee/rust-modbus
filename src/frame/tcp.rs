@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
-use crate::frame::framing::Framing;
+use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
 
 /// What identifies a peer and a transaction over TCP (FR-R-101).
@@ -63,6 +63,49 @@ impl Framing for Tcp {
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
         wrap(header, &pdu.encode()?)
     }
+
+    /// The MBAP length field gives the rest of the ADU, so six bytes are enough
+    /// to know how long the whole of it is (FR-R-122).
+    fn boundary() -> AduBoundary {
+        AduBoundary::Prefixed {
+            prefix: LENGTH_PREFIX_LEN,
+            total: adu_len,
+        }
+    }
+}
+
+/// Bytes needed before the MBAP length field has been read in full.
+const LENGTH_PREFIX_LEN: usize = 6;
+
+/// The whole ADU's length, given the first [`LENGTH_PREFIX_LEN`] bytes of it
+/// (FR-R-122).
+///
+/// The length field is validated against FR-R-105 first, so a hostile value can
+/// never size a read.
+fn adu_len(prefix: &[u8]) -> Result<usize> {
+    let raw = prefix
+        .get(4..LENGTH_PREFIX_LEN)
+        .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+        .ok_or(Error::Truncated {
+            expected: LENGTH_PREFIX_LEN,
+            supplied: prefix.len(),
+        })?;
+    let length = u32::from(u16::from_be_bytes(raw));
+    check_length(length)?;
+    Ok(LENGTH_PREFIX_LEN.saturating_add(usize::try_from(length).unwrap_or(usize::MAX)))
+}
+
+/// Reject an MBAP length field outside the range FR-R-105 permits.
+fn check_length(length: u32) -> Result<()> {
+    if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+        return Err(Error::OutOfRange {
+            field: "MBAP length",
+            value: length,
+            min: MIN_LENGTH,
+            max: MAX_LENGTH,
+        });
+    }
+    Ok(())
 }
 
 /// Validate an MBAP header and split the ADU into that header and its PDU
@@ -97,14 +140,7 @@ fn split(bytes: &[u8]) -> Result<(MbapHeader, &[u8])> {
     }
 
     let length = u32::from(u16::from_be_bytes([head[4], head[5]]));
-    if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
-        return Err(Error::OutOfRange {
-            field: "MBAP length",
-            value: length,
-            min: MIN_LENGTH,
-            max: MAX_LENGTH,
-        });
-    }
+    check_length(length)?;
 
     // The length counts the unit identifier as well as the PDU (FR-R-103).
     let supplied = pdu.len().saturating_add(LENGTH_OVERHEAD);
@@ -255,6 +291,37 @@ mod tests {
         assert_eq!(
             Tcp::decode_request(&bytes),
             Err(Error::AduTooLarge { len: 261, max: 260 })
+        );
+    }
+
+    #[test]
+    /// FR-R-122 — a TCP ADU's length comes from its MBAP length field: six
+    /// bytes are enough to know the whole ADU's size.
+    fn ut_tcp_boundary_is_prefixed() {
+        let AduBoundary::Prefixed { prefix, total } = Tcp::boundary() else {
+            panic!("TCP is length-prefixed");
+        };
+        assert_eq!(prefix, 6);
+        // The length field of 6 covers the unit identifier and a 5-byte PDU,
+        // so the ADU is the 6-byte prefix plus those 6 bytes.
+        assert_eq!(total(&READ_HOLDING_REQUEST[..6]), Ok(12));
+    }
+
+    #[test]
+    /// FR-R-122, FR-R-105 — the length field is validated before it sizes
+    /// anything, so a boundary can never be computed from a bad one.
+    fn ut_tcp_boundary_rejects_an_invalid_length() {
+        let AduBoundary::Prefixed { total, .. } = Tcp::boundary() else {
+            panic!("TCP is length-prefixed");
+        };
+        assert_eq!(
+            total(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x00]),
+            Err(Error::OutOfRange {
+                field: "MBAP length",
+                value: 0,
+                min: 1,
+                max: 254,
+            })
         );
     }
 

@@ -6,6 +6,38 @@ use core::fmt::Debug;
 use crate::error::Result;
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
 
+/// How the end of an ADU is determined (FR-R-122).
+///
+/// This is a description, not a reader: it names the rule so the transport can
+/// apply it, and performs no I/O itself. That keeps the rule testable on byte
+/// vectors and available where there is no I/O at all.
+///
+/// No `PartialEq`: one variant carries a function pointer, whose address says
+/// nothing meaningful about equality. Match on the variant instead.
+#[derive(Debug, Clone, Copy)]
+pub enum AduBoundary {
+    /// A fixed-size prefix determines the length. `prefix` bytes are read, and
+    /// `total` applied to them yields the length of the whole ADU, that prefix
+    /// included.
+    Prefixed {
+        /// Bytes needed before the length can be computed.
+        prefix: usize,
+        /// Maps those bytes to the whole ADU's length, rejecting a length the
+        /// framing does not permit.
+        total: fn(&[u8]) -> Result<usize>,
+    },
+    /// The ADU runs from `start` to the first occurrence of `end` after it.
+    Delimited {
+        /// Byte that opens an ADU; anything before it is not part of one.
+        start: u8,
+        /// Byte sequence that closes an ADU.
+        end: &'static [u8],
+    },
+    /// The ADU ends when the line falls silent for long enough. How long is a
+    /// property of the port, not of the framing (TR-R-011).
+    Silence,
+}
+
 /// One of the three ways a PDU is wrapped for transmission.
 ///
 /// The framings differ in what they put around the PDU and in what identifies
@@ -53,4 +85,7 @@ pub trait Framing {
     ///
     /// Fails if the PDU does not encode.
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>>;
+
+    /// How the end of one of this framing's ADUs is determined (FR-R-122).
+    fn boundary() -> AduBoundary;
 }

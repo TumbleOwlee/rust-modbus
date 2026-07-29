@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
-use crate::frame::framing::Framing;
+use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
 
 /// ASCII framing (FR-R-110).
@@ -43,6 +43,15 @@ impl Framing for Ascii {
 
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
         Ok(wrap(*header, &pdu.encode()?))
+    }
+
+    /// ASCII is self-delimiting: the printable alphabet leaves `:` and CR LF
+    /// free to mark the ends (FR-R-122).
+    fn boundary() -> AduBoundary {
+        AduBoundary::Delimited {
+            start: START,
+            end: &TERMINATOR,
+        }
     }
 }
 
@@ -241,6 +250,16 @@ mod tests {
         let uppercase = Ascii::encode_request(&address, &pdu).expect("re-encodes");
         assert_eq!(uppercase, READ_HOLDING_REQUEST.to_vec());
         assert_eq!(Ascii::decode_request(&uppercase), Ok((address, pdu)));
+    }
+
+    #[test]
+    /// FR-R-122 — an ASCII ADU is delimited: it opens on `:` and closes on
+    /// CR LF, so no length field and no timing are needed to find its end.
+    fn ut_ascii_boundary_is_delimited() {
+        let AduBoundary::Delimited { start, end } = Ascii::boundary() else {
+            panic!("ASCII is delimited");
+        };
+        assert_eq!((start, end), (b':', b"\r\n".as_slice()));
     }
 
     #[test]

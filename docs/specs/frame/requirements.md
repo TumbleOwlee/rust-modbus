@@ -483,6 +483,11 @@ directions, the direction stated by the caller as FR-R-005 requires.
 values. The frame layer shall not merge the two into a single type, so that a
 caller may route on the header without re-encoding the PDU.
 
+**FR-R-122** — A framing shall declare how the end of an ADU is determined, as
+one of: a length derivable from a fixed-size prefix; a start and end delimiter;
+or inter-frame silence. The declaration shall be a property of the framing and
+shall involve no I/O.
+
 ---
 
 ## 12. Robustness

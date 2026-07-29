@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use crc::{CRC_16_MODBUS, Crc};
 
 use crate::error::{Error, Result};
-use crate::frame::framing::Framing;
+use crate::frame::framing::{AduBoundary, Framing};
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
 
 /// RTU framing (FR-R-090).
@@ -40,6 +40,12 @@ impl Framing for Rtu {
 
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
         Ok(wrap(*header, &pdu.encode()?))
+    }
+
+    /// An RTU ADU carries neither a length nor a delimiter -- every byte value
+    /// is legal data -- so only silence on the line ends one (FR-R-122).
+    fn boundary() -> AduBoundary {
+        AduBoundary::Silence
     }
 }
 
@@ -198,6 +204,13 @@ mod tests {
             Rtu::decode_request(&bytes),
             Err(Error::AduTooLarge { len: 257, max: 256 })
         );
+    }
+
+    #[test]
+    /// FR-R-122 — an RTU ADU carries no length and no delimiter, so only
+    /// silence on the line ends it.
+    fn ut_rtu_boundary_is_silence() {
+        assert!(matches!(Rtu::boundary(), AduBoundary::Silence));
     }
 
     #[test]

@@ -25,11 +25,16 @@ here so they are not mistaken for oversights and silently "fixed".
 |---|---|
 | Connection refused | The I/O error, carrying `ErrorKind::ConnectionRefused` (TR-R-040) — deliberately distinct from a connect timeout (TR-R-021) |
 | Connect timeout expires | The timeout error naming `"connect"`, with no I/O error underneath it, since none occurred |
-| Peer closes between two ADUs | End-of-stream, not an error condition (TR-R-014) |
-| Peer closes part-way through an ADU | The connection-closed error; the partial bytes are dropped (TR-R-014) |
+| Peer closes between two ADUs | `Io { kind: UnexpectedEof }` — the stream ended and no frame was lost (TR-R-014) |
+| Peer closes part-way through an ADU | `ConnectionClosed`; the partial bytes are dropped (TR-R-014) |
+| A serial peer closes immediately after a complete RTU frame | The frame is delivered; a close after a whole ADU is not a severed one |
 | Peer resets the connection | The I/O error carrying `ErrorKind::ConnectionReset` |
 | A receive times out mid-ADU | The transport is desynchronized: the caller must reconnect rather than receive again (TR-R-041) |
 | Serial device disappears mid-session | Whatever `ErrorKind` the platform reports, surfaced through the I/O error; the transport is not usable afterwards |
+
+Both cases above are errors, because the receive methods return `Result` with no
+vacant success value; they are distinguished by variant, which is what TR-R-014
+requires.
 
 Sending imposes no timeout of its own, and receiving imposes none beyond the RTU
 inter-frame interval: per-request timing belongs to the client (TR-R-042). A
