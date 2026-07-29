@@ -34,7 +34,9 @@ pub use frame::{
     Rtu, Tcp, TransactionId, UnitId, mask_write_result,
 };
 #[cfg(feature = "std")]
-pub use server::{Connection, ConnectionId, Disconnect, Service};
+pub use server::{
+    Connection, ConnectionId, Disconnect, Server, ServerConfig, ServerFraming, Service,
+};
 #[cfg(feature = "std")]
 pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,

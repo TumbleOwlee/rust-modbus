@@ -1,5 +1,576 @@
 //! Async Modbus server (responder). See `docs/specs/server/`.
 
+mod framing;
 mod service;
 
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::error::{Error, Result};
+use crate::frame::{ExceptionResponse, ResponsePdu, UnitId};
+use crate::transport::FrameTransport;
+
+pub use framing::ServerFraming;
 pub use service::{Connection, ConnectionId, Disconnect, Service};
+
+/// How a server answers (SV-R-008).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ServerConfig {
+    /// The only unit identifier to answer, or `None` to leave the decision to
+    /// the service (SV-R-020, SV-R-022).
+    pub unit: Option<UnitId>,
+}
+
+/// A Modbus server (SV-R-001).
+///
+/// One type for every framing and for every service: what differs between RTU,
+/// ASCII, and TCP is named by [`ServerFraming`], and what a request *means* is
+/// named by [`Service`] — the crate supplies neither a data model nor a service
+/// of its own (SV-R-005).
+#[derive(Debug)]
+pub struct Server<S> {
+    /// The one service every connection shares (SV-R-002).
+    service: Arc<S>,
+    /// What this server answers (SV-R-008).
+    config: ServerConfig,
+    /// The identifier the next connection will carry (SV-R-031).
+    next_connection: AtomicU64,
+}
+
+impl<S> Server<S>
+where
+    S: Service,
+{
+    /// Build a server around a service, with the default configuration.
+    pub fn new(service: S) -> Self {
+        Self::with_config(service, ServerConfig::default())
+    }
+
+    /// Build a server around a service, configured (SV-R-002).
+    pub fn with_config(service: S, config: ServerConfig) -> Self {
+        Self {
+            service: Arc::new(service),
+            config,
+            next_connection: AtomicU64::new(1),
+        }
+    }
+
+    /// Serve one already-established transport, such as a serial link
+    /// (SV-R-007).
+    ///
+    /// Returns when the link ends. A failure of the link itself is the
+    /// connection's, not the server's, so it is reported to the service rather
+    /// than returned (SV-R-051).
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; the result is part of the signature so that a
+    /// future serving failure needs no API change.
+    pub async fn serve_link<T, F>(self, mut transport: FrameTransport<T, F>) -> Result<()>
+    where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+        F: ServerFraming,
+    {
+        let conn = Connection::new(self.next_id(), None);
+        serve_connection(self.service.as_ref(), &self.config, &conn, &mut transport).await;
+        Ok(())
+    }
+
+    /// Allocate the next connection identifier (SV-R-031).
+    fn next_id(&self) -> ConnectionId {
+        ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Run one connection from its first notification to its last (SV-R-032,
+/// SV-R-033).
+async fn serve_connection<S, T, F>(
+    service: &S,
+    config: &ServerConfig,
+    conn: &Connection,
+    transport: &mut FrameTransport<T, F>,
+) where
+    S: Service,
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+    F: ServerFraming,
+{
+    if !service.on_connect(conn).await {
+        // Refused before a request is read (SV-R-032).
+        service.on_disconnect(conn, Disconnect::Rejected).await;
+        return;
+    }
+    let reason = exchange(service, config, conn, transport).await;
+    service.on_disconnect(conn, reason).await;
+}
+
+/// Answer requests until the connection ends, and say why it did (SV-R-015).
+async fn exchange<S, T, F>(
+    service: &S,
+    config: &ServerConfig,
+    conn: &Connection,
+    transport: &mut FrameTransport<T, F>,
+) -> Disconnect
+where
+    S: Service,
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+    F: ServerFraming,
+{
+    let _ = config;
+    loop {
+        let (header, request) = match transport.recv_request().await {
+            Ok(received) => received,
+            // A close between two ADUs is an ordinary end, not a failure
+            // (SV-R-052, TR-R-014).
+            Err(Error::Io {
+                kind: std::io::ErrorKind::UnexpectedEof,
+            }) => return Disconnect::Closed,
+            // Anything else leaves the stream's alignment unknown (SV-R-050).
+            Err(error) => {
+                service.on_error(conn, &error).await;
+                return Disconnect::Failed(error);
+            }
+        };
+
+        let unit = F::unit(&header);
+        // Kept before the request moves into the service, for the exception
+        // response it may need (SV-R-012).
+        let function = request.function();
+
+        let response = match service.on_request(conn, unit, request).await {
+            Ok(response) => response,
+            Err(exception) => ResponsePdu::Exception(ExceptionResponse {
+                function,
+                exception,
+            }),
+        };
+
+        if let Err(error) = transport.send_response(&header, &response).await {
+            service.on_error(conn, &error).await;
+            if ends_connection(&error) {
+                return Disconnect::Failed(error);
+            }
+            // The response never reached the wire, so the stream is still
+            // aligned and the next request can be answered (SV-R-014).
+        }
+    }
+}
+
+/// Whether a failure to answer left the connection unusable.
+///
+/// Encoding fails before anything is written, so it costs one response
+/// (SV-R-014); a write that fails part-way through an ADU costs the connection.
+fn ends_connection(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Io { .. } | Error::ConnectionClosed | Error::Timeout { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use alloc::sync::Arc;
+    use alloc::vec::Vec;
+    use std::sync::Mutex;
+
+    use tokio::io::{DuplexStream, duplex};
+
+    use crate::error::Error;
+    use crate::frame::{
+        Address, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, Quantity,
+        RegisterValue, RequestPdu, ResponsePdu, Tcp, TransactionId, UnitId,
+    };
+    use crate::transport::FrameTransport;
+
+    /// What a test service was asked to do, in order (SV-R-036).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Event {
+        Connect(ConnectionId),
+        Request(ConnectionId, UnitId, RequestPdu),
+        Failed(Error),
+        Disconnect(Disconnect),
+    }
+
+    /// How a test service answers.
+    type Reply =
+        Box<dyn Fn(&RequestPdu) -> core::result::Result<ResponsePdu, ExceptionCode> + Send + Sync>;
+
+    /// A service that records what it was asked and answers as told.
+    ///
+    /// The shape SV-R-003 expects of a real one: shared by reference, with its
+    /// own lock around its own state.
+    struct Recorder {
+        events: Mutex<Vec<Event>>,
+        reply: Reply,
+        accept: bool,
+    }
+
+    impl Recorder {
+        fn new(
+            reply: impl Fn(&RequestPdu) -> core::result::Result<ResponsePdu, ExceptionCode>
+            + Send
+            + Sync
+            + 'static,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+                reply: Box::new(reply),
+                accept: true,
+            })
+        }
+
+        /// A service that refuses every connection (SV-R-032).
+        fn refusing() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+                reply: Box::new(|_| Err(ExceptionCode::IllegalFunction)),
+                accept: false,
+            })
+        }
+
+        fn push(&self, event: Event) {
+            self.events
+                .lock()
+                .expect("no test panics while holding the lock")
+                .push(event);
+        }
+
+        fn events(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .expect("no test panics while holding the lock")
+                .clone()
+        }
+    }
+
+    impl Service for Arc<Recorder> {
+        async fn on_request(
+            &self,
+            conn: &Connection,
+            unit: UnitId,
+            request: RequestPdu,
+        ) -> core::result::Result<ResponsePdu, ExceptionCode> {
+            self.push(Event::Request(conn.id(), unit, request.clone()));
+            (self.reply)(&request)
+        }
+
+        async fn on_connect(&self, conn: &Connection) -> bool {
+            self.push(Event::Connect(conn.id()));
+            self.accept
+        }
+
+        async fn on_disconnect(&self, conn: &Connection, reason: Disconnect) {
+            let _ = conn;
+            self.push(Event::Disconnect(reason));
+        }
+
+        async fn on_error(&self, conn: &Connection, error: &Error) {
+            let _ = conn;
+            self.push(Event::Failed(error.clone()));
+        }
+    }
+
+    /// A serving task over one duplex link, and the initiator's end of it.
+    fn link(
+        service: Arc<Recorder>,
+    ) -> (
+        tokio::task::JoinHandle<crate::error::Result<()>>,
+        FrameTransport<DuplexStream, Tcp>,
+    ) {
+        serving(service, ServerConfig::default())
+    }
+
+    fn serving(
+        service: Arc<Recorder>,
+        config: ServerConfig,
+    ) -> (
+        tokio::task::JoinHandle<crate::error::Result<()>>,
+        FrameTransport<DuplexStream, Tcp>,
+    ) {
+        let (server_end, client_end) = duplex(1024);
+        let server = Server::with_config(service, config);
+        (
+            tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end))),
+            FrameTransport::new(client_end),
+        )
+    }
+
+    fn registers() -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: alloc::vec![RegisterValue(0x022B)],
+        }
+    }
+
+    fn read_holding() -> RequestPdu {
+        RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(1),
+        }
+    }
+
+    fn header(transaction: u16, unit: u8) -> MbapHeader {
+        MbapHeader {
+            transaction_id: TransactionId(transaction),
+            unit_id: UnitId(unit),
+        }
+    }
+
+    #[tokio::test]
+    /// SV-R-010, SV-R-011 — a request is dispatched with the unit it was
+    /// addressed to, and the answer comes back under the request's own header.
+    async fn ut_serve_link_answers_a_request() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, mut client) = link(Arc::clone(&service));
+
+        client
+            .send_request(&header(7, 0x11), &read_holding())
+            .await
+            .expect("writes a request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(7, 0x11), registers()))
+        );
+
+        drop(client);
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+        assert_eq!(
+            service.events(),
+            alloc::vec![
+                Event::Connect(ConnectionId(1)),
+                Event::Request(ConnectionId(1), UnitId(0x11), read_holding()),
+                Event::Disconnect(Disconnect::Closed),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-012 — a service's refusal reaches the wire as an exception response
+    /// to the function it refused.
+    async fn ut_refusal_becomes_an_exception_response() {
+        let service = Recorder::new(|_| Err(ExceptionCode::IllegalDataAddress));
+        let (serving, mut client) = link(service);
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((
+                header(1, 1),
+                ResponsePdu::Exception(ExceptionResponse {
+                    function: FunctionCode::ReadHoldingRegisters,
+                    exception: ExceptionCode::IllegalDataAddress,
+                })
+            ))
+        );
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+    }
+
+    #[tokio::test]
+    /// SV-R-013 — the server sends what the service returned, even when it
+    /// answers one function with another's response.
+    async fn ut_response_is_sent_unaltered() {
+        let service = Recorder::new(|_| {
+            Ok(ResponsePdu::ReadCoils {
+                coils: alloc::vec![true],
+            })
+        });
+        let (serving, mut client) = link(service);
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        // The wire carries a whole byte of bits (FR-R-024) and a decoder has no
+        // quantity to truncate by, so the padding comes back too — the initiator
+        // discards it (CL-R-062). What matters here is that it is a *coil*
+        // response answering a register request: the server did not intervene.
+        assert_eq!(
+            client.recv_response().await,
+            Ok((
+                header(1, 1),
+                ResponsePdu::ReadCoils {
+                    coils: alloc::vec![true, false, false, false, false, false, false, false],
+                }
+            ))
+        );
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+    }
+
+    #[tokio::test]
+    /// SV-R-014, SV-R-034 — a response that will not encode is reported and
+    /// costs only its own request: the connection answers the next one.
+    async fn ut_unencodable_response_reports_and_continues() {
+        let service = Recorder::new(|request| match request {
+            RequestPdu::ReadHoldingRegisters { quantity, .. } if quantity.0 == 1 => {
+                Ok(ResponsePdu::ReadHoldingRegisters {
+                    registers: alloc::vec![RegisterValue(0); 130],
+                })
+            }
+            _ => Ok(registers()),
+        });
+        let (serving, mut client) = link(Arc::clone(&service));
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request");
+        client
+            .send_request(
+                &header(2, 1),
+                &RequestPdu::ReadHoldingRegisters {
+                    address: Address(0),
+                    quantity: Quantity(2),
+                },
+            )
+            .await
+            .expect("writes a second request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers())),
+            "the first request draws no response, the second is answered"
+        );
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+        assert!(
+            service
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Failed(Error::PduTooLarge { .. }))),
+            "the encode failure must be reported: {:?}",
+            service.events()
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-015 — one connection serves successive requests.
+    async fn ut_successive_requests_on_one_link() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, mut client) = link(Arc::clone(&service));
+
+        for transaction in 1..=4 {
+            client
+                .send_request(&header(transaction, 1), &read_holding())
+                .await
+                .expect("writes a request");
+            assert_eq!(
+                client.recv_response().await,
+                Ok((header(transaction, 1), registers()))
+            );
+        }
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|event| matches!(event, Event::Request(..)))
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-032 — a refused connection is closed without a request being read,
+    /// and ends with the refusing reason.
+    async fn ut_refused_connection_reads_nothing() {
+        let service = Recorder::refusing();
+        let (serving, mut client) = link(Arc::clone(&service));
+
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("writes a request into a connection that will not read it");
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+
+        assert_eq!(
+            service.events(),
+            alloc::vec![
+                Event::Connect(ConnectionId(1)),
+                Event::Disconnect(Disconnect::Rejected),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-033, SV-R-052 — a peer that closes between two ADUs ends the
+    /// connection cleanly, not as a failure, and is notified once.
+    async fn ut_clean_close_ends_the_connection_cleanly() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|event| matches!(event, Event::Disconnect(_)))
+                .collect::<Vec<_>>(),
+            alloc::vec![&Event::Disconnect(Disconnect::Closed)]
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-050, SV-R-051 — an undecodable request is reported and ends the
+    /// connection, but serving itself succeeds: the failure was the peer's.
+    async fn ut_undecodable_request_ends_the_connection() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        let mut stream = client.into_inner();
+        // A well-formed MBAP header over a function code no request may carry
+        // (FR-R-014).
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("writes a malformed request");
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("ok");
+
+        let events = service.events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Failed(Error::InvalidFunctionCode(0)))),
+            "the decode failure must be reported: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(Event::Disconnect(Disconnect::Failed(
+                    Error::InvalidFunctionCode(0)
+                )))
+            ),
+            "and must end the connection: {events:?}"
+        );
+    }
+}

@@ -4,7 +4,7 @@
 //! trait names exactly the difference: how a header is built, when a received
 //! header answers a sent one, and which unit identifier broadcasts.
 
-use crate::frame::{Ascii, Framing, MbapHeader, Rtu, Tcp, TransactionId, UnitId};
+use crate::frame::{Ascii, BROADCAST_UNIT, Framing, MbapHeader, Rtu, Tcp, TransactionId, UnitId};
 
 /// A framing a client can issue requests over.
 ///
@@ -58,15 +58,11 @@ macro_rules! serial_framing {
             }
 
             fn is_broadcast(unit: UnitId) -> bool {
-                unit == BROADCAST
+                unit == BROADCAST_UNIT
             }
         }
     };
 }
-
-/// The address every server on a serial line acts on and none answers
-/// (FR-R-096).
-const BROADCAST: UnitId = UnitId(0);
 
 serial_framing!(Rtu);
 serial_framing!(Ascii);

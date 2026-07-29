@@ -25,6 +25,7 @@ pub use mei::{DeviceIdObject, MeiRequest, MeiResponse, ReadDeviceIdCode};
 pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};
 pub use rtu::Rtu;
 pub use tcp::{MbapHeader, Tcp};
+pub(crate) use value::BROADCAST_UNIT;
 pub use value::{
     Address, ExceptionStatus, FileNumber, Mask, Quantity, RecordLength, RecordNumber,
     RegisterValue, TransactionId, UnitId,

@@ -34,6 +34,10 @@ macro_rules! value {
     };
 }
 
+/// The address every server on a serial line acts on and none answers
+/// (FR-R-096, FR-R-117).
+pub(crate) const BROADCAST_UNIT: UnitId = UnitId(0);
+
 value! {
     /// A server address on a serial line (FR-R-096, FR-R-117), or the unit
     /// identifier of an MBAP header (FR-R-101).
