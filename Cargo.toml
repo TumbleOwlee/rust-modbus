@@ -14,18 +14,28 @@ categories = ["network-programming", "asynchronous"]
 # so the common case stays ergonomic, and CI builds without it (NF-R-003) so a
 # `std` dependency cannot creep back into the frame area unnoticed.
 default = ["std"]
-std = []
+std = ["dep:tokio"]
+# TR-R-032. Off by default so a TCP-only consumer acquires no serial
+# dependency; the frame area's RTU *framing* is not gated, only opening a port.
+rtu = ["std", "dep:tokio-serial"]
 
 [dependencies]
 crc = { version = "3.4.0", default-features = false }
 thiserror = { version = "2.0.19", default-features = false }
 winnow = { version = "1.0.4", default-features = false, features = ["alloc", "ascii", "binary"] }
+# The async runtime (ARCHITECTURE.md). Optional so the bare-metal build of
+# NF-R-003 keeps it out entirely.
+tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time"] }
+# The only maintained async serial port for Tokio; wraps `serialport`.
+tokio-serial = { version = "5.5", optional = true, default-features = false }
 
 [dev-dependencies]
 # FR-R-130 (no panic on any input) and FR-R-133 (round-trip) are universally
 # quantified; a property test states them directly where a fixture list only
 # samples them. Dev-only -- nothing reaches a consumer's dependency tree.
 proptest = "1"
+# The runtime and the in-memory duplex pair every transport test runs on.
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net"] }
 
 [lints.clippy]
 # Every fallible call in non-test code documents why it cannot fail via

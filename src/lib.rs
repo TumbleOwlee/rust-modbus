@@ -5,7 +5,9 @@
 //! it.
 
 #![forbid(unsafe_code)]
-#![no_std]
+// NF-R-001, NF-R-002: `core` + `alloc` always; `std` only where the transport,
+// client, and server areas need it.
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 

@@ -131,7 +131,69 @@ pub enum Error {
     /// A structural parse failure with no more specific cause.
     #[error("malformed frame")]
     Malformed,
+
+    /// An I/O failure on a socket or a serial port (TR-R-040).
+    ///
+    /// The kind is carried rather than the [`std::io::Error`] itself: this enum
+    /// is compared for equality throughout the crate's tests, and `io::Error`
+    /// implements no `PartialEq`. The kind is the part a caller matches on.
+    #[cfg(feature = "std")]
+    #[error("I/O error: {kind}")]
+    Io {
+        /// What the operating system reported.
+        kind: std::io::ErrorKind,
+    },
+
+    /// An operation did not complete within its time limit (TR-R-021,
+    /// TR-R-041).
+    #[cfg(feature = "std")]
+    #[error("{what} timed out")]
+    Timeout {
+        /// The operation that timed out.
+        what: &'static str,
+    },
+
+    /// The peer closed the connection part-way through an ADU (TR-R-014).
+    ///
+    /// A close *between* two ADUs is an ordinary end of stream, not this.
+    #[cfg(feature = "std")]
+    #[error("connection closed mid-frame")]
+    ConnectionClosed,
+
+    /// A configuration field held a value the transport cannot use
+    /// (TR-R-031).
+    #[cfg(feature = "std")]
+    #[error("invalid configuration for {field}")]
+    Configuration {
+        /// The offending field.
+        field: &'static str,
+    },
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io { kind: error.kind() }
+    }
 }
 
 /// Result alias for this crate.
 pub type Result<T> = core::result::Result<T, Error>;
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// TR-R-040 — an I/O failure surfaces as a typed variant carrying the
+    /// kind the platform reported, not as a formatted string.
+    fn ut_io_error_maps_to_kind() {
+        let error: Error = std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into();
+        assert_eq!(
+            error,
+            Error::Io {
+                kind: std::io::ErrorKind::ConnectionRefused,
+            }
+        );
+    }
+}
