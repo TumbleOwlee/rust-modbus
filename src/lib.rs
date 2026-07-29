@@ -11,12 +11,16 @@
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+mod client;
 mod error;
 mod frame;
 mod parse;
 #[cfg(feature = "std")]
 mod transport;
 
+#[cfg(feature = "std")]
+pub use client::{Client, ClientConfig, ClientFraming};
 pub use error::{Error, Result};
 pub use frame::{
     Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode,

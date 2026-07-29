@@ -168,6 +168,34 @@ pub enum Error {
         /// The offending field.
         field: &'static str,
     },
+
+    /// The server refused the request with a protocol exception (CL-R-040,
+    /// CL-R-041).
+    #[cfg(feature = "std")]
+    #[error("server returned exception {exception:?} for function {function:?}")]
+    Exception {
+        /// The function the exception answers.
+        function: crate::frame::FunctionCode,
+        /// The exception the server chose.
+        exception: crate::frame::ExceptionCode,
+    },
+
+    /// A response matched the request's header but carried another function's
+    /// body (CL-R-022).
+    #[cfg(feature = "std")]
+    #[error("expected a response to {expected:?}, got {actual:?}")]
+    UnexpectedFunction {
+        /// The function requested.
+        expected: crate::frame::FunctionCode,
+        /// The function the response carried.
+        actual: crate::frame::FunctionCode,
+    },
+
+    /// What the peer will send next is no longer known, so no further request
+    /// may be issued on this connection (CL-R-031, CL-R-032).
+    #[cfg(feature = "std")]
+    #[error("the exchange is desynchronized; a new connection is required")]
+    Desynchronized,
 }
 
 #[cfg(feature = "std")]
