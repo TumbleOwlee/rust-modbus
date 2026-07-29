@@ -1142,4 +1142,39 @@ mod tests {
             .expect("the server task finishes")
             .expect("serving succeeds");
     }
+
+    #[tokio::test]
+    /// SV-R-033, SV-R-050 — a peer that vanishes part-way through an ADU ends
+    /// the connection as a failure, distinct from the clean close of SV-R-052.
+    async fn ut_close_mid_adu_ends_the_connection_as_a_failure() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        let mut stream = client.into_inner();
+        // An MBAP header promising six more bytes, followed by three and a
+        // close (FR-R-101).
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 6, 1, 3, 0])
+            .await
+            .expect("writes half a request");
+        drop(stream);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+
+        let events = service.events();
+        assert_eq!(
+            events.last(),
+            Some(&Event::Disconnect(Disconnect::Failed(
+                Error::ConnectionClosed
+            ))),
+            "a severed frame is a failure, not a clean close: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Failed(Error::ConnectionClosed))),
+            "and must be reported to the service (SV-R-034): {events:?}"
+        );
+    }
 }
