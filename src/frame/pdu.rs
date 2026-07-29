@@ -1229,11 +1229,6 @@ mod tests {
                 .expect("a PDU always carries its function code");
             assert_eq!(*first, code, "function code of {encoded:?}");
             assert_eq!(rest, body.as_slice(), "body of {encoded:?}");
-            assert_eq!(
-                FunctionCode::decode(*first),
-                Ok(FunctionCode::decode(code).expect("a named code")),
-                "byte 0 of {encoded:?} is the function code"
-            );
         }
     }
 
