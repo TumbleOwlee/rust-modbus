@@ -87,16 +87,79 @@ explicitly for ASCII).
 
 ## 6. Exported types
 
-*(TBD — the public types this area exports and their signatures. Settled at
-gate 2 with the code in front of us; the behavior they must exhibit is already
-fixed by `requirements.md`.)*
+Everything below is exported from the crate root. All types derive `Debug`,
+`Clone`, and `PartialEq`; the field-free ones are `Copy` and `Eq` as well. The
+crate is `no_std` + `alloc` (NF-R-001), so `Vec` is `alloc::vec::Vec`.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `MAX_PDU_LEN: usize` | const | 253, the bound of FR-R-002 |
+| `RequestPdu` | enum | one variant per named function code, plus `Custom { code, data }` |
+| `ResponsePdu` | enum | the response direction, plus `Exception(ExceptionResponse)` |
+| `FunctionCode` | enum | the codes of §1, plus `Custom(u8)` |
+| `ExceptionCode` | enum | the codes of §4, plus `Other(u8)` |
+| `ExceptionResponse` | struct | `{ function: FunctionCode, exception: ExceptionCode }` |
+| `DiagnosticSubFunction` | enum | the sub-functions of §2, plus `Other(u16)` |
+| `MeiRequest` / `MeiResponse` | enum | the MEI types of §3, plus `Other { mei_type, data }` |
+| `ReadDeviceIdCode` | enum | `Basic`, `Regular`, `Extended`, `Individual` |
+| `DeviceIdObject` | struct | `{ id: u8, value: Vec<u8> }` |
+| `FileRecordRead` | struct | `{ file_number: u16, record_number: u16, record_length: u16 }` |
+| `FileRecordReadResponse` | struct | `{ values: Vec<u16> }` |
+| `FileRecordWrite` | struct | `{ file_number: u16, record_number: u16, values: Vec<u16> }` |
+| `Framing` | trait | the ADU abstraction of FR-R-120 |
+| `Rtu`, `Ascii`, `Tcp` | struct | the three framings of §5, each a `Framing` impl |
+| `MbapHeader` | struct | `{ transaction_id: u16, unit_id: u8 }` |
+| `Error`, `Result<T>` | enum, alias | §7; `Result<T> = core::result::Result<T, Error>` |
+| `mask_write_result` | fn | `(current: u16, and_mask: u16, or_mask: u16) -> u16` (FR-R-045) |
+
+Coding is symmetric and direction-explicit (FR-R-005): a PDU is not
+self-describing, so the caller states which direction it holds.
+
+```rust
+impl RequestPdu  { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; }
+impl ResponsePdu { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; }
+
+pub trait Framing {
+    type Header: Clone + PartialEq + Debug;
+    const MAX_ADU_LEN: usize;
+    fn decode_request(bytes: &[u8]) -> Result<(Self::Header, RequestPdu)>;
+    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>>;
+    fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)>;
+    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>>;
+}
+```
+
+`Framing::Header` is `u8` for `Rtu` and `Ascii` (the server address, FR-R-096,
+FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN` is 256, 513, and
+260 respectively (FR-R-091, FR-R-113, FR-R-104).
+
+`FunctionCode`, `ExceptionCode`, and `DiagnosticSubFunction` each expose
+`decode` and `encode`; the ones whose general variant can hold a named code
+(FR-R-013, FR-R-063, FR-R-083) return `Result` on encode, the others do not.
 
 ## 7. Error variants
 
-*(TBD — the Rust spelling of the failure modes. The modes themselves are
-normative and named by FR-R-006, FR-R-013, FR-R-014, FR-R-015, FR-R-021,
-FR-R-022, FR-R-027, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-043, FR-R-051,
-FR-R-054, FR-R-055, FR-R-056, FR-R-057, FR-R-058, FR-R-061, FR-R-063,
-FR-R-065, FR-R-074, FR-R-076, FR-R-077, FR-R-084,
-FR-R-085, FR-R-095, FR-R-102, FR-R-105, FR-R-106, FR-R-112, FR-R-115, FR-R-116,
-FR-R-131, FR-R-132. Adding a variant beyond these is a normative change.)*
+One enum, `Error`, with a variant per failure mode — never a formatted string a
+caller has to match on by substring. Adding a variant is a normative change.
+
+| Variant | Fields | Requirements |
+|---|---|---|
+| `Truncated` | `expected: usize, supplied: usize` | FR-R-131 |
+| `TrailingBytes` | `extra: usize` | FR-R-132 |
+| `InvalidFunctionCode` | `u8` | FR-R-014, FR-R-015 |
+| `ReservedCode` | `u8` | FR-R-013, FR-R-063, FR-R-083 |
+| `InvalidLength` | `expected: usize, actual: usize` | FR-R-084, FR-R-085, FR-R-106 |
+| `OutOfRange` | `field: &'static str, value: u32, min: u32, max: u32` | FR-R-021, FR-R-027, FR-R-031, FR-R-038, FR-R-042, FR-R-051, FR-R-055, FR-R-105 |
+| `Checksum` | `expected: u16, actual: u16` | FR-R-095, FR-R-115 |
+| `Framing` | `element: &'static str` | FR-R-110, FR-R-116 |
+| `InvalidCharacter` | `u8` | FR-R-112 |
+| `ProtocolIdentifier` | `u16` | FR-R-102 |
+| `AduTooLarge` | `len: usize, max: usize` | FR-R-091, FR-R-104, FR-R-113 |
+| `ReferenceType` | `u8` | FR-R-054 |
+| `IllegalValue` | `field: &'static str, value: u16` | FR-R-022, FR-R-061, FR-R-065, FR-R-074, FR-R-077 |
+| `ByteCountMismatch` | `expected: usize, actual: usize` | FR-R-033, FR-R-043, FR-R-056, FR-R-057, FR-R-058, FR-R-076 |
+| `PduTooLarge` | `len: usize, max: usize` | FR-R-002, FR-R-006 |
+| `Malformed` | — | the residual: input that fits no other variant |
+
+`Error` implements `core::error::Error` via `thiserror`, so it is usable in
+`no_std` builds and composes with `std::error::Error` where `std` is present.
