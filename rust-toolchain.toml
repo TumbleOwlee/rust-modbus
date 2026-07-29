@@ -1,3 +1,7 @@
+# NF-R-006. Pinned so every contributor's fmt, clippy, and coverage results agree
+# with CI's. This is the newest supported toolchain, not the oldest -- the MSRV is
+# a separate, lower floor declared as `rust-version` in Cargo.toml (NF-R-005) and
+# verified by the `msrv` CI job.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

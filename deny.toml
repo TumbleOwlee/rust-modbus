@@ -1,0 +1,58 @@
+# cargo-deny configuration.
+#
+# NF-R-015. The dependency tree is audited on every push and pull request for
+# security advisories, for licences outside the permissive allow-list below, and
+# for source registries other than crates.io. This file is the enforcement point
+# for that requirement: NF-R-015 has no unit test because "the tree contains no
+# advisory" is a fact about the tree, not runtime behavior a `shall` test could
+# observe (see docs/specs/README.md, "Requirements intentionally not
+# unit-tested").
+#
+# A protocol library's dependency tree is part of its value (AGENTS.md, "Scope
+# boundaries"), so this file is deliberately strict: a new licence or a new
+# registry fails the build until someone records here why it is acceptable.
+
+[graph]
+# Audit the whole surface, including the optional `rtu` feature -- that is the
+# feature that pulls the serial stack, and so most of the tree being judged.
+all-features = true
+
+[advisories]
+version = 2
+# No advisory is currently waived. An entry here needs a comment saying why the
+# advisory does not apply to how this crate uses the dependency.
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licences only, plus the two weak-copyleft cases justified below.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "MIT",
+    "Unicode-3.0",
+    # `serialport` is MPL-2.0 with no permissive alternative, and it is the only
+    # maintained serial backend for Tokio (see the `tokio-serial` note in
+    # Cargo.toml). MPL-2.0 is file-level copyleft: linking it into a consumer's
+    # binary imposes no licence on the consumer's own files. It is reachable only
+    # through the non-default `rtu` feature, so a TCP-only consumer never
+    # acquires it.
+    "MPL-2.0",
+]
+
+[bans]
+# Duplicate major versions are a warning, not a failure. The tree genuinely
+# carries several -- `bitflags` 1/2, `syn` 2/3, `nix` 0.26/0.31, `windows-sys`
+# 0.52/0.61 -- none of which this crate chooses or can unify, since they come
+# from the serial stack's own dependencies. Failing on them would gate our CI on
+# other people's release schedules.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# NF-R-015. Everything comes from crates.io; a git or vendored dependency
+# appearing in the tree is a supply-chain change that must be noticed.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

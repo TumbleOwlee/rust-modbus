@@ -26,37 +26,142 @@ client, server, and transport areas require it; the frame area shall not.
 **NF-R-004** — Dependencies shall be declared with `default-features = false`,
 enabling only the features the crate uses.
 
-*(TBD — MSRV and toolchain channel. The toolchain is currently pinned in
-`rust-toolchain.toml`; state it normatively here when the MSRV policy is
-decided.)*
+**NF-R-005** — The crate's minimum supported Rust version shall be **1.88.0**.
+It shall be declared as `rust-version` in the package manifest, so a consumer on
+an older toolchain is told the requirement by Cargo rather than by a compile
+error inside the crate. CI shall build and test the crate on exactly that
+version, so the declared MSRV is verified rather than asserted.
+
+**NF-R-006** — The development toolchain shall be pinned to the `stable` channel
+in `rust-toolchain.toml`, with the `rustfmt`, `clippy`, and `llvm-tools-preview`
+components, so every contributor's formatting, lint, and coverage results agree
+with CI's. The pinned development toolchain is the newest supported version, not
+the oldest; the MSRV of NF-R-005 is a separate, lower floor.
+
+**NF-R-007** — Raising the MSRV shall be a normative change: it requires a spec
+change to NF-R-005, a matching `rust-version` bump, and a `CHANGELOG.md` entry.
+The MSRV shall never rise as an incidental consequence of a dependency update.
 
 ---
 
 ## 2. Performance
 
-*(TBD — the posture on allocations per frame, throughput expectations, and
-whether any benchmark is asserted rather than merely recorded.)*
+**NF-R-008** — Memory used to hold a single frame shall be bounded by a
+compile-time constant per framing — the framing's maximum ADU length — and shall
+not depend on values a peer controls. Neither a decoder nor a transport shall
+allocate a buffer sized from a length field that has not yet been validated
+against that maximum.
+
+**NF-R-009** — Encoding a frame shall reserve each destination buffer's capacity
+in advance from the already-known frame length, rather than growing the buffer as
+bytes are appended. The number of allocations per encoded frame shall be a small
+constant, independent of the frame's contents.
+
+**NF-R-010** — The crate asserts **no** throughput, latency, or
+allocation-count figure. It ships no benchmark suite, and no performance number
+gates CI. Performance is a design posture — bounded, allocation-conscious frame
+handling per NF-R-008 and NF-R-009 — and a performance regression that keeps
+behavior correct will not be caught automatically. Introducing a benchmark that
+CI asserts on is a scope decision, not an incremental addition.
 
 ---
 
 ## 3. Security and robustness
 
-*(TBD. The intended posture, to be written as normative text: no input from a
-peer — however malformed, truncated, or oversized — may cause a panic, an
-out-of-bounds access, or an unbounded allocation.)*
+**NF-R-011** — The crate shall contain no `unsafe` code. This shall be enforced
+by the compiler through a crate-level `forbid(unsafe_code)` attribute, not by
+review.
+
+**NF-R-012** — No input from a peer — however malformed, truncated, oversized,
+or deliberately hostile — shall cause a panic, an out-of-bounds access, or an
+unbounded allocation. Every such input shall instead produce a typed error
+variant. This holds for every decode path in the crate, at both the PDU and the
+ADU layer, and for every framing.
+
+**NF-R-013** — Non-test code shall deny the lints that make NF-R-012 reachable
+by accident: `clippy::unwrap_used`, `clippy::indexing_slicing`, and
+`clippy::panic`. Every fallible call in non-test code shall document why it
+cannot fail via `expect("...")`. Test code shall be exempt from all three, since
+a panicking assertion there is the test. CI shall run Clippy with warnings
+denied over all targets and all features.
+
+**NF-R-014** — NF-R-012 shall be pinned by property-based tests over generated
+input, not by a fixture list alone: arbitrary byte sequences spanning lengths
+from empty to past the largest ADU any framing permits, byte sequences drawn from
+the ASCII framing's own alphabet so generation reaches past the hexadecimal
+check, and every truncation prefix of a valid ADU. These tests shall run as part
+of the default test suite, and any counterexample the generator finds shall be
+committed as a regression seed.
+
+**NF-R-015** — CI shall audit the dependency tree on every push and pull
+request for known security advisories, for licences outside an explicit
+permissive allow-list, and for source registries outside crates.io. The audit
+shall fail the build, not merely report. Its configuration shall record why each
+non-standard licence in the tree is accepted.
 
 ---
 
 ## 4. Versioning and API stability
 
-*(TBD — semver policy, what counts as a breaking change, feature-flag stability.)*
+**NF-R-016** — The crate shall be versioned according to Semantic Versioning.
+While the major version is 0, a breaking change shall bump the minor version and
+an additive or fixing change shall bump the patch version.
+
+**NF-R-017** — The following shall count as breaking changes: removing or
+renaming any publicly exported item; changing the signature, generic parameters,
+or trait bounds of a public function or trait method; adding, removing, or
+reordering the variants or fields of a public enum or struct; changing a public
+type's field types; removing a feature flag or changing what one enables; and
+raising the MSRV per NF-R-007. Public enums and structs in this crate are
+**exhaustive** — none carries `#[non_exhaustive]` — so adding a variant to the
+error enum, or a field to a configuration struct, is a breaking change and not an
+additive one.
+
+**NF-R-018** — Feature flags shall be purely additive. Enabling a feature shall
+only add public API; it shall never remove an item, change a signature, or alter
+the behavior of anything available without it. No feature shall be mutually
+exclusive with another, and any combination of features shall compile.
+
+**NF-R-019** — The repository shall maintain a `CHANGELOG.md` recording, per
+released version, the added, changed, and removed public API, every breaking
+change, and every MSRV change. Unreleased work shall accumulate under an
+`Unreleased` heading.
 
 ---
 
 ## 5. Testing conventions and coverage
 
-*(TBD. The intended content, to be written as normative text: unit tests named
-`ut_*` beside the code, integration tests named `it_*` under `tests/`; every
-requirement pinned by a test citing its ID except those listed as intentionally
-untested; line coverage at or above 80% enforced in CI; TCP tests bind ephemeral
-ports; RTU tests require no physical hardware.)*
+**NF-R-020** — Unit tests shall live in a `#[cfg(test)] mod tests` block at the
+bottom of the file under test, with function names prefixed `ut_`. Integration
+tests shall live in files under `tests/`, with function names prefixed `it_`. The
+prefix distinguishes the two in a single test run's output, so a failure names
+its own scope.
+
+**NF-R-021** — Every requirement in `docs/specs/` shall be pinned by at least
+one test whose doc comment cites the requirement's ID, placed directly below the
+`#[test]` or `#[tokio::test]` attribute. The sole exceptions shall be the
+requirements listed under "Requirements intentionally not unit-tested" in
+[`README.md`](./README.md); a requirement absent from both that list and the test
+suite is a gap. A requirement enforced structurally rather than by a test — by
+the compiler, by a lint, or by a CI job — shall name its ID in a comment in the
+manifest, lint configuration, or workflow that enforces it, so the enforcement
+point is discoverable from the ID.
+
+**NF-R-022** — Line coverage shall be at or above **80%**, measured by
+`cargo llvm-cov` over all features and enforced with `--fail-under-lines 80` as a
+CI job on every push and every pull request. The floor is a floor, not a target:
+it catches an untested module, it does not certify a tested one. Tests that
+execute code without asserting on its result shall not be added to raise it.
+
+**NF-R-023** — Any test that binds a TCP listener shall bind port 0 and read the
+assigned port back; no test shall name a fixed port number. A test that
+deliberately occupies a port to exercise bind-failure handling shall bind the
+occupying listener ephemerally first, then point the subject at the port it was
+given.
+
+**NF-R-024** — No test that runs by default shall require physical hardware, a
+serial device node, or an externally launched process. Serial and stream
+behavior shall be exercised over an in-memory duplex pair. A test that requires a
+real `/dev/tty*` device or a separately started external Modbus endpoint shall be
+marked `#[ignore]` with a reason naming what it needs, so it is opt-in and never
+runs in CI.

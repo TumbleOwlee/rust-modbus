@@ -2,6 +2,10 @@
 name = "rust-modbus"
 version = "0.1.0"
 edition = "2024"
+# NF-R-005. Verified by the `msrv` CI job, not merely declared. The floor is set
+# by `let` chains in the frame layer, stable since 1.88; edition 2024 alone would
+# only require 1.85. Raising this is a normative change (NF-R-007).
+rust-version = "1.88"
 description = "Async Modbus client and server over RTU and TCP"
 license = "MIT"
 readme = "README.md"

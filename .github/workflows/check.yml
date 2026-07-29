@@ -16,6 +16,11 @@ jobs:
       - run: rustup component add rustfmt
       - run: cargo fmt --check
 
+  # NF-R-013. Warnings denied over all targets and all features, which is what
+  # turns the `unwrap_used`, `indexing_slicing`, and `panic` denials declared in
+  # Cargo.toml's [lints.clippy] into a gate. Those three exist to keep NF-R-012
+  # (no panic on wire input) from being broken by accident, so a warning here is a
+  # robustness failure, not a style nit. Tests are exempt via clippy.toml.
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -43,6 +48,11 @@ jobs:
       - run: cargo check
       - run: cargo check --features rtu
 
+  # NF-R-014, NF-R-023, NF-R-024. The default test run includes the property-based
+  # robustness suite that pins NF-R-012, and needs no serial hardware, no device
+  # node, and no fixed port: listeners bind port 0 and serial behavior runs over an
+  # in-memory duplex pair. Tests that do need an external endpoint are #[ignore]d,
+  # so a plain `cargo test` stays green on a bare runner.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -62,7 +72,41 @@ jobs:
       - run: rustup target add thumbv7em-none-eabi
       - run: cargo build --target thumbv7em-none-eabi --no-default-features
 
-  # Coverage floor. 80% of lines, enforced -- not advisory. See AGENTS.md
+  # NF-R-005. Builds and tests on exactly the declared MSRV, so `rust-version` in
+  # Cargo.toml is verified rather than asserted. The floor is set by `let` chains
+  # in the frame layer (stable since 1.88), not by edition 2024, which would only
+  # require 1.85 -- so a dependency bump or a new language feature that raises it
+  # fails here instead of surfacing in a consumer's build. Raising it is a
+  # normative change (NF-R-007), which is why this job pins a literal version and
+  # does not track stable.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # An explicit +toolchain overrides rust-toolchain.toml's `stable` pin, which
+      # would otherwise defeat the point of this job.
+      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      # --all-targets so the check covers the same target set the MSRV claim is
+      # about (lib, tests, examples); --locked so the resolver cannot silently
+      # pick a newer dependency whose own rust-version exceeds ours.
+      - run: cargo +1.88.0 check --all-features --all-targets --locked
+      - run: cargo +1.88.0 test --all-features --locked
+
+  # NF-R-015. Supply-chain and licence audit: known advisories, licences outside
+  # the permissive allow-list, and any source registry other than crates.io fail
+  # the build. The allow-list and the reasoning for each non-standard licence in
+  # the tree live in deny.toml -- which is also where NF-R-015's enforcement is
+  # recorded, since "the tree carries no advisory" is not runtime behavior a test
+  # could observe.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
+
+  # NF-R-022. Coverage floor. 80% of lines, enforced -- not advisory. See AGENTS.md
   # "Test-driven": the floor catches untested modules, it does not certify
   # tested ones.
   coverage:
