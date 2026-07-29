@@ -799,7 +799,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-022 — with no unit configured, every identifier reaches the service.
+    /// SV-R-008, SV-R-022 — with no unit configured, which is the default, every
+    /// identifier reaches the service.
     async fn ut_unconfigured_unit_dispatches_every_unit() {
         let service = Recorder::new(|_| Ok(registers()));
         let (serving, mut client) = link(Arc::clone(&service));
@@ -892,7 +893,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-030 — connections are served concurrently. Every request is held
+    /// SV-R-002, SV-R-030 — one service, shared by every connection, and the
+    /// connections are served concurrently. Every request is held
     /// until all three have arrived, so a server that answered them one at a
     /// time would never finish this test.
     async fn ut_connections_are_served_concurrently() {
@@ -1175,6 +1177,43 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, Event::Failed(Error::ConnectionClosed))),
             "and must be reported to the service (SV-R-034): {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-001, SV-R-007 — one server type serves any framing over any link.
+    /// The other tests cover TCP and RTU; this one is the same `Server` over
+    /// ASCII, which shares no code path with either boundary rule (FR-R-116).
+    async fn ut_one_server_serves_ascii_too() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, client_end) = duplex(1024);
+        let serving = tokio::spawn(
+            Server::new(Arc::clone(&service))
+                .serve_link(FrameTransport::<_, crate::frame::Ascii>::new(server_end)),
+        );
+        let mut client = FrameTransport::<_, crate::frame::Ascii>::new(client_end);
+
+        client
+            .send_request(&UnitId(0x11), &read_holding())
+            .await
+            .expect("writes a request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((UnitId(0x11), registers()))
+        );
+
+        drop(client);
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("serving succeeds");
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|event| matches!(event, Event::Request(..)))
+                .count(),
+            1
         );
     }
 }

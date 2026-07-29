@@ -60,7 +60,7 @@ I/O and leaves one place per rule.
                       └──────────────┘   │
                                          ├─► frame (encode ADU) ─► transport ─► wire
                       ┌──────────────┐   │
-   consumer Service ◄► │    server    │ ──┘
+   consumer Service ◄►│    server    │ ──┘
                       └──────────────┘
                                          ◄─ frame (decode ADU) ◄─ transport ◄─ wire
 ```

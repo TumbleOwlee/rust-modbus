@@ -50,10 +50,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo test --all-features
 
-  # NF-R-003, CL-R-004. Builds for a bare-metal target with no default features,
-  # so the `no_std` guarantee is checked by the compiler rather than asserted in
-  # prose. A `std` dependency reintroduced anywhere in the frame area fails here,
-  # as does a client or transport item escaping its `std` gate.
+  # NF-R-003, CL-R-004, SV-R-006. Builds for a bare-metal target with no default
+  # features, so the `no_std` guarantee is checked by the compiler rather than
+  # asserted in prose. A `std` dependency reintroduced anywhere in the frame area
+  # fails here, as does a client, server, or transport item escaping its `std`
+  # gate — which is why those two requirements have no unit test of their own.
   no-std:
     runs-on: ubuntu-latest
     steps:
