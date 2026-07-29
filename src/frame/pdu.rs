@@ -759,6 +759,36 @@ impl RequestPdu {
         })
     }
 
+    /// The function code this PDU carries (FR-R-016).
+    ///
+    /// Answered from the variant, so a decoded PDU needs no re-encoding to say
+    /// what it is.
+    #[must_use]
+    pub fn function(&self) -> FunctionCode {
+        match *self {
+            Self::ReadCoils { .. } => FunctionCode::ReadCoils,
+            Self::ReadDiscreteInputs { .. } => FunctionCode::ReadDiscreteInputs,
+            Self::ReadHoldingRegisters { .. } => FunctionCode::ReadHoldingRegisters,
+            Self::ReadInputRegisters { .. } => FunctionCode::ReadInputRegisters,
+            Self::WriteSingleCoil { .. } => FunctionCode::WriteSingleCoil,
+            Self::WriteSingleRegister { .. } => FunctionCode::WriteSingleRegister,
+            Self::WriteMultipleCoils { .. } => FunctionCode::WriteMultipleCoils,
+            Self::WriteMultipleRegisters { .. } => FunctionCode::WriteMultipleRegisters,
+            Self::MaskWriteRegister { .. } => FunctionCode::MaskWriteRegister,
+            Self::ReadWriteMultipleRegisters { .. } => FunctionCode::ReadWriteMultipleRegisters,
+            Self::ReadExceptionStatus => FunctionCode::ReadExceptionStatus,
+            Self::Diagnostics { .. } => FunctionCode::Diagnostics,
+            Self::GetCommEventCounter => FunctionCode::GetCommEventCounter,
+            Self::GetCommEventLog => FunctionCode::GetCommEventLog,
+            Self::ReportServerId => FunctionCode::ReportServerId,
+            Self::ReadFileRecord { .. } => FunctionCode::ReadFileRecord,
+            Self::WriteFileRecord { .. } => FunctionCode::WriteFileRecord,
+            Self::ReadFifoQueue { .. } => FunctionCode::ReadFifoQueue,
+            Self::EncapsulatedInterfaceTransport(_) => FunctionCode::EncapsulatedInterfaceTransport,
+            Self::Custom { code, .. } => FunctionCode::Custom(code),
+        }
+    }
+
     /// Encode to a request PDU.
     pub fn encode(&self) -> Result<Vec<u8>> {
         match *self {
@@ -950,6 +980,37 @@ impl ResponsePdu {
         })
     }
 
+    /// The function code this PDU carries (FR-R-016).
+    ///
+    /// For an exception response this is the function the exception is *to* —
+    /// the code the caller asked about — not the code with the high bit set.
+    #[must_use]
+    pub fn function(&self) -> FunctionCode {
+        match *self {
+            Self::ReadCoils { .. } => FunctionCode::ReadCoils,
+            Self::ReadDiscreteInputs { .. } => FunctionCode::ReadDiscreteInputs,
+            Self::ReadHoldingRegisters { .. } => FunctionCode::ReadHoldingRegisters,
+            Self::ReadInputRegisters { .. } => FunctionCode::ReadInputRegisters,
+            Self::WriteSingleCoil { .. } => FunctionCode::WriteSingleCoil,
+            Self::WriteSingleRegister { .. } => FunctionCode::WriteSingleRegister,
+            Self::WriteMultipleCoils { .. } => FunctionCode::WriteMultipleCoils,
+            Self::WriteMultipleRegisters { .. } => FunctionCode::WriteMultipleRegisters,
+            Self::MaskWriteRegister { .. } => FunctionCode::MaskWriteRegister,
+            Self::ReadWriteMultipleRegisters { .. } => FunctionCode::ReadWriteMultipleRegisters,
+            Self::ReadExceptionStatus { .. } => FunctionCode::ReadExceptionStatus,
+            Self::Diagnostics { .. } => FunctionCode::Diagnostics,
+            Self::GetCommEventCounter { .. } => FunctionCode::GetCommEventCounter,
+            Self::GetCommEventLog { .. } => FunctionCode::GetCommEventLog,
+            Self::ReportServerId { .. } => FunctionCode::ReportServerId,
+            Self::ReadFileRecord { .. } => FunctionCode::ReadFileRecord,
+            Self::WriteFileRecord { .. } => FunctionCode::WriteFileRecord,
+            Self::ReadFifoQueue { .. } => FunctionCode::ReadFifoQueue,
+            Self::EncapsulatedInterfaceTransport(_) => FunctionCode::EncapsulatedInterfaceTransport,
+            Self::Custom { code, .. } => FunctionCode::Custom(code),
+            Self::Exception(ref exception) => exception.function,
+        }
+    }
+
     /// Encode to a response PDU.
     pub fn encode(&self) -> Result<Vec<u8>> {
         match self {
@@ -1069,6 +1130,35 @@ fn words_to_bytes(words: &[u16]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    /// FR-R-016 — a decoded request reports the function code it carries,
+    /// without being re-encoded to find out.
+    fn ut_request_reports_its_function() {
+        let request = RequestPdu::decode(&[0x03, 0x00, 0x6B, 0x00, 0x03]).expect("decodes");
+        assert_eq!(request.function(), FunctionCode::ReadHoldingRegisters);
+        assert_eq!(
+            RequestPdu::Custom {
+                code: 0x65,
+                data: vec![],
+            }
+            .function(),
+            FunctionCode::Custom(0x65)
+        );
+    }
+
+    #[test]
+    /// FR-R-016 — a response reports its function code too, and an exception
+    /// response reports the function it is an exception *to*, not the code with
+    /// the high bit set: that is the function the caller asked about.
+    fn ut_response_reports_its_function() {
+        let response = ResponsePdu::decode(&[0x83, 0x02]).expect("decodes");
+        assert_eq!(response.function(), FunctionCode::ReadHoldingRegisters);
+        assert_eq!(
+            ResponsePdu::ReadCoils { coils: vec![true] }.function(),
+            FunctionCode::ReadCoils
+        );
+    }
     use super::*;
     use crate::frame::exception::ExceptionCode;
     use crate::frame::mei::{DeviceIdObject, ReadDeviceIdCode};
