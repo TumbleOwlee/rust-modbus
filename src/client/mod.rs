@@ -127,7 +127,12 @@ where
 
         let transaction = self.next_transaction;
         let header = F::request_header(unit, transaction);
-        self.transport.send_request(&header, &request).await?;
+        if let Err(error) = self.transport.send_request(&header, &request).await {
+            // The ADU may be on the wire in part. Nothing a later request can
+            // do repairs that, so the failure is not recoverable (CL-R-013).
+            self.desynchronized = true;
+            return Err(error);
+        }
         self.next_transaction = next(transaction);
 
         if F::is_broadcast(unit) {
@@ -1498,5 +1503,53 @@ mod tests {
             })
         );
         assert_eq!(answering.await.expect("the server task finishes").len(), 4);
+    }
+
+    #[tokio::test]
+    /// CL-R-013, CL-R-031 — a write that fails leaves the client unusable: a
+    /// partially written ADU is on the wire and no later request can repair it,
+    /// so the failure must not look recoverable.
+    async fn ut_failed_write_desynchronizes() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        drop(server);
+
+        assert!(client.call(UnitId(0x11), read_holding()).await.is_err());
+        assert!(
+            client.is_desynchronized(),
+            "a failed write must not look recoverable"
+        );
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-024 — a response that arrives after its request timed out is never
+    /// handed to a later request. The client refuses to issue one at all, so the
+    /// stale bytes cannot be mistaken for the next answer.
+    async fn ut_late_response_is_never_delivered_to_a_later_request() {
+        let (mut client, mut server) = pair();
+        let late = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            // Answers only after the client has given up.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let _ = server.send_response(&header, &registers()).await;
+            // Holds the transport so the stale bytes stay readable.
+            core::future::pending::<()>().await;
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized),
+            "the late response must not answer a later request"
+        );
+        late.abort();
     }
 }
