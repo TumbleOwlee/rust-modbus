@@ -36,6 +36,10 @@ macro_rules! value {
 
 /// The address every server on a serial line acts on and none answers
 /// (FR-R-096, FR-R-117).
+///
+/// Only the client and server areas have a use for it, and both are `std`-gated
+/// (CL-R-004, SV-R-006).
+#[cfg(feature = "std")]
 pub(crate) const BROADCAST_UNIT: UnitId = UnitId(0);
 
 value! {
