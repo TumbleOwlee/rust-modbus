@@ -17,6 +17,8 @@ mod error;
 mod frame;
 mod parse;
 #[cfg(feature = "std")]
+mod server;
+#[cfg(feature = "std")]
 mod transport;
 
 #[cfg(feature = "rtu")]
@@ -31,6 +33,8 @@ pub use frame::{
     Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
     Rtu, Tcp, TransactionId, UnitId, mask_write_result,
 };
+#[cfg(feature = "std")]
+pub use server::{Connection, ConnectionId, Disconnect, Service};
 #[cfg(feature = "std")]
 pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,
