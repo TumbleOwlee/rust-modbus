@@ -69,6 +69,18 @@ pub enum Error {
         actual: u16,
     },
 
+    /// An ASCII ADU was not framed as FR-R-116 requires.
+    #[error("ASCII ADU has a malformed {element}")]
+    Framing {
+        /// Which part of the framing was wrong.
+        element: &'static str,
+    },
+
+    /// A character outside `0`-`9`, `A`-`F`, `a`-`f` appeared where an ASCII
+    /// ADU requires a hexadecimal digit (FR-R-112).
+    #[error("byte {0:#04x} is not a hexadecimal character")]
+    InvalidCharacter(u8),
+
     /// An MBAP header carried a protocol identifier other than 0 (FR-R-102).
     #[error("MBAP protocol identifier {0} is not 0")]
     ProtocolIdentifier(u16),

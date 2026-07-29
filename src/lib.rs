@@ -15,7 +15,7 @@ mod parse;
 
 pub use error::{Error, Result};
 pub use frame::{
-    DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
+    Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, FileRecordRead,
     FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, MbapHeader,
     MeiRequest, MeiResponse, ReadDeviceIdCode, RequestPdu, ResponsePdu, Rtu, Tcp,
     mask_write_result,

@@ -3,6 +3,7 @@
 //! Role-agnostic: everything here is true of a byte sequence regardless of
 //! whether a client or a server produced it. See `docs/specs/frame/`.
 
+mod ascii;
 mod diagnostics;
 mod exception;
 mod file;
@@ -13,6 +14,7 @@ mod pdu;
 mod rtu;
 mod tcp;
 
+pub use ascii::Ascii;
 pub use diagnostics::DiagnosticSubFunction;
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use file::{FileRecordRead, FileRecordReadResponse, FileRecordWrite};
