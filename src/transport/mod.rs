@@ -67,6 +67,10 @@ pub struct FrameTransport<S, F> {
     stream: S,
     /// Bytes read but not yet consumed by a caller (TR-R-004).
     buffer: Vec<u8>,
+    /// The one buffer every outgoing ADU is encoded into, cleared between
+    /// frames but never shrunk, so sending allocates nothing in steady state
+    /// (TR-R-043).
+    outgoing: Vec<u8>,
     /// Boundary parameters the framing cannot supply on its own.
     config: TransportConfig,
     /// Set while a receive is in flight; a receive that never returned left the
@@ -91,6 +95,7 @@ where
         Self {
             stream,
             buffer: Vec::new(),
+            outgoing: Vec::new(),
             config,
             receiving: false,
             framing: PhantomData,
@@ -108,7 +113,9 @@ where
     ///
     /// Fails if the PDU does not encode, or if the stream does.
     pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
-        self.send(&F::encode_request(header, pdu)?).await
+        self.outgoing.clear();
+        F::encode_request_into(header, pdu, &mut self.outgoing)?;
+        self.send().await
     }
 
     /// Send a response (TR-R-003).
@@ -117,7 +124,9 @@ where
     ///
     /// Fails if the PDU does not encode, or if the stream does.
     pub async fn send_response(&mut self, header: &F::Header, pdu: &ResponsePdu) -> Result<()> {
-        self.send(&F::encode_response(header, pdu)?).await
+        self.outgoing.clear();
+        F::encode_response_into(header, pdu, &mut self.outgoing)?;
+        self.send().await
     }
 
     /// Receive one request (TR-R-004).
@@ -143,9 +152,11 @@ where
     }
 
     /// Write every byte of an ADU (TR-R-003).
-    async fn send(&mut self, adu: &[u8]) -> Result<()> {
-        self.stream.write_all(adu).await?;
+    async fn send(&mut self) -> Result<()> {
+        self.stream.write_all(&self.outgoing).await?;
         self.stream.flush().await?;
+        // The bytes are gone; the capacity stays (TR-R-043).
+        self.outgoing.clear();
         Ok(())
     }
 
@@ -341,6 +352,42 @@ mod tests {
     const REQUEST_ADU: [u8; 12] = [
         0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
     ];
+
+    #[tokio::test]
+    /// TR-R-043 — the transport owns one outgoing buffer, reused frame after
+    /// frame: its contents are cleared between sends but its capacity, once
+    /// grown to the framing maximum, is retained rather than reallocated.
+    async fn ut_write_buffer_capacity_is_retained() {
+        let (client, server) = duplex(1024);
+        let mut client = FrameTransport::<_, Tcp>::new(client);
+        let mut server = FrameTransport::<_, Tcp>::new(server);
+
+        client
+            .send_request(&header(), &read_holding())
+            .await
+            .expect("sends");
+        let capacity = client.outgoing.capacity();
+        assert!(
+            capacity >= Tcp::MAX_ADU_LEN,
+            "reserved {capacity} of {}",
+            Tcp::MAX_ADU_LEN
+        );
+        // The frame is out of the door; nothing of it is held back.
+        assert_eq!(client.outgoing.len(), 0);
+        server.recv_request().await.expect("receives");
+
+        client
+            .send_request(&header(), &read_holding())
+            .await
+            .expect("sends");
+        assert_eq!(
+            client.outgoing.capacity(),
+            capacity,
+            "the second frame reallocated the buffer"
+        );
+        assert_eq!(client.outgoing.len(), 0);
+        server.recv_request().await.expect("receives");
+    }
 
     #[tokio::test]
     /// TR-R-001 — the transport is generic over the stream: an in-memory duplex
