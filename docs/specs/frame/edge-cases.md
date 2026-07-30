@@ -75,7 +75,7 @@ mistaken for an oversight and silently "fixed".
 Every row above is an error, never a panic: FR-R-130 admits no exception for any
 input whatsoever.
 
-## 5. Encode buffers
+## 4. Encode buffers
 
 | Condition | Behavior |
 |---|---|
@@ -86,7 +86,7 @@ input whatsoever.
 | ASCII appending encode | Uses one scratch buffer per frame; RTU and TCP use none (FR-R-143) |
 | `encode` (the allocating form) | One allocation, sized on the framing maximum, then the appending path unchanged (FR-R-140) |
 
-## 6. Known limitations
+## 5. Known limitations
 
 - **Bit padding is treated differently in requests and responses, on purpose.**
   A bit-read *response* keeps all `8 × byte count` values including padding
