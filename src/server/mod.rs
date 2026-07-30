@@ -252,7 +252,7 @@ where
 
         if let Err(error) = transport.send_response(&header, &response).await {
             service.on_error(conn, &error).await;
-            if ends_connection(&error) {
+            if error.ends_stream() {
                 return Disconnect::Failed(error);
             }
             // The response never reached the wire, so the stream is still
@@ -279,15 +279,6 @@ async fn shutdown_requested(signal: &mut watch::Receiver<bool>) {
 
 /// Whether a failure to answer left the connection unusable.
 ///
-/// Encoding fails before anything is written, so it costs one response
-/// (SV-R-014); a write that fails part-way through an ADU costs the connection.
-fn ends_connection(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Io { .. } | Error::ConnectionClosed | Error::Timeout { .. }
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

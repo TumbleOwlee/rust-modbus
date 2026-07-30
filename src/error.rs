@@ -199,6 +199,25 @@ pub enum Error {
 }
 
 #[cfg(feature = "std")]
+impl Error {
+    /// Whether this failure ends the byte stream itself, rather than costing
+    /// one frame.
+    ///
+    /// An I/O failure, a closed connection or a timeout say nothing about
+    /// framing: the stream is over, or what the peer sends next is unaccounted
+    /// for, whichever framing is in use. Every other variant is a *frame*
+    /// failure, and whether it is survivable is then the framing's answer
+    /// (FR-R-144) — which is why the client and the server ask this first and
+    /// the boundary rule second (CL-R-023, SV-R-050).
+    pub(crate) fn ends_stream(&self) -> bool {
+        matches!(
+            *self,
+            Self::Io { .. } | Self::ConnectionClosed | Self::Timeout { .. }
+        )
+    }
+}
+
+#[cfg(feature = "std")]
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::Io { kind: error.kind() }
@@ -211,6 +230,39 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    /// A stream failure is distinguished from a frame failure by variant, not
+    /// by framing: the two areas that branch on it must agree, so the
+    /// predicate lives in one place.
+    fn ut_stream_failures_are_distinguished_from_frame_failures() {
+        assert!(
+            Error::Io {
+                kind: std::io::ErrorKind::BrokenPipe
+            }
+            .ends_stream()
+        );
+        assert!(Error::ConnectionClosed.ends_stream());
+        assert!(Error::Timeout { what: "response" }.ends_stream());
+
+        // Every one of these is one frame's worth of damage.
+        assert!(!Error::Malformed.ends_stream());
+        assert!(
+            !Error::Checksum {
+                expected: 1,
+                actual: 2
+            }
+            .ends_stream()
+        );
+        assert!(
+            !Error::Truncated {
+                expected: 8,
+                supplied: 3
+            }
+            .ends_stream()
+        );
+        assert!(!Error::InvalidFunctionCode(0x99).ends_stream());
+    }
 
     #[test]
     /// TR-R-040 — an I/O failure surfaces as a typed variant carrying the
