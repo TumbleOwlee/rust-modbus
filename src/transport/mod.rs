@@ -173,6 +173,13 @@ where
         self.receiving = true;
         let result = self.read_adu().await;
         self.receiving = false;
+        if result.is_err() && F::boundary().is_self_locating() {
+            // No ADU was delimited, so these bytes belong to no frame anyone
+            // can name. This framing finds the next boundary on the wire, so
+            // dropping them is what lets the next receive start clean
+            // (TR-R-044); keeping them would fail the same way forever.
+            self.buffer.clear();
+        }
         result
     }
 
@@ -639,6 +646,63 @@ mod rtu_tests {
 
     /// Longer than that interval: the line has gone quiet.
     const LONG_GAP: Duration = Duration::from_millis(5);
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-044 — a receive that fails before an ADU was delimited discards the
+    /// bytes it had gathered, because RTU finds the next boundary in the
+    /// silence rather than in the frame that failed. Were they kept, every
+    /// later receive would re-read the same rubbish.
+    async fn ut_failed_read_discards_the_attempt_on_rtu() {
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        // Exactly the framing maximum, so the bound is reached with nothing
+        // left over in the stream to contaminate the next frame.
+        let rubbish = alloc::vec![0xFFu8; Rtu::MAX_ADU_LEN];
+        peer.write_all(&rubbish).await.expect("writes rubbish");
+        assert_eq!(
+            server.recv_request().await,
+            Err(Error::AduTooLarge {
+                len: Rtu::MAX_ADU_LEN,
+                max: Rtu::MAX_ADU_LEN,
+            })
+        );
+        assert!(
+            server.buffer.is_empty(),
+            "the failed attempt was left in the buffer"
+        );
+
+        // The line is quiet, then a good frame: it is received as if nothing
+        // had happened.
+        tokio::time::sleep(LONG_GAP).await;
+        peer.write_all(&REQUEST_ADU).await.expect("writes a frame");
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+    }
+
+    #[tokio::test]
+    /// TR-R-044 — over TCP the gathered bytes are kept instead: the length that
+    /// would delimit the next frame was carried by the one that failed, so
+    /// there is no later boundary to resume from and discarding would only
+    /// hide that.
+    async fn ut_failed_read_retains_the_attempt_on_tcp() {
+        let (mut peer, client) = duplex(64);
+        let mut client = FrameTransport::<_, Tcp>::new(client);
+
+        // A well-formed MBAP prefix whose length field is illegal: the failure
+        // happens after six bytes are buffered and before any ADU is delimited.
+        peer.write_all(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x00])
+            .await
+            .expect("writes");
+
+        assert!(client.recv_response().await.is_err());
+        assert!(
+            !client.buffer.is_empty(),
+            "the attempt was discarded on a framing that cannot resynchronize"
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     /// TR-R-011 — an RTU ADU carries no length and no terminator, so the frame
