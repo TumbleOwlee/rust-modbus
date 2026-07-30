@@ -57,6 +57,15 @@ until it ships.
   methods. An implementor of the trait outside this crate must implement the
   appending pair instead of the allocating one.
 
+- A corrupted RTU or ASCII frame now costs exactly one frame instead of the
+  link. Both framings delimit their frames on the wire — RTU by silence, ASCII
+  by `:` and CRLF — so the next boundary survives a frame that fails to decode,
+  and a client stays synchronized while a server stays on the bus (FR-R-144,
+  CL-R-023, SV-R-050, TR-R-044). TCP is unchanged: its length prefix is carried
+  by the frame itself, so a frame that cannot be decoded takes the stream's
+  alignment with it. `AduBoundary::is_self_locating` reports which of the two a
+  framing is.
+
 ### Fixed
 
 - The `tokio` dependency now declares the `sync`, `rt`, and `macros` features the
