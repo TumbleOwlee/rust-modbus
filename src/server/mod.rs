@@ -215,10 +215,17 @@ where
             Err(Error::Io {
                 kind: std::io::ErrorKind::UnexpectedEof,
             }) => return Disconnect::Closed,
-            // Anything else leaves the stream's alignment unknown (SV-R-050).
             Err(error) => {
                 service.on_error(conn, &error).await;
-                return Disconnect::Failed(error);
+                // An I/O failure ends the connection whatever the framing. A
+                // *frame* failure ends it only where the next boundary was
+                // carried by the frame that failed; on a self-locating framing
+                // one bad frame costs one frame, and a noise burst must not
+                // take a device off the bus (SV-R-050, FR-R-144).
+                if error.ends_stream() || !F::boundary().is_self_locating() {
+                    return Disconnect::Failed(error);
+                }
+                continue;
             }
         };
 
@@ -295,10 +302,11 @@ mod tests {
 
     use crate::error::Error;
     use crate::frame::{
-        Address, ExceptionCode, ExceptionResponse, FunctionCode, MbapHeader, Quantity,
+        Address, ExceptionCode, ExceptionResponse, Framing, FunctionCode, MbapHeader, Quantity,
         RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
     };
     use crate::transport::FrameTransport;
+    use core::time::Duration;
 
     /// What a test service was asked to do, in order (SV-R-036).
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -712,9 +720,11 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-050, SV-R-051 — an undecodable request is reported and ends the
-    /// connection, but serving itself succeeds: the failure was the peer's.
-    async fn ut_undecodable_request_ends_the_connection() {
+    /// SV-R-050, SV-R-051 — over TCP an undecodable request is reported and
+    /// ends the connection, but serving itself succeeds: the failure was the
+    /// peer's. The MBAP length was trusted to read the ADU, so once its
+    /// contents turn out to be nonsense there is no way to find the next one.
+    async fn ut_undecodable_request_ends_the_connection_on_tcp() {
         let service = Recorder::new(|_| Ok(registers()));
         let (serving, client) = link(Arc::clone(&service));
 
@@ -745,6 +755,60 @@ mod tests {
             ),
             "and must end the connection: {events:?}"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// SV-R-050 — over RTU the same failure costs exactly one frame: the next
+    /// boundary is the line falling silent, so the server reports the failure,
+    /// answers nothing, and serves the next request. One noise burst must not
+    /// take a device off the bus.
+    async fn ut_undecodable_request_continues_on_rtu() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, mut client_end) = duplex(1024);
+        let server = Server::with_config(Arc::clone(&service), ServerConfig::default());
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Rtu>::new(server_end)));
+
+        // A frame whose CRC is wrong: a valid request with its last byte
+        // flipped.
+        let good = Rtu::encode_request(&UnitId(0x11), &read_holding()).expect("encodes");
+        let mut corrupt = good.clone();
+        let last = corrupt.last_mut().expect("the ADU carries a CRC");
+        *last ^= 0xFF;
+
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        client_end
+            .write_all(&corrupt)
+            .await
+            .expect("writes corrupt");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        client_end.write_all(&good).await.expect("writes good");
+
+        // The answer to the *second* request proves the first cost one frame
+        // and nothing more.
+        let mut reply = [0u8; 7];
+        client_end
+            .read_exact(&mut reply)
+            .await
+            .expect("the second request is answered");
+        assert_eq!(
+            Rtu::decode_response(&reply),
+            Ok((UnitId(0x11), registers()))
+        );
+
+        let events = service.events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Failed(Error::Checksum { .. }))),
+            "the decode failure must still be reported: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Disconnect(_))),
+            "the connection must survive it: {events:?}"
+        );
+        serving.abort();
     }
 
     #[tokio::test]
