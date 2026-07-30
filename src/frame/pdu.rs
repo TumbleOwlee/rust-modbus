@@ -5,6 +5,7 @@
 //! direction, so the caller states the direction by choosing the type
 //! (FR-R-005).
 
+#[cfg(test)]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -307,20 +308,6 @@ fn bits_from_bytes(bytes: &[u8]) -> Vec<bool> {
         .collect()
 }
 
-/// Pack `bits` least significant bit first, zeroing the final byte's unused
-/// high bits (FR-R-024).
-fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
-    bits.chunks(8)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .enumerate()
-                .filter(|(_, set)| **set)
-                .fold(0u8, |byte, (index, _)| byte | (1u8 << index))
-        })
-        .collect()
-}
-
 /// Largest quantity a Write Multiple Coils request may carry (FR-R-031).
 const MAX_WRITE_BITS: u16 = 1968;
 /// Largest quantity a Write Multiple Registers request may carry (FR-R-033).
@@ -503,66 +490,86 @@ fn check_size(pdu: &[u8]) -> Result<()> {
 }
 
 /// Finish an encoded PDU, rejecting one that exceeds the maximum (FR-R-006).
-fn finish(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    if bytes.len() > MAX_PDU_LEN {
+fn finish(out: &[u8], at: usize) -> Result<()> {
+    // Measured against what *this* PDU wrote, not against the buffer's length:
+    // a caller appending into a buffer that already holds an ADU header must not
+    // be told its PDU is too large (FR-R-140).
+    let len = out.len().saturating_sub(at);
+    if len > MAX_PDU_LEN {
         return Err(Error::PduTooLarge {
-            len: bytes.len(),
+            len,
             max: MAX_PDU_LEN,
         });
     }
-    Ok(bytes)
+    Ok(())
 }
 
 /// Encode a read request body (FR-R-020).
 fn encode_read(
+    out: &mut Vec<u8>,
     code: u8,
     address: Address,
     quantity: Quantity,
     min: u16,
     max: u16,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     check_range("quantity", quantity.0, min, max)?;
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.0.to_be_bytes());
-    bytes.extend_from_slice(&quantity.0.to_be_bytes());
-    finish(bytes)
+    let at = out.len();
+    out.reserve(5);
+    out.push(code);
+    out.extend_from_slice(&address.0.to_be_bytes());
+    out.extend_from_slice(&quantity.0.to_be_bytes());
+    finish(out, at)
 }
 
 /// Encode a single-write body (FR-R-026, FR-R-028).
-fn encode_single(code: u8, address: Address, value: u16) -> Result<Vec<u8>> {
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.0.to_be_bytes());
-    bytes.extend_from_slice(&value.to_be_bytes());
-    finish(bytes)
+fn encode_single(out: &mut Vec<u8>, code: u8, address: Address, value: u16) -> Result<()> {
+    let at = out.len();
+    out.reserve(5);
+    out.push(code);
+    out.extend_from_slice(&address.0.to_be_bytes());
+    out.extend_from_slice(&value.to_be_bytes());
+    finish(out, at)
 }
 
 /// Encode an address, a quantity, a byte count and the data (FR-R-030,
 /// FR-R-032).
 fn encode_quantified(
+    out: &mut Vec<u8>,
     code: u8,
     address: Address,
     quantity: Quantity,
-    data: &[u8],
-) -> Result<Vec<u8>> {
-    let count = u8::try_from(data.len()).map_err(|_| Error::PduTooLarge {
-        len: data.len() + 6,
+    data_len: usize,
+    write_data: impl FnOnce(&mut Vec<u8>),
+) -> Result<()> {
+    let count = u8::try_from(data_len).map_err(|_| Error::PduTooLarge {
+        len: data_len + 6,
         max: MAX_PDU_LEN,
     })?;
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.0.to_be_bytes());
-    bytes.extend_from_slice(&quantity.0.to_be_bytes());
-    bytes.push(count);
-    bytes.extend_from_slice(data);
-    finish(bytes)
+    let at = out.len();
+    out.reserve(data_len.saturating_add(6));
+    out.push(code);
+    out.extend_from_slice(&address.0.to_be_bytes());
+    out.extend_from_slice(&quantity.0.to_be_bytes());
+    out.push(count);
+    write_data(out);
+    finish(out, at)
 }
 
 /// Encode an address and a quantity, the shape of a multiple-write response
 /// (FR-R-034).
-fn encode_echo_quantity(code: u8, address: Address, quantity: Quantity) -> Result<Vec<u8>> {
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&address.0.to_be_bytes());
-    bytes.extend_from_slice(&quantity.0.to_be_bytes());
-    finish(bytes)
+fn encode_echo_quantity(
+    out: &mut Vec<u8>,
+    code: u8,
+    address: Address,
+    quantity: Quantity,
+) -> Result<()> {
+    let at = out.len();
+    out.reserve(5);
+    out.push(code);
+    out.extend_from_slice(&address.0.to_be_bytes());
+    out.extend_from_slice(&quantity.0.to_be_bytes());
+    finish(out, at)
 }
 
 /// Fixed bytes a Get Comm Event Log byte count always covers: the status,
@@ -588,14 +595,17 @@ fn diagnostic_body(input: &mut Input<'_>) -> ParseResult<(DiagnosticSubFunction,
 
 /// Encode a Diagnostics body under `code` (FR-R-061).
 fn encode_diagnostics(
+    out: &mut Vec<u8>,
     code: u8,
     sub_function: DiagnosticSubFunction,
     data: &[u16],
-) -> Result<Vec<u8>> {
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&sub_function.encode()?.to_be_bytes());
-    bytes.extend_from_slice(&words_to_bytes(data));
-    finish(bytes)
+) -> Result<()> {
+    let at = out.len();
+    out.reserve(data.len().saturating_mul(2).saturating_add(3));
+    out.push(code);
+    out.extend_from_slice(&sub_function.encode()?.to_be_bytes());
+    push_words(out, data);
+    finish(out, at)
 }
 
 /// Check a Get Comm Event Log byte count against the range its layout fixes
@@ -617,29 +627,87 @@ fn check_event_log_bytes(byte_count: u32) -> Result<()> {
 ///
 /// The code goes through [`FunctionCode`] so a custom code holding one of the
 /// nineteen named codes is rejected in exactly one place.
-fn encode_custom(code: u8, data: &[u8]) -> Result<Vec<u8>> {
-    let mut bytes = vec![FunctionCode::Custom(code).encode()?];
-    bytes.extend_from_slice(data);
-    finish(bytes)
+fn encode_custom(out: &mut Vec<u8>, code: u8, data: &[u8]) -> Result<()> {
+    let at = out.len();
+    out.reserve(data.len().saturating_add(1));
+    out.push(FunctionCode::Custom(code).encode()?);
+    out.extend_from_slice(data);
+    finish(out, at)
 }
 
-/// Prepend `code` to an already-assembled body and size-check the result.
-fn encode_body(code: u8, body: Vec<u8>) -> Result<Vec<u8>> {
-    let mut bytes = vec![code];
-    bytes.extend_from_slice(&body);
-    finish(bytes)
+/// Write `code`, then the body `write` appends after it, and size-check what
+/// the two together wrote.
+fn encode_body(
+    out: &mut Vec<u8>,
+    code: u8,
+    write: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<()> {
+    let at = out.len();
+    out.push(code);
+    write(out)?;
+    finish(out, at)
+}
+
+/// Write a bare function code with no body of its own.
+fn encode_bare(out: &mut Vec<u8>, code: u8) -> Result<()> {
+    let at = out.len();
+    out.push(code);
+    finish(out, at)
 }
 
 /// Encode a counted body: the byte count followed by the data (FR-R-023,
 /// FR-R-025).
-fn encode_counted(code: u8, data: &[u8]) -> Result<Vec<u8>> {
-    let count = u8::try_from(data.len()).map_err(|_| Error::PduTooLarge {
-        len: data.len() + 2,
+fn encode_counted(
+    out: &mut Vec<u8>,
+    code: u8,
+    data_len: usize,
+    write_data: impl FnOnce(&mut Vec<u8>),
+) -> Result<()> {
+    let count = u8::try_from(data_len).map_err(|_| Error::PduTooLarge {
+        len: data_len + 2,
         max: MAX_PDU_LEN,
     })?;
-    let mut bytes = vec![code, count];
-    bytes.extend_from_slice(data);
-    finish(bytes)
+    let at = out.len();
+    out.reserve(data_len.saturating_add(2));
+    out.push(code);
+    out.push(count);
+    write_data(out);
+    finish(out, at)
+}
+
+/// Append registers as big-endian words, with no buffer in between
+/// (FR-R-003, FR-R-143).
+pub(super) fn push_registers(out: &mut Vec<u8>, registers: &[RegisterValue]) {
+    out.reserve(registers.len().saturating_mul(2));
+    for register in registers {
+        out.extend_from_slice(&register.0.to_be_bytes());
+    }
+}
+
+/// Append opaque words as big-endian bytes, with no buffer in between.
+fn push_words(out: &mut Vec<u8>, words: &[u16]) {
+    out.reserve(words.len().saturating_mul(2));
+    for word in words {
+        out.extend_from_slice(&word.to_be_bytes());
+    }
+}
+
+/// Append bits packed least-significant-bit first (FR-R-024).
+fn push_bits(out: &mut Vec<u8>, bits: &[bool]) {
+    out.reserve(packed_len(bits.len()));
+    for chunk in bits.chunks(8) {
+        let byte = chunk
+            .iter()
+            .enumerate()
+            .filter(|(_, set)| **set)
+            .fold(0u8, |byte, (index, _)| byte | (1u8 << index));
+        out.push(byte);
+    }
+}
+
+/// How many bytes `count` bits pack into (FR-R-024).
+fn packed_len(count: usize) -> usize {
+    count.div_ceil(8)
 }
 
 impl RequestPdu {
@@ -789,28 +857,66 @@ impl RequestPdu {
         }
     }
 
-    /// Encode to a request PDU.
+    /// Encode to a request PDU, allocating a buffer for it (FR-R-140).
+    ///
+    /// # Errors
+    ///
+    /// Fails if a field is out of range or the PDU would exceed its maximum
+    /// length.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        self.encode_into(&mut out)?;
+        Ok(out)
+    }
+
+    /// Encode to a request PDU, appending to `out` (FR-R-140).
+    ///
+    /// What `out` already holds is left alone, and a failure restores it
+    /// exactly (FR-R-142), so one buffer serves frame after frame.
+    ///
+    /// # Errors
+    ///
+    /// Fails if a field is out of range or the PDU would exceed its maximum
+    /// length.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
+        let at = out.len();
+        let result = self.write(out);
+        if result.is_err() {
+            // Nothing partial survives a failure (FR-R-142).
+            out.truncate(at);
+        }
+        result
+    }
+
+    /// The encoding itself; [`Self::encode_into`] owns the failure contract.
+    fn write(&self, out: &mut Vec<u8>) -> Result<()> {
         match *self {
             Self::ReadCoils { address, quantity } => {
-                encode_read(1, address, quantity, 1, MAX_READ_BITS)
+                encode_read(out, 1, address, quantity, 1, MAX_READ_BITS)
             }
             Self::ReadDiscreteInputs { address, quantity } => {
-                encode_read(2, address, quantity, 1, MAX_READ_BITS)
+                encode_read(out, 2, address, quantity, 1, MAX_READ_BITS)
             }
             Self::ReadHoldingRegisters { address, quantity } => {
-                encode_read(3, address, quantity, 1, MAX_READ_REGISTERS)
+                encode_read(out, 3, address, quantity, 1, MAX_READ_REGISTERS)
             }
             Self::ReadInputRegisters { address, quantity } => {
-                encode_read(4, address, quantity, 1, MAX_READ_REGISTERS)
+                encode_read(out, 4, address, quantity, 1, MAX_READ_REGISTERS)
             }
             Self::WriteSingleCoil { address, value } => {
-                encode_single(5, address, if value { COIL_ON } else { COIL_OFF })
+                encode_single(out, 5, address, if value { COIL_ON } else { COIL_OFF })
             }
-            Self::WriteSingleRegister { address, value } => encode_single(6, address, value.0),
+            Self::WriteSingleRegister { address, value } => encode_single(out, 6, address, value.0),
             Self::WriteMultipleCoils { address, ref coils } => {
                 let quantity = quantity_of("quantity", coils.len(), 1, MAX_WRITE_BITS)?;
-                encode_quantified(15, address, Quantity(quantity), &bits_to_bytes(coils))
+                encode_quantified(
+                    out,
+                    15,
+                    address,
+                    Quantity(quantity),
+                    packed_len(coils.len()),
+                    |out| push_bits(out, coils),
+                )
             }
             Self::WriteMultipleRegisters {
                 address,
@@ -818,10 +924,12 @@ impl RequestPdu {
             } => {
                 let quantity = quantity_of("quantity", registers.len(), 1, MAX_WRITE_REGISTERS)?;
                 encode_quantified(
+                    out,
                     16,
                     address,
                     Quantity(quantity),
-                    &registers_to_bytes(registers),
+                    registers.len().saturating_mul(2),
+                    |out| push_registers(out, registers),
                 )
             }
             Self::MaskWriteRegister {
@@ -829,11 +937,13 @@ impl RequestPdu {
                 and_mask,
                 or_mask,
             } => {
-                let mut bytes = vec![22];
-                bytes.extend_from_slice(&address.0.to_be_bytes());
-                bytes.extend_from_slice(&and_mask.0.to_be_bytes());
-                bytes.extend_from_slice(&or_mask.0.to_be_bytes());
-                finish(bytes)
+                let at = out.len();
+                out.reserve(7);
+                out.push(22);
+                out.extend_from_slice(&address.0.to_be_bytes());
+                out.extend_from_slice(&and_mask.0.to_be_bytes());
+                out.extend_from_slice(&or_mask.0.to_be_bytes());
+                finish(out, at)
             }
             Self::ReadWriteMultipleRegisters {
                 read_address,
@@ -844,39 +954,44 @@ impl RequestPdu {
                 check_range("read quantity", read_quantity.0, 1, MAX_READ_REGISTERS)?;
                 let write_quantity =
                     quantity_of("write quantity", registers.len(), 1, MAX_RW_WRITE_REGISTERS)?;
-                let mut bytes = vec![23];
-                bytes.extend_from_slice(&read_address.0.to_be_bytes());
-                bytes.extend_from_slice(&read_quantity.0.to_be_bytes());
-                bytes.extend_from_slice(&write_address.0.to_be_bytes());
-                bytes.extend_from_slice(&write_quantity.to_be_bytes());
-                let data = registers_to_bytes(registers);
-                bytes.push(u8::try_from(data.len()).unwrap_or(u8::MAX));
-                bytes.extend_from_slice(&data);
-                finish(bytes)
+                let data_len = registers.len().saturating_mul(2);
+                let at = out.len();
+                out.reserve(data_len.saturating_add(10));
+                out.push(23);
+                out.extend_from_slice(&read_address.0.to_be_bytes());
+                out.extend_from_slice(&read_quantity.0.to_be_bytes());
+                out.extend_from_slice(&write_address.0.to_be_bytes());
+                out.extend_from_slice(&write_quantity.to_be_bytes());
+                out.push(u8::try_from(data_len).unwrap_or(u8::MAX));
+                push_registers(out, registers);
+                finish(out, at)
             }
-            Self::ReadExceptionStatus => finish(vec![7]),
+            Self::ReadExceptionStatus => encode_bare(out, 7),
             Self::Diagnostics {
                 sub_function,
                 ref data,
-            } => encode_diagnostics(8, sub_function, data),
-            Self::GetCommEventCounter => finish(vec![11]),
-            Self::GetCommEventLog => finish(vec![12]),
-            Self::ReportServerId => finish(vec![17]),
+            } => encode_diagnostics(out, 8, sub_function, data),
+            Self::GetCommEventCounter => encode_bare(out, 11),
+            Self::GetCommEventLog => encode_bare(out, 12),
+            Self::ReportServerId => encode_bare(out, 17),
             Self::ReadFileRecord { ref records } => {
-                encode_body(20, file::encode_read_requests(records)?)
+                encode_body(out, 20, |out| file::encode_read_requests_into(records, out))
             }
             Self::WriteFileRecord { ref records } => {
-                encode_body(21, file::encode_write_records(records)?)
+                encode_body(out, 21, |out| file::encode_write_records_into(records, out))
             }
             Self::ReadFifoQueue { address } => {
-                let mut bytes = vec![24];
-                bytes.extend_from_slice(&address.0.to_be_bytes());
-                finish(bytes)
+                let at = out.len();
+                out.reserve(3);
+                out.push(24);
+                out.extend_from_slice(&address.0.to_be_bytes());
+                finish(out, at)
             }
-            Self::EncapsulatedInterfaceTransport(ref request) => {
-                encode_body(43, mei::encode_request(request))
-            }
-            Self::Custom { code, ref data } => encode_custom(code, data),
+            Self::EncapsulatedInterfaceTransport(ref request) => encode_body(out, 43, |out| {
+                mei::encode_request_into(request, out);
+                Ok(())
+            }),
+            Self::Custom { code, ref data } => encode_custom(out, code, data),
         }
     }
 }
@@ -1011,51 +1126,108 @@ impl ResponsePdu {
         }
     }
 
-    /// Encode to a response PDU.
+    /// Encode to a response PDU, allocating a buffer for it (FR-R-140).
+    ///
+    /// # Errors
+    ///
+    /// Fails if a field is out of range or the PDU would exceed its maximum
+    /// length.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        self.encode_into(&mut out)?;
+        Ok(out)
+    }
+
+    /// Encode to a response PDU, appending to `out` (FR-R-140).
+    ///
+    /// What `out` already holds is left alone, and a failure restores it
+    /// exactly (FR-R-142), so one buffer serves frame after frame.
+    ///
+    /// # Errors
+    ///
+    /// Fails if a field is out of range or the PDU would exceed its maximum
+    /// length.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
+        let at = out.len();
+        let result = self.write(out);
+        if result.is_err() {
+            // Nothing partial survives a failure (FR-R-142).
+            out.truncate(at);
+        }
+        result
+    }
+
+    /// The encoding itself; [`Self::encode_into`] owns the failure contract.
+    fn write(&self, out: &mut Vec<u8>) -> Result<()> {
         match self {
-            Self::ReadCoils { coils } => encode_counted(1, &bits_to_bytes(coils)),
-            Self::ReadDiscreteInputs { inputs } => encode_counted(2, &bits_to_bytes(inputs)),
+            Self::ReadCoils { coils } => {
+                encode_counted(out, 1, packed_len(coils.len()), |out| push_bits(out, coils))
+            }
+            Self::ReadDiscreteInputs { inputs } => {
+                encode_counted(out, 2, packed_len(inputs.len()), |out| {
+                    push_bits(out, inputs)
+                })
+            }
             Self::ReadHoldingRegisters { registers } => {
-                encode_counted(3, &registers_to_bytes(registers))
+                encode_counted(out, 3, registers.len().saturating_mul(2), |out| {
+                    push_registers(out, registers)
+                })
             }
             Self::ReadInputRegisters { registers } => {
-                encode_counted(4, &registers_to_bytes(registers))
+                encode_counted(out, 4, registers.len().saturating_mul(2), |out| {
+                    push_registers(out, registers)
+                })
             }
             Self::WriteSingleCoil { address, value } => {
-                encode_single(5, *address, if *value { COIL_ON } else { COIL_OFF })
+                encode_single(out, 5, *address, if *value { COIL_ON } else { COIL_OFF })
             }
-            Self::WriteSingleRegister { address, value } => encode_single(6, *address, value.0),
+            Self::WriteSingleRegister { address, value } => {
+                encode_single(out, 6, *address, value.0)
+            }
             Self::WriteMultipleCoils { address, quantity } => {
-                encode_echo_quantity(15, *address, *quantity)
+                encode_echo_quantity(out, 15, *address, *quantity)
             }
             Self::WriteMultipleRegisters { address, quantity } => {
-                encode_echo_quantity(16, *address, *quantity)
+                encode_echo_quantity(out, 16, *address, *quantity)
             }
             Self::MaskWriteRegister {
                 address,
                 and_mask,
                 or_mask,
             } => {
-                let mut bytes = vec![22];
-                bytes.extend_from_slice(&address.0.to_be_bytes());
-                bytes.extend_from_slice(&and_mask.0.to_be_bytes());
-                bytes.extend_from_slice(&or_mask.0.to_be_bytes());
-                finish(bytes)
+                let at = out.len();
+                out.reserve(7);
+                out.push(22);
+                out.extend_from_slice(&address.0.to_be_bytes());
+                out.extend_from_slice(&and_mask.0.to_be_bytes());
+                out.extend_from_slice(&or_mask.0.to_be_bytes());
+                finish(out, at)
             }
             Self::ReadWriteMultipleRegisters { registers } => {
-                encode_counted(23, &registers_to_bytes(registers))
+                encode_counted(out, 23, registers.len().saturating_mul(2), |out| {
+                    push_registers(out, registers)
+                })
             }
-            Self::ReadExceptionStatus { status } => finish(vec![7, status.0]),
-            Self::Diagnostics { sub_function, data } => encode_diagnostics(8, *sub_function, data),
+            Self::ReadExceptionStatus { status } => {
+                let at = out.len();
+                out.reserve(2);
+                out.push(7);
+                out.push(status.0);
+                finish(out, at)
+            }
+            Self::Diagnostics { sub_function, data } => {
+                encode_diagnostics(out, 8, *sub_function, data)
+            }
             Self::GetCommEventCounter {
                 status,
                 event_count,
             } => {
-                let mut bytes = vec![11];
-                bytes.extend_from_slice(&status.to_be_bytes());
-                bytes.extend_from_slice(&event_count.to_be_bytes());
-                finish(bytes)
+                let at = out.len();
+                out.reserve(5);
+                out.push(11);
+                out.extend_from_slice(&status.to_be_bytes());
+                out.extend_from_slice(&event_count.to_be_bytes());
+                finish(out, at)
             }
             Self::GetCommEventLog {
                 status,
@@ -1066,34 +1238,41 @@ impl ResponsePdu {
                 let byte_count = EVENT_LOG_FIXED_BYTES
                     .saturating_add(u32::try_from(events.len()).unwrap_or(u32::MAX));
                 check_event_log_bytes(byte_count)?;
-                let mut bytes = vec![12, u8::try_from(byte_count).unwrap_or(u8::MAX)];
-                bytes.extend_from_slice(&status.to_be_bytes());
-                bytes.extend_from_slice(&event_count.to_be_bytes());
-                bytes.extend_from_slice(&message_count.to_be_bytes());
-                bytes.extend_from_slice(events);
-                finish(bytes)
+                let at = out.len();
+                out.reserve(events.len().saturating_add(8));
+                out.push(12);
+                out.push(u8::try_from(byte_count).unwrap_or(u8::MAX));
+                out.extend_from_slice(&status.to_be_bytes());
+                out.extend_from_slice(&event_count.to_be_bytes());
+                out.extend_from_slice(&message_count.to_be_bytes());
+                out.extend_from_slice(events);
+                finish(out, at)
             }
-            Self::ReportServerId { data } => encode_counted(17, data),
-            Self::ReadFileRecord { records } => {
-                encode_body(20, file::encode_read_responses(records)?)
+            Self::ReportServerId { data } => {
+                encode_counted(out, 17, data.len(), |out| out.extend_from_slice(data))
             }
+            Self::ReadFileRecord { records } => encode_body(out, 20, |out| {
+                file::encode_read_responses_into(records, out)
+            }),
             Self::WriteFileRecord { records } => {
-                encode_body(21, file::encode_write_records(records)?)
+                encode_body(out, 21, |out| file::encode_write_records_into(records, out))
             }
             Self::ReadFifoQueue { values } => {
                 let count = quantity_of("FIFO count", values.len(), 0, MAX_FIFO_COUNT)?;
-                let mut bytes = vec![24];
                 let byte_count = count * 2 + 2;
-                bytes.extend_from_slice(&byte_count.to_be_bytes());
-                bytes.extend_from_slice(&count.to_be_bytes());
-                bytes.extend_from_slice(&registers_to_bytes(values));
-                finish(bytes)
+                let at = out.len();
+                out.reserve(values.len().saturating_mul(2).saturating_add(5));
+                out.push(24);
+                out.extend_from_slice(&byte_count.to_be_bytes());
+                out.extend_from_slice(&count.to_be_bytes());
+                push_registers(out, values);
+                finish(out, at)
             }
             Self::EncapsulatedInterfaceTransport(response) => {
-                encode_body(43, mei::encode_response(response)?)
+                encode_body(out, 43, |out| mei::encode_response_into(response, out))
             }
-            Self::Custom { code, data } => encode_custom(*code, data),
-            Self::Exception(exception) => exception.encode(),
+            Self::Custom { code, data } => encode_custom(out, *code, data),
+            Self::Exception(exception) => exception.encode_into(out),
         }
     }
 }
@@ -1113,19 +1292,6 @@ fn fifo_values(input: &mut Input<'_>) -> ParseResult<Vec<RegisterValue>> {
     }
     let data = take(usize::from(count) * 2).parse_next(input)?;
     Ok(registers_from_bytes(data))
-}
-
-/// Flatten registers to big-endian bytes (FR-R-003).
-pub(super) fn registers_to_bytes(registers: &[RegisterValue]) -> Vec<u8> {
-    registers
-        .iter()
-        .flat_map(|register| register.0.to_be_bytes())
-        .collect()
-}
-
-/// Flatten opaque 16-bit words to big-endian bytes (FR-R-003).
-fn words_to_bytes(words: &[u16]) -> Vec<u8> {
-    words.iter().flat_map(|word| word.to_be_bytes()).collect()
 }
 
 #[cfg(test)]
@@ -1171,6 +1337,252 @@ mod tests {
             .iter()
             .flat_map(|byte| (0..8).map(move |bit| byte & (1 << bit) != 0))
             .collect()
+    }
+
+    /// One request and one response per function code the crate names, so a
+    /// property asserted over this list is asserted over the whole encoder.
+    fn every_pdu() -> (Vec<RequestPdu>, Vec<ResponsePdu>) {
+        let requests = vec![
+            RequestPdu::ReadCoils {
+                address: Address(0x0013),
+                quantity: Quantity(0x0013),
+            },
+            RequestPdu::ReadDiscreteInputs {
+                address: Address(0x00C4),
+                quantity: Quantity(0x0016),
+            },
+            RequestPdu::ReadHoldingRegisters {
+                address: Address(0x006B),
+                quantity: Quantity(3),
+            },
+            RequestPdu::ReadInputRegisters {
+                address: Address(8),
+                quantity: Quantity(1),
+            },
+            RequestPdu::WriteSingleCoil {
+                address: Address(0x00AC),
+                value: true,
+            },
+            RequestPdu::WriteSingleRegister {
+                address: Address(1),
+                value: RegisterValue(3),
+            },
+            RequestPdu::ReadExceptionStatus,
+            RequestPdu::Diagnostics {
+                sub_function: DiagnosticSubFunction::ReturnQueryData,
+                data: alloc::vec![0xA5, 0x37],
+            },
+            RequestPdu::GetCommEventCounter,
+            RequestPdu::GetCommEventLog,
+            RequestPdu::WriteMultipleCoils {
+                address: Address(0x0013),
+                coils: alloc::vec![
+                    true, false, true, true, false, false, true, true, true, false
+                ],
+            },
+            RequestPdu::WriteMultipleRegisters {
+                address: Address(1),
+                registers: alloc::vec![RegisterValue(0x000A), RegisterValue(0x0102)],
+            },
+            RequestPdu::ReportServerId,
+            RequestPdu::ReadFileRecord {
+                records: alloc::vec![FileRecordRead {
+                    file_number: FileNumber(4),
+                    record_number: RecordNumber(1),
+                    record_length: RecordLength(2),
+                }],
+            },
+            RequestPdu::WriteFileRecord {
+                records: alloc::vec![FileRecordWrite {
+                    file_number: FileNumber(4),
+                    record_number: RecordNumber(7),
+                    values: alloc::vec![RegisterValue(0x06AF), RegisterValue(0x04BE)],
+                }],
+            },
+            RequestPdu::MaskWriteRegister {
+                address: Address(4),
+                and_mask: Mask(0x00F2),
+                or_mask: Mask(0x0025),
+            },
+            RequestPdu::ReadWriteMultipleRegisters {
+                read_address: Address(3),
+                read_quantity: Quantity(6),
+                write_address: Address(0x000E),
+                registers: alloc::vec![RegisterValue(0x00FF), RegisterValue(0x00FF)],
+            },
+            RequestPdu::ReadFifoQueue {
+                address: Address(0x04DE),
+            },
+            RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Basic,
+                object_id: 0x00,
+            }),
+            RequestPdu::Custom {
+                code: 0x65,
+                data: alloc::vec![0x01, 0x02],
+            },
+        ];
+
+        let responses = vec![
+            ResponsePdu::ReadCoils {
+                coils: spec_example_coils(),
+            },
+            ResponsePdu::ReadDiscreteInputs {
+                inputs: alloc::vec![true; 8],
+            },
+            ResponsePdu::ReadHoldingRegisters {
+                registers: alloc::vec![RegisterValue(0x022B), RegisterValue(0x0000)],
+            },
+            ResponsePdu::ReadInputRegisters {
+                registers: alloc::vec![RegisterValue(0x000A)],
+            },
+            ResponsePdu::WriteSingleCoil {
+                address: Address(0x00AC),
+                value: true,
+            },
+            ResponsePdu::WriteSingleRegister {
+                address: Address(1),
+                value: RegisterValue(3),
+            },
+            ResponsePdu::ReadExceptionStatus {
+                status: ExceptionStatus(0x6D),
+            },
+            ResponsePdu::Diagnostics {
+                sub_function: DiagnosticSubFunction::ReturnQueryData,
+                data: alloc::vec![0xA5, 0x37],
+            },
+            ResponsePdu::GetCommEventCounter {
+                status: 0xFFFF,
+                event_count: 0x0108,
+            },
+            ResponsePdu::GetCommEventLog {
+                status: 0x0000,
+                event_count: 0x0108,
+                message_count: 0x0121,
+                events: alloc::vec![0x20, 0x00],
+            },
+            ResponsePdu::WriteMultipleCoils {
+                address: Address(0x0013),
+                quantity: Quantity(10),
+            },
+            ResponsePdu::WriteMultipleRegisters {
+                address: Address(1),
+                quantity: Quantity(2),
+            },
+            ResponsePdu::ReportServerId {
+                data: alloc::vec![0x11, 0xFF, 0xAB],
+            },
+            ResponsePdu::ReadFileRecord {
+                records: alloc::vec![FileRecordReadResponse {
+                    values: alloc::vec![
+                        RegisterValue(0x0DFE),
+                        RegisterValue(0x0020),
+                        RegisterValue(0x33CD),
+                    ],
+                }],
+            },
+            ResponsePdu::WriteFileRecord {
+                records: alloc::vec![FileRecordWrite {
+                    file_number: FileNumber(4),
+                    record_number: RecordNumber(7),
+                    values: alloc::vec![RegisterValue(0x06AF)],
+                }],
+            },
+            ResponsePdu::MaskWriteRegister {
+                address: Address(4),
+                and_mask: Mask(0x00F2),
+                or_mask: Mask(0x0025),
+            },
+            ResponsePdu::ReadWriteMultipleRegisters {
+                registers: alloc::vec![RegisterValue(0x00FE), RegisterValue(0x0ACD)],
+            },
+            ResponsePdu::ReadFifoQueue {
+                values: alloc::vec![RegisterValue(0x01B8), RegisterValue(0x1284)],
+            },
+            ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::ReadDeviceIdentification {
+                read_device_id_code: ReadDeviceIdCode::Basic,
+                conformity_level: 0x01,
+                more_follows: false,
+                next_object_id: 0x00,
+                objects: alloc::vec![DeviceIdObject {
+                    id: 0x00,
+                    value: alloc::vec![0x41]
+                }],
+            }),
+            ResponsePdu::Custom {
+                code: 0x65,
+                data: alloc::vec![0x01, 0x02],
+            },
+            ResponsePdu::Exception(ExceptionResponse {
+                function: FunctionCode::ReadHoldingRegisters,
+                exception: ExceptionCode::IllegalDataAddress,
+            }),
+        ];
+
+        (requests, responses)
+    }
+
+    #[test]
+    /// FR-R-140 — the appending form and the allocating form describe the same
+    /// bytes, for every function code the crate names. They are one
+    /// implementation with two entry points, and this is what says so.
+    fn ut_encode_into_matches_encode() {
+        let (requests, responses) = every_pdu();
+        for request in requests {
+            let mut out = Vec::new();
+            request.encode_into(&mut out).expect("encodes");
+            assert_eq!(Ok(out), request.encode(), "request {request:?}");
+        }
+        for response in responses {
+            let mut out = Vec::new();
+            response.encode_into(&mut out).expect("encodes");
+            assert_eq!(Ok(out), response.encode(), "response {response:?}");
+        }
+    }
+
+    #[test]
+    /// FR-R-140 — appending appends: the buffer's existing contents are left
+    /// alone, because when to clear is the caller's decision. That is what lets
+    /// an ADU encoder write its header first and the PDU after it, into one
+    /// buffer.
+    fn ut_encode_into_appends_after_existing_contents() {
+        let request = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let mut out = alloc::vec![0xDE, 0xAD];
+        request.encode_into(&mut out).expect("encodes");
+        assert_eq!(out, alloc::vec![0xDE, 0xAD, 0x03, 0x00, 0x6B, 0x00, 0x03]);
+    }
+
+    #[test]
+    /// FR-R-142 — a failed appending encode restores the buffer to its entry
+    /// state. The quantity below is past the 125-register maximum (FR-R-031),
+    /// so encoding fails after the function code would otherwise have been
+    /// written; a caller that reuses this buffer must not find that stray byte
+    /// in the next frame it sends.
+    fn ut_failed_encode_into_restores_the_buffer() {
+        let mut out = alloc::vec![0xDE, 0xAD];
+        let before = out.clone();
+
+        let request = RequestPdu::ReadHoldingRegisters {
+            address: Address(0),
+            quantity: Quantity(126),
+        };
+        assert!(
+            request.encode_into(&mut out).is_err(),
+            "126 registers is too many"
+        );
+        assert_eq!(out, before, "the buffer is exactly as it was");
+
+        let response = ResponsePdu::ReadHoldingRegisters {
+            registers: alloc::vec![RegisterValue(0); 126],
+        };
+        assert!(
+            response.encode_into(&mut out).is_err(),
+            "126 registers is too many"
+        );
+        assert_eq!(out, before, "and after a failed response too");
     }
 
     #[test]

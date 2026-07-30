@@ -4,6 +4,7 @@
 //! either knows (Read Device Identification) or carries whole (CANopen, and
 //! anything unnamed).
 
+#[cfg(test)]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -152,14 +153,19 @@ pub(super) fn decode_request(input: &mut Input<'_>) -> ParseResult<MeiRequest> {
 }
 
 /// Encode an Encapsulated Interface Transport request body (FR-R-070).
-pub(super) fn encode_request(request: &MeiRequest) -> Vec<u8> {
+pub(super) fn encode_request_into(request: &MeiRequest, out: &mut Vec<u8>) {
     match *request {
-        MeiRequest::CanOpen { ref data } => opaque_body(MEI_CANOPEN, data),
+        MeiRequest::CanOpen { ref data } => opaque_body_into(MEI_CANOPEN, data, out),
         MeiRequest::ReadDeviceIdentification {
             read_device_id_code,
             object_id,
-        } => vec![MEI_READ_DEVICE_ID, read_device_id_code.encode(), object_id],
-        MeiRequest::Other { mei_type, ref data } => opaque_body(mei_type, data),
+        } => {
+            out.reserve(3);
+            out.push(MEI_READ_DEVICE_ID);
+            out.push(read_device_id_code.encode());
+            out.push(object_id);
+        }
+        MeiRequest::Other { mei_type, ref data } => opaque_body_into(mei_type, data, out),
     }
 }
 
@@ -179,9 +185,12 @@ pub(super) fn decode_response(input: &mut Input<'_>) -> ParseResult<MeiResponse>
 }
 
 /// Encode an Encapsulated Interface Transport response body (FR-R-070).
-pub(super) fn encode_response(response: &MeiResponse) -> Result<Vec<u8>> {
+pub(super) fn encode_response_into(response: &MeiResponse, out: &mut Vec<u8>) -> Result<()> {
     match *response {
-        MeiResponse::CanOpen { ref data } => Ok(opaque_body(MEI_CANOPEN, data)),
+        MeiResponse::CanOpen { ref data } => {
+            opaque_body_into(MEI_CANOPEN, data, out);
+            Ok(())
+        }
         MeiResponse::ReadDeviceIdentification {
             read_device_id_code,
             conformity_level,
@@ -195,18 +204,17 @@ pub(super) fn encode_response(response: &MeiResponse) -> Result<Vec<u8>> {
                 min: 0,
                 max: u32::from(u8::MAX),
             })?;
-            let mut bytes = vec![
-                MEI_READ_DEVICE_ID,
-                read_device_id_code.encode(),
-                conformity_level,
-                if more_follows {
-                    MORE_FOLLOWS_YES
-                } else {
-                    MORE_FOLLOWS_NO
-                },
-                next_object_id,
-                count,
-            ];
+            out.reserve(6);
+            out.push(MEI_READ_DEVICE_ID);
+            out.push(read_device_id_code.encode());
+            out.push(conformity_level);
+            out.push(if more_follows {
+                MORE_FOLLOWS_YES
+            } else {
+                MORE_FOLLOWS_NO
+            });
+            out.push(next_object_id);
+            out.push(count);
             for object in objects {
                 let length = u8::try_from(object.value.len()).map_err(|_| Error::OutOfRange {
                     field: "object length",
@@ -214,13 +222,17 @@ pub(super) fn encode_response(response: &MeiResponse) -> Result<Vec<u8>> {
                     min: 0,
                     max: u32::from(u8::MAX),
                 })?;
-                bytes.push(object.id);
-                bytes.push(length);
-                bytes.extend_from_slice(&object.value);
+                out.reserve(object.value.len().saturating_add(2));
+                out.push(object.id);
+                out.push(length);
+                out.extend_from_slice(&object.value);
             }
-            Ok(bytes)
+            Ok(())
         }
-        MeiResponse::Other { mei_type, ref data } => Ok(opaque_body(mei_type, data)),
+        MeiResponse::Other { mei_type, ref data } => {
+            opaque_body_into(mei_type, data, out);
+            Ok(())
+        }
     }
 }
 
@@ -275,16 +287,23 @@ fn opaque(input: &mut Input<'_>) -> ParseResult<Vec<u8>> {
 }
 
 /// An MEI type followed by its opaque body.
-fn opaque_body(mei_type: u8, data: &[u8]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(data.len().saturating_add(1));
-    bytes.push(mei_type);
-    bytes.extend_from_slice(data);
-    bytes
+fn opaque_body_into(mei_type: u8, data: &[u8], out: &mut Vec<u8>) {
+    out.reserve(data.len().saturating_add(1));
+    out.push(mei_type);
+    out.extend_from_slice(data);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encode into a fresh buffer, so a test reads as it did before the
+    /// appending form (FR-R-140) replaced the allocating one.
+    fn encode_into(response: &MeiResponse) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        encode_response_into(response, &mut out)?;
+        Ok(out)
+    }
 
     /// A Read Device Identification response carrying `objects`, otherwise the
     /// shape of the specification's example (§6.21): basic conformity, no
@@ -313,7 +332,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            encode_response(&response(objects)),
+            encode_into(&response(objects)),
             Err(Error::OutOfRange {
                 field: "object count",
                 value: 256,
@@ -333,7 +352,7 @@ mod tests {
             value: vec![0x41; 256],
         }]);
         assert_eq!(
-            encode_response(&too_long),
+            encode_into(&too_long),
             Err(Error::OutOfRange {
                 field: "object length",
                 value: 256,
@@ -346,7 +365,7 @@ mod tests {
             id: 0x00,
             value: vec![0x41; 255],
         }]);
-        let encoded = encode_response(&at_limit).expect("255 bytes fit the length byte");
+        let encoded = encode_into(&at_limit).expect("255 bytes fit the length byte");
         assert_eq!(
             encoded.get(..8),
             Some([MEI_READ_DEVICE_ID, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0xFF].as_slice()),
