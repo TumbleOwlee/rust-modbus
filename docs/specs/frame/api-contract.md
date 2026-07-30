@@ -193,6 +193,19 @@ pub enum AduBoundary {
 }
 ```
 
+```rust
+impl AduBoundary {
+    /// Whether the next frame boundary is findable from the wire alone (FR-R-144).
+    pub fn is_self_locating(&self) -> bool;
+}
+```
+
+`is_self_locating` reports whether a failure is recoverable: `Silence` and `Delimited`
+locate the next boundary from the wire itself and are therefore self-locating, while
+`Prefixed` learns the next boundary only from the frame that just failed and is not.
+The client and the server consult it to decide whether an undecodable frame costs one
+frame or the whole link (CL-R-023, SV-R-050).
+
 `boundary` states where an ADU ends (FR-R-122) without performing any I/O, so
 the rule stays testable on byte vectors and available on `no_std`. `Tcp` is
 `Prefixed { prefix: 6, .. }` with `total` validating the MBAP length per

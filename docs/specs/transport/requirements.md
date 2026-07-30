@@ -41,6 +41,13 @@ discarded.
 the transport shall consume exactly that frame's bytes, surface the error, and
 remain usable for the next call.
 
+**TR-R-044** — A receive that fails **before** an ADU has been delimited shall, on a
+self-locating framing (FR-R-144), discard the bytes accumulated for that attempt, so
+the next receive begins at the next boundary the wire provides. On a framing that is
+not self-locating, the accumulated bytes shall be retained and the failure is terminal
+for that stream. This complements TR-R-005, which governs a frame that was delimited
+and then failed to decode.
+
 **TR-R-043** — A transport shall encode each outgoing ADU into a single buffer
 that it owns and reuses across frames, clearing its contents but retaining its
 capacity between sends, so that sending in steady state performs no allocation.

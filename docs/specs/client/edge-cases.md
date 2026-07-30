@@ -15,7 +15,9 @@ here so they are not mistaken for oversights and silently "fixed".
 | Header corresponds, function code is another function's | `UnexpectedFunction { expected, actual }`, immediately (CL-R-022) |
 | Header corresponds, response is an exception to the function requested | `Exception { function, exception }` from a typed method; the response verbatim from `call` (CL-R-040, CL-R-042) |
 | Exception code outside the named set | Surfaced as `ExceptionCode::Other` (CL-R-041) |
-| Response undecodable (bad CRC/LRC, bad length, malformed body) | The frame area's error unaltered; the client becomes desynchronized (CL-R-023) |
+| Response undecodable (bad CRC/LRC, bad length, malformed body), TCP | The frame area's error unaltered; the client becomes desynchronized (CL-R-023) |
+| Response undecodable, RTU or ASCII | The frame area's error unaltered; the client stays usable and the next request proceeds (CL-R-023) |
+| A frame split in two by a spurious gap on RTU | Both halves fail their checksum, one per receive; each costs one frame and the link stays usable |
 | A late response to a timed-out request arrives during the next request | Discarded by CL-R-021 if it does not correspond — but on RTU/ASCII to the same unit it *does* correspond, which is why CL-R-031 refuses the next request outright |
 | Server replies to a broadcast (it should not) | The reply is never read by the broadcast request; it is left in the stream and desynchronizes the next exchange |
 

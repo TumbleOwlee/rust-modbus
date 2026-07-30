@@ -548,3 +548,11 @@ frame.
 except in ASCII framing, whose wire form is a character transformation of the
 binary ADU (FR-R-110) rather than a wrapping of it, and which may use one scratch
 buffer per frame.
+
+**FR-R-144** — Each ADU boundary rule shall state whether it is **self-locating**:
+whether the next frame boundary can be found from the wire alone, without reference
+to the frame before it. A boundary determined by inter-frame silence or by delimiters
+shall be self-locating. A boundary determined by a length field shall not be, since the
+length that would delimit the next frame is carried by the frame that failed. This
+property shall be derived from the boundary rule itself, so that a framing cannot state
+one rule and behave by another.
