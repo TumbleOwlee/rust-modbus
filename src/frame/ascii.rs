@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
 use crate::frame::framing::{AduBoundary, Framing};
-use crate::frame::pdu::{RequestPdu, ResponsePdu};
+use crate::frame::pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu};
 use crate::frame::value::UnitId;
 
 /// ASCII framing (FR-R-110).
@@ -33,8 +33,12 @@ impl Framing for Ascii {
         Ok((address, RequestPdu::decode(&pdu)?))
     }
 
-    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> {
-        Ok(wrap(*header, &pdu.encode()?))
+    fn encode_request_into(
+        header: &Self::Header,
+        pdu: &RequestPdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(*header, out, |scratch| pdu.encode_into(scratch))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)> {
@@ -42,8 +46,12 @@ impl Framing for Ascii {
         Ok((address, ResponsePdu::decode(&pdu)?))
     }
 
-    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
-        Ok(wrap(*header, &pdu.encode()?))
+    fn encode_response_into(
+        header: &Self::Header,
+        pdu: &ResponsePdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(*header, out, |scratch| pdu.encode_into(scratch))
     }
 
     /// ASCII is self-delimiting: the printable alphabet leaves `:` and CR LF
@@ -130,19 +138,29 @@ fn split(bytes: &[u8]) -> Result<(UnitId, Vec<u8>)> {
 /// No size check is needed: a PDU is at most 253 bytes (FR-R-002), which with
 /// the address and LRC is 255 encoded bytes, so 510 characters plus the 3 of
 /// overhead is exactly the 513 of FR-R-113.
-fn wrap(address: UnitId, pdu: &[u8]) -> Vec<u8> {
-    let mut covered = Vec::with_capacity(pdu.len().saturating_add(1));
+fn wrap_into(
+    address: UnitId,
+    out: &mut Vec<u8>,
+    encode_pdu: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<()> {
+    // The wire form is a character transformation of the binary ADU rather
+    // than a wrapping of it (FR-R-110), so this framing builds the binary form
+    // in one scratch buffer per frame -- the exception FR-R-143 carves out.
+    let mut covered = Vec::with_capacity(MAX_PDU_LEN.saturating_add(1));
     covered.push(address.0);
-    covered.extend_from_slice(pdu);
+    encode_pdu(&mut covered)?;
 
-    let mut bytes = Vec::with_capacity(covered.len().saturating_mul(2).saturating_add(OVERHEAD));
-    bytes.push(START);
+    // The PDU is complete before a byte of `out` is touched, so a failure has
+    // already returned above and left the caller's buffer untouched
+    // (FR-R-142). One reservation covers the largest ADU (FR-R-141).
+    out.reserve(Ascii::MAX_ADU_LEN);
+    out.push(START);
     for byte in &covered {
-        encode_hex(*byte, &mut bytes);
+        encode_hex(*byte, out);
     }
-    encode_hex(lrc(&covered), &mut bytes);
-    bytes.extend_from_slice(&TERMINATOR);
-    bytes
+    encode_hex(lrc(&covered), out);
+    out.extend_from_slice(&TERMINATOR);
+    Ok(())
 }
 
 /// The LRC: the two's complement of the 8-bit sum of the decoded bytes
