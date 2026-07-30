@@ -41,6 +41,11 @@ discarded.
 the transport shall consume exactly that frame's bytes, surface the error, and
 remain usable for the next call.
 
+**TR-R-043** — A transport shall encode each outgoing ADU into a single buffer
+that it owns and reuses across frames, clearing its contents but retaining its
+capacity between sends, so that sending in steady state performs no allocation.
+That buffer shall never exceed the framing's maximum ADU length.
+
 ---
 
 ## 2. Framing boundaries
