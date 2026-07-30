@@ -80,8 +80,9 @@ that owns the behavior, cited by *that* ID.
 Anything not listed below is expected to carry a citing test.
 
 **Kind 1 — design posture, platform, toolchain, versioning.** Every
-non-functional requirement except `NF-R-012` and `NF-R-014`, which *are* pinned,
-by the property tests in `tests/robustness.rs`. Each of the rest states a fact
+non-functional requirement except `NF-R-009`, `NF-R-012` and `NF-R-014`, which
+*are* pinned — `NF-R-009` by the allocation counts in `tests/allocation.rs`, the
+other two by the property tests in `tests/robustness.rs`. Each of the rest states a fact
 about the build, the toolchain, or the release process, and names its enforcement
 point per `NF-R-021`:
 
@@ -92,7 +93,7 @@ point per `NF-R-021`:
 | `NF-R-004` | The comment above `[dependencies]` in `Cargo.toml` |
 | `NF-R-005`, `NF-R-007` | `rust-version` in `Cargo.toml` and the `msrv` CI job |
 | `NF-R-006` | `rust-toolchain.toml` |
-| `NF-R-008`, `NF-R-009`, `NF-R-010` | Design posture. No benchmark gates CI, by decision (`NF-R-010`) |
+| `NF-R-008`, `NF-R-010` | Design posture. No benchmark gates CI, by decision (`NF-R-010`) |
 | `NF-R-011` | `forbid(unsafe_code)` in `src/lib.rs` |
 | `NF-R-013` | `[lints.clippy]` in `Cargo.toml`, `clippy.toml`, and the `clippy` CI job |
 | `NF-R-015` | `deny.toml` and the `deny` CI job |

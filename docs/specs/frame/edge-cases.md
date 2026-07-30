@@ -75,7 +75,18 @@ mistaken for an oversight and silently "fixed".
 Every row above is an error, never a panic: FR-R-130 admits no exception for any
 input whatsoever.
 
-## 4. Known limitations
+## 4. Encode buffers
+
+| Condition | Behavior |
+|---|---|
+| `encode_into` fails part-way | The buffer is truncated back to its length on entry; nothing partial is left behind (FR-R-142) |
+| `encode_into` on a buffer that already holds bytes | Appends after them; when to clear is the caller's decision, not the frame layer's (FR-R-140) |
+| `encode_into` on a buffer with no spare capacity | Reserves before writing, so the allocation happens once at the top rather than repeatedly beneath (FR-R-141) |
+| A PDU that would exceed `MAX_PDU_LEN` | Too-large error, measured against the bytes *this* call wrote, not the buffer's total length (FR-R-002) |
+| ASCII appending encode | Uses one scratch buffer per frame; RTU and TCP use none (FR-R-143) |
+| `encode` (the allocating form) | One allocation, sized on the framing maximum, then the appending path unchanged (FR-R-140) |
+
+## 5. Known limitations
 
 - **Bit padding is treated differently in requests and responses, on purpose.**
   A bit-read *response* keeps all `8 × byte count` values including padding

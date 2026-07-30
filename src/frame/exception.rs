@@ -1,5 +1,6 @@
 //! Modbus exception responses (FR-R-080 … FR-R-086).
 
+#[cfg(test)]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -128,11 +129,34 @@ impl ExceptionResponse {
     }
 
     /// Encode to an exception response PDU.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the function code has no encoding.
     pub fn encode(self) -> Result<Vec<u8>> {
-        Ok(vec![
-            self.function.encode()? | EXCEPTION_FLAG,
-            self.exception.encode()?,
-        ])
+        let mut out = Vec::new();
+        self.encode_into(&mut out)?;
+        Ok(out)
+    }
+
+    /// Encode to an exception response PDU, appending to `out` (FR-R-140).
+    ///
+    /// Crate-internal: the appending form is public API at the PDU and ADU
+    /// level, and an exception response reaches a caller as a `ResponsePdu`
+    /// variant, which already offers it.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the function code has no encoding.
+    pub(crate) fn encode_into(self, out: &mut Vec<u8>) -> Result<()> {
+        // Both fields are validated before either byte is written, so a failure
+        // leaves `out` untouched (FR-R-142).
+        let function = self.function.encode()? | EXCEPTION_FLAG;
+        let exception = self.exception.encode()?;
+        out.reserve(Self::PDU_LEN);
+        out.push(function);
+        out.push(exception);
+        Ok(())
     }
 }
 

@@ -64,12 +64,33 @@ pub trait Framing {
     /// PDU within it does not decode.
     fn decode_request(bytes: &[u8]) -> Result<(Self::Header, RequestPdu)>;
 
-    /// Encode a request into an ADU.
+    /// Encode a request into an ADU, appending to `out` (FR-R-140).
+    ///
+    /// This is the primitive: [`Self::encode_request`] is defined in terms of
+    /// it, so the two cannot describe different bytes. The framing's maximum
+    /// ADU length is reserved before the first byte is written (FR-R-141), and
+    /// a failure truncates `out` back to the length it had on entry
+    /// (FR-R-142).
     ///
     /// # Errors
     ///
     /// Fails if the PDU does not encode.
-    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>>;
+    fn encode_request_into(
+        header: &Self::Header,
+        pdu: &RequestPdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()>;
+
+    /// Encode a request into an ADU, allocating a buffer for it (FR-R-140).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode.
+    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        Self::encode_request_into(header, pdu, &mut out)?;
+        Ok(out)
+    }
 
     /// Decode an ADU carrying a response.
     ///
@@ -79,13 +100,125 @@ pub trait Framing {
     /// PDU within it does not decode.
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)>;
 
-    /// Encode a response into an ADU.
+    /// Encode a response into an ADU, appending to `out` (FR-R-140).
+    ///
+    /// The primitive, on the same terms as [`Self::encode_request_into`].
     ///
     /// # Errors
     ///
     /// Fails if the PDU does not encode.
-    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>>;
+    fn encode_response_into(
+        header: &Self::Header,
+        pdu: &ResponsePdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()>;
+
+    /// Encode a response into an ADU, allocating a buffer for it (FR-R-140).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode.
+    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        Self::encode_response_into(header, pdu, &mut out)?;
+        Ok(out)
+    }
 
     /// How the end of one of this framing's ADUs is determined (FR-R-122).
     fn boundary() -> AduBoundary;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::ascii::Ascii;
+    use crate::frame::rtu::Rtu;
+    use crate::frame::tcp::{MbapHeader, Tcp};
+    use crate::frame::value::{Address, Quantity, RegisterValue, TransactionId, UnitId};
+    use alloc::vec;
+
+    /// A request every framing encodes without complaint.
+    fn request() -> RequestPdu {
+        RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        }
+    }
+
+    /// A request no framing can encode: 124 registers exceeds the 123 a Write
+    /// Multiple Registers request may carry (FR-R-033).
+    fn unencodable() -> RequestPdu {
+        RequestPdu::WriteMultipleRegisters {
+            address: Address(0),
+            registers: vec![RegisterValue(0); 124],
+        }
+    }
+
+    /// A response every framing encodes without complaint.
+    fn response() -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0x022B)],
+        }
+    }
+
+    /// Assert FR-R-140, FR-R-141 and FR-R-142 over one framing.
+    fn appending_encode_holds<F: Framing>(header: &F::Header) {
+        let allocating = F::encode_request(header, &request()).expect("encodes");
+
+        // FR-R-140 — appending yields the same bytes as allocating, after what
+        // the buffer already held.
+        let mut out = vec![0xAA, 0xBB];
+        F::encode_request_into(header, &request(), &mut out).expect("encodes");
+        assert_eq!(out.first(), Some(&0xAA));
+        assert_eq!(out.get(1), Some(&0xBB));
+        assert_eq!(out.get(2..), Some(allocating.as_slice()));
+
+        // FR-R-140 — and the same holds for a response.
+        let allocating = F::encode_response(header, &response()).expect("encodes");
+        let mut out = Vec::new();
+        F::encode_response_into(header, &response(), &mut out).expect("encodes");
+        assert_eq!(out, allocating);
+
+        // FR-R-141 — the framing's maximum is reserved before the first byte,
+        // so no encode beneath it can reallocate the caller's buffer.
+        let mut out = Vec::new();
+        F::encode_request_into(header, &request(), &mut out).expect("encodes");
+        assert!(
+            out.capacity() >= F::MAX_ADU_LEN,
+            "reserved {} of {}",
+            out.capacity(),
+            F::MAX_ADU_LEN
+        );
+
+        // FR-R-142 — a failure leaves the buffer exactly as it was found.
+        let mut out = vec![0x01, 0x02, 0x03];
+        F::encode_request_into(header, &unencodable(), &mut out).expect_err("rejects");
+        assert_eq!(out, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    /// FR-R-140, FR-R-141, FR-R-142 — RTU's appending encode appends the bytes
+    /// its allocating form returns, reserves the framing maximum first, and
+    /// restores the buffer when it fails.
+    fn ut_rtu_appending_encode() {
+        appending_encode_holds::<Rtu>(&UnitId(0x11));
+    }
+
+    #[test]
+    /// FR-R-140, FR-R-141, FR-R-142 — TCP's appending encode does the same,
+    /// with a length field that is only known once the PDU has been written.
+    fn ut_tcp_appending_encode() {
+        appending_encode_holds::<Tcp>(&MbapHeader {
+            transaction_id: TransactionId(0x0001),
+            unit_id: UnitId(0x11),
+        });
+    }
+
+    #[test]
+    /// FR-R-140, FR-R-141, FR-R-142 — ASCII's appending encode does the same,
+    /// despite transforming the binary ADU through its scratch buffer
+    /// (FR-R-143).
+    fn ut_ascii_appending_encode() {
+        appending_encode_holds::<Ascii>(&UnitId(0x11));
+    }
 }

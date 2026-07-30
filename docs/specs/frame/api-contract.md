@@ -140,19 +140,49 @@ Coding is symmetric and direction-explicit (FR-R-005): a PDU is not
 self-describing, so the caller states which direction it holds.
 
 ```rust
-impl RequestPdu  { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; pub fn function(&self) -> FunctionCode; }
-impl ResponsePdu { pub fn decode(pdu: &[u8]) -> Result<Self>; pub fn encode(&self) -> Result<Vec<u8>>; pub fn function(&self) -> FunctionCode; }
+impl RequestPdu {
+    pub fn decode(pdu: &[u8]) -> Result<Self>;
+    pub fn encode(&self) -> Result<Vec<u8>>;
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()>;
+    pub fn function(&self) -> FunctionCode;
+}
+impl ResponsePdu {
+    pub fn decode(pdu: &[u8]) -> Result<Self>;
+    pub fn encode(&self) -> Result<Vec<u8>>;
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<()>;
+    pub fn function(&self) -> FunctionCode;
+}
 
 pub trait Framing {
     type Header: Clone + PartialEq + Debug;
     const MAX_ADU_LEN: usize;
     fn decode_request(bytes: &[u8]) -> Result<(Self::Header, RequestPdu)>;
-    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>>;
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)>;
-    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>>;
     fn boundary() -> AduBoundary;
-}
 
+    // Required: the appending primitive (FR-R-140).
+    fn encode_request_into(header: &Self::Header, pdu: &RequestPdu, out: &mut Vec<u8>) -> Result<()>;
+    fn encode_response_into(header: &Self::Header, pdu: &ResponsePdu, out: &mut Vec<u8>) -> Result<()>;
+
+    // Provided: defined in terms of the above, so the two cannot disagree.
+    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> { /* ... */ }
+    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> { /* ... */ }
+}
+```
+
+`encode_into` appends; it never clears what the buffer already holds, and a
+failure truncates it back to the length it had on entry (FR-R-142), so a caller
+that reuses one buffer across frames never transmits a fragment of an abandoned
+one. The allocating `encode` is a wrapper over it (FR-R-140) rather than a second
+implementation, which is what keeps the two from describing different bytes.
+
+`encode_request_into` reserves `MAX_ADU_LEN` before writing (FR-R-141), so every
+encode beneath it writes into capacity that already exists. The reservation is by
+framing maximum rather than by exact length because a PDU's length is settled only
+as its body is built; over-reserving by a few hundred bytes once is what buys an
+allocation-free steady state.
+
+```rust
 pub enum AduBoundary {
     /// Read `prefix` bytes, then `total` yields the whole ADU's length.
     Prefixed { prefix: usize, total: fn(&[u8]) -> Result<usize> },

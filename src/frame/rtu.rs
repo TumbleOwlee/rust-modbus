@@ -30,8 +30,12 @@ impl Framing for Rtu {
         Ok((address, RequestPdu::decode(pdu)?))
     }
 
-    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> {
-        Ok(wrap(*header, &pdu.encode()?))
+    fn encode_request_into(
+        header: &Self::Header,
+        pdu: &RequestPdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(*header, out, |out| pdu.encode_into(out))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)> {
@@ -39,8 +43,12 @@ impl Framing for Rtu {
         Ok((address, ResponsePdu::decode(pdu)?))
     }
 
-    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
-        Ok(wrap(*header, &pdu.encode()?))
+    fn encode_response_into(
+        header: &Self::Header,
+        pdu: &ResponsePdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(*header, out, |out| pdu.encode_into(out))
     }
 
     /// An RTU ADU carries neither a length nor a delimiter -- every byte value
@@ -91,12 +99,27 @@ fn split(bytes: &[u8]) -> Result<(UnitId, &[u8])> {
 ///
 /// No size check is needed: a PDU is at most 253 bytes (FR-R-002) and the
 /// overhead is 3, so an encoded ADU cannot exceed the 256 of FR-R-091.
-fn wrap(address: UnitId, pdu: &[u8]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(pdu.len().saturating_add(OVERHEAD));
-    bytes.push(address.0);
-    bytes.extend_from_slice(pdu);
-    bytes.extend_from_slice(&CRC.checksum(&bytes).to_le_bytes());
-    bytes
+fn wrap_into(
+    address: UnitId,
+    out: &mut Vec<u8>,
+    encode_pdu: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<()> {
+    let at = out.len();
+    // One reservation covers the largest ADU this framing permits, so nothing
+    // below reallocates the caller's buffer (FR-R-141).
+    out.reserve(Rtu::MAX_ADU_LEN);
+    out.push(address.0);
+    if let Err(error) = encode_pdu(out) {
+        // Nothing partial survives a failure (FR-R-142).
+        out.truncate(at);
+        return Err(error);
+    }
+    let covered = out
+        .get(at..)
+        .expect("the address and the PDU were just appended at this offset");
+    let crc = CRC.checksum(covered).to_le_bytes();
+    out.extend_from_slice(&crc);
+    Ok(())
 }
 
 #[cfg(test)]

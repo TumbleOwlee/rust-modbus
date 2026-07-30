@@ -52,8 +52,12 @@ impl Framing for Tcp {
         Ok((header, RequestPdu::decode(pdu)?))
     }
 
-    fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> {
-        wrap(header, &pdu.encode()?)
+    fn encode_request_into(
+        header: &Self::Header,
+        pdu: &RequestPdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(header, out, |out| pdu.encode_into(out))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<(Self::Header, ResponsePdu)> {
@@ -61,8 +65,12 @@ impl Framing for Tcp {
         Ok((header, ResponsePdu::decode(pdu)?))
     }
 
-    fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> {
-        wrap(header, &pdu.encode()?)
+    fn encode_response_into(
+        header: &Self::Header,
+        pdu: &ResponsePdu,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        wrap_into(header, out, |out| pdu.encode_into(out))
     }
 
     /// The MBAP length field gives the rest of the ADU, so six bytes are enough
@@ -166,10 +174,30 @@ fn split(bytes: &[u8]) -> Result<(MbapHeader, &[u8])> {
 ///
 /// The length field is computed here rather than carried in [`MbapHeader`], so
 /// it cannot disagree with the PDU it describes.
-fn wrap(header: &MbapHeader, pdu: &[u8]) -> Result<Vec<u8>> {
-    let length = pdu.len().saturating_add(LENGTH_OVERHEAD);
-    let length = u16::try_from(length).unwrap_or(u16::MAX);
+fn wrap_into(
+    header: &MbapHeader,
+    out: &mut Vec<u8>,
+    encode_pdu: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<()> {
+    let at = out.len();
+    // One reservation covers the largest ADU this framing permits (FR-R-141).
+    out.reserve(Tcp::MAX_ADU_LEN);
+    out.extend_from_slice(&header.transaction_id.0.to_be_bytes());
+    out.extend_from_slice(&PROTOCOL_MODBUS.to_be_bytes());
+    // The length counts the unit identifier and the PDU, neither of which has
+    // been written yet, so it goes down as a placeholder and is patched below.
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.push(header.unit_id.0);
+    let pdu_at = out.len();
+    if let Err(error) = encode_pdu(out) {
+        // Nothing partial survives a failure (FR-R-142).
+        out.truncate(at);
+        return Err(error);
+    }
+    let pdu_len = out.len().saturating_sub(pdu_at);
+    let length = u16::try_from(pdu_len.saturating_add(LENGTH_OVERHEAD)).unwrap_or(u16::MAX);
     if !(MIN_LENGTH..=MAX_LENGTH).contains(&u32::from(length)) {
+        out.truncate(at);
         return Err(Error::OutOfRange {
             field: "MBAP length",
             value: u32::from(length),
@@ -177,14 +205,16 @@ fn wrap(header: &MbapHeader, pdu: &[u8]) -> Result<Vec<u8>> {
             max: MAX_LENGTH,
         });
     }
-    let mut bytes = Vec::with_capacity(pdu.len().saturating_add(HEADER_LEN));
-    bytes.extend_from_slice(&header.transaction_id.0.to_be_bytes());
-    bytes.extend_from_slice(&PROTOCOL_MODBUS.to_be_bytes());
-    bytes.extend_from_slice(&length.to_be_bytes());
-    bytes.push(header.unit_id.0);
-    bytes.extend_from_slice(pdu);
-    Ok(bytes)
+    let at_length = at.saturating_add(LENGTH_FIELD_OFFSET);
+    let field = out
+        .get_mut(at_length..at_length.saturating_add(2))
+        .expect("the placeholder length field was just written at this offset");
+    field.copy_from_slice(&length.to_be_bytes());
+    Ok(())
 }
+
+/// Offset of the MBAP length field from the start of an ADU (FR-R-100).
+const LENGTH_FIELD_OFFSET: usize = 4;
 
 #[cfg(test)]
 mod tests {

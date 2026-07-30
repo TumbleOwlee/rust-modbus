@@ -522,3 +522,29 @@ bytes: custom function codes (FR-R-012), CANopen and unknown MEI bodies
 **FR-R-133** — Every PDU the frame layer can decode shall re-encode to the
 identical byte sequence. Decode and encode shall be inverse operations for all
 valid input. For ASCII ADUs this holds subject to FR-R-119.
+
+---
+
+## 13. Buffer reuse
+
+**FR-R-140** — The frame layer shall offer, for both directions and at both the
+PDU and the ADU level, encoding that *appends* to a caller-supplied buffer
+alongside the existing encoding that returns a new one. The appending form shall
+be the primitive and the allocating form shall be defined in terms of it, so the
+two can never describe different bytes.
+
+**FR-R-141** — Appending encode shall reserve the capacity it needs before it
+writes the first byte. An ADU encode shall reserve its framing's maximum ADU
+length (FR-R-091, FR-R-104, FR-R-113), which bounds every PDU it can carry, so
+that no encode below it reallocates the caller's buffer. A caller that reuses one
+buffer across frames shall therefore allocate at most once.
+
+**FR-R-142** — An appending encode that fails shall leave the caller's buffer
+exactly as it found it, truncated back to its length on entry. A caller that
+reuses a buffer after a failure shall never transmit a fragment of an abandoned
+frame.
+
+**FR-R-143** — Appending encode shall allocate no intermediate buffer per frame,
+except in ASCII framing, whose wire form is a character transformation of the
+binary ADU (FR-R-110) rather than a wrapping of it, and which may use one scratch
+buffer per frame.

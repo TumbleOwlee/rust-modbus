@@ -16,7 +16,7 @@ use winnow::binary::{be_u8, be_u16};
 use winnow::token::take;
 
 use crate::error::{Error, Result};
-use crate::frame::pdu::{registers_from_bytes, registers_to_bytes};
+use crate::frame::pdu::{push_registers, registers_from_bytes};
 use crate::frame::value::{FileNumber, RecordLength, RecordNumber, RegisterValue};
 use crate::parse::{self, Input, ParseResult};
 
@@ -124,18 +124,19 @@ impl FileRecordReadResponse {
 
     /// Append the sub-response to `out`.
     fn encode_into(&self, out: &mut Vec<u8>) -> Result<()> {
-        let data = registers_to_bytes(&self.values);
+        let data_len = self.values.len().saturating_mul(2);
         // The reference type byte counts towards the file response length, so
         // the whole sub-response occupies one byte more than that length.
-        let length = u8::try_from(data.len().saturating_add(1)).map_err(|_| Error::OutOfRange {
+        let length = u8::try_from(data_len.saturating_add(1)).map_err(|_| Error::OutOfRange {
             field: "file response length",
-            value: as_u32(data.len().saturating_add(1)),
+            value: as_u32(data_len.saturating_add(1)),
             min: 1,
             max: MAX_READ_DATA_LEN,
         })?;
+        out.reserve(data_len.saturating_add(2));
         out.push(length);
         out.push(REFERENCE_TYPE);
-        out.extend_from_slice(&data);
+        push_registers(out, &self.values);
         Ok(())
     }
 }
@@ -165,11 +166,12 @@ impl FileRecordWrite {
             min: 0,
             max: MAX_WRITE_DATA_LEN,
         })?;
+        out.reserve(self.values.len().saturating_mul(2).saturating_add(7));
         out.push(REFERENCE_TYPE);
         out.extend_from_slice(&self.file_number.0.to_be_bytes());
         out.extend_from_slice(&self.record_number.0.to_be_bytes());
         out.extend_from_slice(&record_length.to_be_bytes());
-        out.extend_from_slice(&registers_to_bytes(&self.values));
+        push_registers(out, &self.values);
         Ok(())
     }
 }
@@ -195,8 +197,12 @@ pub(super) fn decode_read_requests(input: &mut Input<'_>) -> ParseResult<Vec<Fil
 }
 
 /// Encode the body of a Read File Record request, byte count included.
-pub(super) fn encode_read_requests(records: &[FileRecordRead]) -> Result<Vec<u8>> {
+pub(super) fn encode_read_requests_into(
+    records: &[FileRecordRead],
+    out: &mut Vec<u8>,
+) -> Result<()> {
     body(
+        out,
         "request byte count",
         MIN_READ_BYTE_COUNT,
         MAX_READ_BYTE_COUNT,
@@ -221,8 +227,12 @@ pub(super) fn decode_read_responses(
 }
 
 /// Encode the body of a Read File Record response, data length included.
-pub(super) fn encode_read_responses(records: &[FileRecordReadResponse]) -> Result<Vec<u8>> {
+pub(super) fn encode_read_responses_into(
+    records: &[FileRecordReadResponse],
+    out: &mut Vec<u8>,
+) -> Result<()> {
     body(
+        out,
         "response data length",
         MIN_READ_DATA_LEN,
         MAX_READ_DATA_LEN,
@@ -247,8 +257,12 @@ pub(super) fn decode_write_records(input: &mut Input<'_>) -> ParseResult<Vec<Fil
 
 /// Encode the body of a Write File Record request or response, data length
 /// included.
-pub(super) fn encode_write_records(records: &[FileRecordWrite]) -> Result<Vec<u8>> {
+pub(super) fn encode_write_records_into(
+    records: &[FileRecordWrite],
+    out: &mut Vec<u8>,
+) -> Result<()> {
     body(
+        out,
         "request data length",
         MIN_WRITE_DATA_LEN,
         MAX_WRITE_DATA_LEN,
@@ -270,23 +284,30 @@ fn region<'a>(
 
 /// Encode `records` into a body prefixed by its own length.
 fn body<T>(
+    out: &mut Vec<u8>,
     field: &'static str,
     min: u32,
     max: u32,
     records: &[T],
     mut encode: impl FnMut(&T, &mut Vec<u8>) -> Result<()>,
-) -> Result<Vec<u8>> {
-    let mut data = Vec::new();
+) -> Result<()> {
+    // The length byte precedes a body whose length is not known until the body
+    // is written. Rather than assemble the body in a buffer of its own — which
+    // would be the per-frame allocation FR-R-143 rules out — a placeholder goes
+    // down first and is patched once the length is known.
+    let at = out.len();
+    out.push(0);
     for record in records {
-        encode(record, &mut data)?;
+        encode(record, out)?;
     }
-    let length = as_u32(data.len());
+    let length = as_u32(out.len().saturating_sub(at).saturating_sub(1));
     check_bounds(field, length, min, max)?;
-    let mut bytes = Vec::with_capacity(data.len().saturating_add(1));
+    let placeholder = out
+        .get_mut(at)
+        .expect("the placeholder byte was just pushed");
     // The bound just checked keeps this below 256.
-    bytes.push(u8::try_from(length).unwrap_or(u8::MAX));
-    bytes.extend_from_slice(&data);
-    Ok(bytes)
+    *placeholder = u8::try_from(length).unwrap_or(u8::MAX);
+    Ok(())
 }
 
 /// Consume a reference type byte, requiring it to be 6 (FR-R-055).

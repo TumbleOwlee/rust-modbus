@@ -18,6 +18,9 @@ here so they are not mistaken for oversights and silently "fixed".
 | An ASCII frame with no terminator, followed by silence | Read until the ADU maximum, then an oversized-ADU error; silence alone does not terminate an ASCII frame |
 | A frame fails to decode | Exactly that frame's bytes are consumed, the error surfaces, and the transport stays usable (TR-R-005) |
 | An ADU claims or occupies more than `MAX_ADU_LEN` | Oversized-ADU error; the read buffer never grows past that bound (TR-R-013) |
+| A transport that only ever receives | Never allocates a write buffer at all; the cost is paid on the first send (TR-R-043) |
+| An idle transport between sends | Keeps its write buffer's capacity — up to `MAX_ADU_LEN` — resident on purpose; that retention *is* the reuse (TR-R-043) |
+| A send that fails mid-write | The write buffer is cleared before the next frame, so no fragment of the abandoned ADU is ever re-sent (TR-R-043, FR-R-142) |
 
 ## 2. Connection lifecycle
 
@@ -50,6 +53,12 @@ owns the desynchronization that TR-R-041 describes.
   gaps are invisible by the time bytes arrive. Only the t3.5 inter-frame silence
   of TR-R-011 is enforced, which is what determines a boundary; a frame corrupted
   by an intra-character gap is instead caught by its CRC (FR-R-095).
+- **"No allocation while sending" means the transport's own encoding.** TR-R-043
+  bounds what this crate allocates: one reused buffer, filled in place. A stream
+  underneath may allocate on its own account — `tokio::io::duplex` allocates per
+  write by design — and that is the stream's business, not the transport's. The
+  test that pins TR-R-043 therefore writes into a stream that allocates nothing,
+  so the count it reports is ours.
 - **No UDP.** Modbus over UDP is not part of the specification, and a datagram
   transport has different framing and retransmission semantics than the stream
   the client and server are written against.
