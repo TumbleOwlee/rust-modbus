@@ -38,6 +38,26 @@ pub enum AduBoundary {
     Silence,
 }
 
+impl AduBoundary {
+    /// Whether the next frame boundary is findable from the wire alone
+    /// (FR-R-144).
+    ///
+    /// Silence and delimiters are properties of the line: after any failure the
+    /// next boundary is found without reference to the frame that failed, so one
+    /// bad frame costs exactly one frame. A length field is carried *by* that
+    /// frame, so losing it loses every boundary after it too.
+    ///
+    /// The client and the server consult this to decide whether an undecodable
+    /// frame costs one frame or the whole link (CL-R-023, SV-R-050).
+    #[must_use]
+    pub fn is_self_locating(&self) -> bool {
+        match *self {
+            Self::Delimited { .. } | Self::Silence => true,
+            Self::Prefixed { .. } => false,
+        }
+    }
+}
+
 /// One of the three ways a PDU is wrapped for transmission.
 ///
 /// The framings differ in what they put around the PDU and in what identifies
@@ -194,6 +214,20 @@ mod tests {
         let mut out = vec![0x01, 0x02, 0x03];
         F::encode_request_into(header, &unencodable(), &mut out).expect_err("rejects");
         assert_eq!(out, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    /// FR-R-144 — whether a framing locates the next boundary from the wire
+    /// alone follows from its boundary rule, so a framing cannot state one rule
+    /// and answer by another. Asserted through `boundary()` for that reason,
+    /// rather than against a constant each framing could set independently.
+    fn ut_boundary_self_locating_by_framing() {
+        // Silence and delimiters are on the wire; the next frame is findable
+        // without the one that failed.
+        assert!(Rtu::boundary().is_self_locating());
+        assert!(Ascii::boundary().is_self_locating());
+        // A length field is carried by the frame that failed.
+        assert!(!Tcp::boundary().is_self_locating());
     }
 
     #[test]
