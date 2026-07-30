@@ -168,6 +168,7 @@ pub trait Framing {
     fn encode_request(header: &Self::Header, pdu: &RequestPdu) -> Result<Vec<u8>> { /* ... */ }
     fn encode_response(header: &Self::Header, pdu: &ResponsePdu) -> Result<Vec<u8>> { /* ... */ }
 }
+```
 
 `encode_into` appends; it never clears what the buffer already holds, and a
 failure truncates it back to the length it had on entry (FR-R-142), so a caller
@@ -181,6 +182,7 @@ framing maximum rather than by exact length because a PDU's length is settled on
 as its body is built; over-reserving by a few hundred bytes once is what buys an
 allocation-free steady state.
 
+```rust
 pub enum AduBoundary {
     /// Read `prefix` bytes, then `total` yields the whole ADU's length.
     Prefixed { prefix: usize, total: fn(&[u8]) -> Result<usize> },

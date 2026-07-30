@@ -41,6 +41,22 @@ until it ships.
   examples: `tcp_client`, `rtu_client` (needs the `rtu` feature and hardware),
   and `interop_server`.
 
+- Appending encode throughout the frame layer: `RequestPdu::encode_into`,
+  `ResponsePdu::encode_into`, and `Framing::{encode_request_into,
+  encode_response_into}` write into a caller-supplied buffer instead of
+  returning a new one (FR-R-140 … FR-R-143). The allocating `encode` forms
+  remain, defined in terms of the appending ones. A transport now owns and
+  reuses a single outgoing buffer (TR-R-043), so sending in steady state
+  performs no allocation at all (NF-R-009) — asserted by counting allocator
+  calls in `tests/allocation.rs`, not merely stated.
+
+### Changed
+
+- `Framing`'s required methods are now `encode_request_into` and
+  `encode_response_into`; `encode_request` and `encode_response` became provided
+  methods. An implementor of the trait outside this crate must implement the
+  appending pair instead of the allocating one.
+
 ### Fixed
 
 - The `tokio` dependency now declares the `sync`, `rt`, and `macros` features the

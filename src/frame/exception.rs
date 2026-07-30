@@ -141,10 +141,14 @@ impl ExceptionResponse {
 
     /// Encode to an exception response PDU, appending to `out` (FR-R-140).
     ///
+    /// Crate-internal: the appending form is public API at the PDU and ADU
+    /// level, and an exception response reaches a caller as a `ResponsePdu`
+    /// variant, which already offers it.
+    ///
     /// # Errors
     ///
     /// Fails if the function code has no encoding.
-    pub fn encode_into(self, out: &mut Vec<u8>) -> Result<()> {
+    pub(crate) fn encode_into(self, out: &mut Vec<u8>) -> Result<()> {
         // Both fields are validated before either byte is written, so a failure
         // leaves `out` untouched (FR-R-142).
         let function = self.function.encode()? | EXCEPTION_FLAG;

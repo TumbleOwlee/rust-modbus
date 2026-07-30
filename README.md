@@ -21,6 +21,10 @@ too, but only as a frame format — see [Deliberate omissions](#deliberate-omiss
 - **Robust against hostile input.** Truncated, malformed or oversized frames
   produce a typed error — never a panic, an out-of-bounds slice, or an unbounded
   allocation. `#![forbid(unsafe_code)]`.
+- **Allocation-free in steady state.** Every encode appends into a buffer the
+  caller owns, and a transport reuses one buffer across frames, so sending after
+  the first frame allocates nothing at all (NF-R-009). An owning `encode` is
+  still there when a `Vec` is what you wanted.
 - **`no_std` + `alloc`** with default features off: the frame layer needs no
   operating system.
 - **Testable without hardware.** Transports are a generic bound over any async
