@@ -53,6 +53,17 @@ The four combinations are all first-class and none is an afterthought:
   register tables (SV-R-005), so both storage and durability are the consumer's
   concern. What a coil or a register *means* is application state wearing a
   Modbus address, not protocol.
+- **No interpretation of register contents.** No floating-point or 32/64-bit
+  conversions spanning registers, no word-order or endianness options above the
+  register, no scaling factors, no unit conversions, no enumerated status words.
+  Modbus defines nothing wider than a 16-bit register: a device that spreads a
+  float across two has made a private convention, which is why four incompatible
+  word orders exist in the field where a standard would have left one. Combining
+  registers is therefore application knowledge that belongs with the device's
+  register map, and `Vec<RegisterValue>` is the honest handoff point. The
+  boundary is where the standard's own authority ends — byte order *within* a
+  register is protocol and is implemented (FR-R-003, big-endian on the wire);
+  order *across* registers is convention and stays the caller's.
 - **No transport beyond TCP and RTU serial** (no UDP, no RTU-over-TCP gateway
   emulation) unless later specified.
 

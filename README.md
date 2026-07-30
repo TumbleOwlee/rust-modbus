@@ -249,6 +249,13 @@ Honest about what this crate does not do, and why. Full reasoning in
   application state wearing a Modbus address, not protocol, and durability is
   even less this crate's business. See
   [`docs/specs/server/data-contract.md`](./docs/specs/server/data-contract.md).
+- **No interpretation of register contents.** No `f32` helpers, no word-order or
+  endianness options above the register, no scaling or unit conversion. Modbus
+  defines nothing wider than a 16-bit register, so combining two into a float is
+  a device convention — the four incompatible orders in the field are the proof —
+  and it belongs with the register map, not the protocol. Byte order *within* a
+  register is protocol and is implemented (big-endian on the wire); order
+  *across* registers is yours.
 - **No blocking / sync API.** Async-first on Tokio. A blocking facade is a
   separate product decision, not a mechanical addition.
 - **No transport beyond TCP and RTU serial.** No UDP, and no RTU-over-TCP
