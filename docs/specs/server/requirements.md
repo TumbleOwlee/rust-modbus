@@ -168,8 +168,11 @@ without requesting it.
 ## 6. Errors
 
 **SV-R-050** — A request that cannot be decoded shall be reported to the service
-(SV-R-034) and shall end the connection: a malformed ADU means the byte stream is
-no longer trusted to be aligned. This is the responder's counterpart to CL-R-023.
+(SV-R-034). It shall end the connection only where the framing is not
+self-locating (FR-R-144); on a self-locating framing the failure shall cost
+exactly that frame and serving shall continue with the next request. No response
+shall be sent for a request that could not be decoded, on either framing. This is
+the responder's counterpart to CL-R-023.
 
 **SV-R-051** — A failure confined to one connection shall not propagate out of
 serving. Serving shall fail only for a failure of the listener itself.

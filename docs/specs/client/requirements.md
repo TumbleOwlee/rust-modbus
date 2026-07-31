@@ -83,8 +83,13 @@ neither the code requested nor an exception to it shall fail immediately with an
 unexpected-function error, naming the code expected and the code received.
 
 **CL-R-023** — A response that cannot be decoded shall fail with the frame
-area's decoding error unaltered, and shall leave the client unusable (CL-R-031):
-a malformed ADU means the byte stream is no longer trusted to be aligned.
+area's decoding error unaltered. It shall leave the client desynchronized only
+where the framing is not self-locating (FR-R-144): where a length field alone
+delimits frames, a malformed ADU leaves the reader unable to find the next one.
+On a self-locating framing the failure shall cost exactly that frame — the client
+shall remain usable and a subsequent request shall proceed normally. The failed
+request shall not wait further for another response: the frame that failed was the
+answer to it.
 
 **CL-R-024** — A response arriving after its request has timed out shall never
 be delivered as the result of a later request. It shall be either discarded by
@@ -97,8 +102,9 @@ CL-R-021 or refused by CL-R-031.
 **CL-R-030** — The client shall bound the wait for a response by a configurable
 response timeout, whose default shall be 1 second.
 
-**CL-R-031** — A response timeout, an I/O failure, or a decoding failure shall
-mark the client desynchronized: what the peer will send next is no longer known.
+**CL-R-031** — A response timeout or an I/O failure shall mark the client
+desynchronized: what the peer will send next is no longer known. A decoding
+failure shall mark it desynchronized only in the case CL-R-023 names.
 
 **CL-R-032** — A desynchronized client shall fail every subsequent request
 immediately, without writing to the transport, with a distinct error naming the

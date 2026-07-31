@@ -21,6 +21,12 @@ too, but only as a frame format — see [Deliberate omissions](#deliberate-omiss
 - **Robust against hostile input.** Truncated, malformed or oversized frames
   produce a typed error — never a panic, an out-of-bounds slice, or an unbounded
   allocation. `#![forbid(unsafe_code)]`.
+- **A bad frame costs one frame.** On a bus that delimits its frames — RTU by
+  silence, ASCII by `:` and CRLF — the next boundary is still on the wire after
+  a frame fails to decode, so line noise costs that exchange and nothing more: a
+  client stays synchronized, and a server stays on the bus rather than dropping
+  the link (FR-R-144). Modbus TCP carries its length in the frame, so there a
+  frame that cannot be decoded does take the stream's alignment with it.
 - **Allocation-free in steady state.** Every encode appends into a buffer the
   caller owns, and a transport reuses one buffer across frames, so sending after
   the first frame allocates nothing at all (NF-R-009). An owning `encode` is

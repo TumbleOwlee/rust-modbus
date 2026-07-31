@@ -157,9 +157,14 @@ where
             let (header_in, response) = match received {
                 Ok(received) => received,
                 Err(error) => {
-                    // An I/O or decoding failure leaves the stream's alignment
-                    // unknown (CL-R-023, CL-R-031).
-                    self.desynchronized = true;
+                    // An I/O failure ends the stream whatever the framing
+                    // (CL-R-031). A *frame* failure costs the link only where
+                    // the next boundary was carried by the frame that failed;
+                    // silence and delimiters are still on the wire, so there
+                    // the failure costs exactly that frame (CL-R-023).
+                    if error.ends_stream() || !F::boundary().is_self_locating() {
+                        self.desynchronized = true;
+                    }
                     return Err(error);
                 }
             };
@@ -664,8 +669,8 @@ mod tests {
     use crate::error::Error;
     use crate::frame::{
         Address, DiagnosticSubFunction, ExceptionCode, ExceptionResponse, ExceptionStatus,
-        FileNumber, FileRecordRead, FileRecordReadResponse, FileRecordWrite, FunctionCode, Mask,
-        MbapHeader, MeiRequest, MeiResponse, Quantity, ReadDeviceIdCode, RecordLength,
+        FileNumber, FileRecordRead, FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode,
+        Mask, MbapHeader, MeiRequest, MeiResponse, Quantity, ReadDeviceIdCode, RecordLength,
         RecordNumber, RegisterValue, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId, UnitId,
     };
     use crate::transport::FrameTransport;
@@ -883,14 +888,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-023 — a response that cannot be decoded fails with the frame area's
-    /// own decoding error, unaltered, and leaves the client unusable: the ADU's
-    /// length was trusted to read it off the stream, so once its contents turn
-    /// out to be nonsense there is no way to know where the next response
-    /// starts. The reply below is a well-formed MBAP header (transaction 1,
-    /// length 3, unit 0x11) around a PDU claiming function 3 with a byte count
-    /// of 4 but only one register following it.
-    async fn ut_undecodable_response_desynchronizes() {
+    /// CL-R-023 — over TCP, a response that cannot be decoded fails with the
+    /// frame area's own decoding error, unaltered, and leaves the client
+    /// unusable: the MBAP length was trusted to read the ADU off the stream, so
+    /// once its contents turn out to be nonsense there is no way to know where
+    /// the next response starts. The reply below is a well-formed MBAP header
+    /// (transaction 1, length 3, unit 0x11) around a PDU claiming function 3
+    /// with a byte count of 4 but only one register following it.
+    async fn ut_undecodable_response_desynchronizes_on_tcp() {
         let (client, server) = duplex(1024);
         let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
         let mut server = server;
@@ -923,6 +928,84 @@ mod tests {
             "the stream's alignment is unknown after a malformed response"
         );
         let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-023 — over RTU the same failure costs exactly one frame. The next
+    /// boundary is the line falling silent, not a length inside the frame that
+    /// went wrong, so the client stays usable and the request after it is
+    /// answered normally. The corrupt reply below is a valid ADU with its last
+    /// CRC byte flipped.
+    async fn ut_undecodable_response_costs_one_frame_on_rtu() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+
+        // The far end is a raw stream, so the corrupt frame can be written
+        // exactly as a noisy line would deliver it.
+        let good = Rtu::encode_response(&UnitId(0x11), &registers()).expect("the response encodes");
+        let mut corrupt = good.clone();
+        let last = corrupt.last_mut().expect("the ADU carries a CRC");
+        *last ^= 0xFF;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 8];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the first request arrives whole");
+            server
+                .write_all(&corrupt)
+                .await
+                .expect("writes the corrupt");
+            // Silence, so the next frame is a frame of its own (TR-R-011).
+            tokio::time::sleep(Duration::from_millis(5)).await;
+
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the second request arrives whole");
+            server.write_all(&good).await.expect("writes the good one");
+            server
+        });
+
+        let failed = client.call(UnitId(0x11), read_holding()).await;
+        assert!(
+            matches!(failed, Err(Error::Checksum { .. })),
+            "the frame area's own error reaches the caller unaltered, got {failed:?}"
+        );
+        assert!(
+            !client.is_desynchronized(),
+            "one corrupt frame took the whole link down"
+        );
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(registers())),
+            "the request after the corrupt frame was refused"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-031 — a timeout still desynchronizes on RTU, unchanged by
+    /// CL-R-023's framing rule: a late response carries only a unit
+    /// identifier, so it would satisfy CL-R-020 for the *next* request and be
+    /// delivered as that request's answer.
+    async fn ut_timeout_still_desynchronizes_on_rtu() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(client.is_desynchronized());
+        silent.abort();
     }
 
     #[tokio::test(start_paused = true)]

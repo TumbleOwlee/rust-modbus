@@ -18,6 +18,8 @@ here so they are not mistaken for oversights and silently "fixed".
 | An ASCII frame with no terminator, followed by silence | Read until the ADU maximum, then an oversized-ADU error; silence alone does not terminate an ASCII frame |
 | A frame fails to decode | Exactly that frame's bytes are consumed, the error surfaces, and the transport stays usable (TR-R-005) |
 | An ADU claims or occupies more than `MAX_ADU_LEN` | Oversized-ADU error; the read buffer never grows past that bound (TR-R-013) |
+| A receive fails before the ADU was delimited, RTU or ASCII | The bytes gathered for the attempt are discarded, so the next receive starts at the next boundary the wire provides (TR-R-044) |
+| A receive fails before the ADU was delimited, TCP | The gathered bytes are retained; without the length field there is no later boundary to resume from, so the failure is terminal for the stream (TR-R-044) |
 | A transport that only ever receives | Never allocates a write buffer at all; the cost is paid on the first send (TR-R-043) |
 | An idle transport between sends | Keeps its write buffer's capacity — up to `MAX_ADU_LEN` — resident on purpose; that retention *is* the reuse (TR-R-043) |
 | A send that fails mid-write | The write buffer is cleared before the next frame, so no fragment of the abandoned ADU is ever re-sent (TR-R-043, FR-R-142) |

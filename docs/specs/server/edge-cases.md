@@ -12,7 +12,8 @@ here so they are not mistaken for oversights and silently "fixed".
 |---|---|
 | A request the service refuses | Exception response to the requested function, with the service's code (SV-R-012) |
 | An unsupported function code the frame area names | Decoded and dispatched; refusing it is the service's call (SV-R-005) |
-| A function code the frame area cannot decode | `InvalidFunctionCode`; reported to `on_error`, connection ends (SV-R-050) |
+| A function code the frame area cannot decode, TCP | `InvalidFunctionCode`; reported to `on_error`, connection ends (SV-R-050) |
+| A function code the frame area cannot decode, RTU or ASCII | `InvalidFunctionCode`; reported to `on_error`, no response, serving continues (SV-R-050) |
 | Address or quantity outside what the wire format permits | The frame area's decode error; treated as undecodable (SV-R-050) |
 | Address or quantity the *application* does not have | Nothing the server can judge — the service returns `IllegalDataAddress` (SV-R-005) |
 | A write to what the consumer considers read-only | The service's refusal; the crate has no read-only notion (SV-R-005) |
@@ -23,9 +24,12 @@ here so they are not mistaken for oversights and silently "fixed".
 | The service returns another function's response | Sent as returned; the server does not check (SV-R-013) |
 
 A service refusal and a decode failure are deliberately different channels: the
-first is a Modbus answer, the second is not answerable at all, because a frame
-whose length could not be trusted leaves the reader unsure where the next one
-starts.
+first is a Modbus answer, the second is not answerable at all, because the frame
+that would say which function was being refused is the frame that could not be
+trusted. Whether the connection survives that failure depends on the framing: on
+TCP the reader is left unsure where the next frame starts and the connection ends,
+while RTU and ASCII locate the next boundary from the wire itself and serving
+continues (SV-R-050, FR-R-144).
 
 ## 2. Connections
 
@@ -34,7 +38,7 @@ starts.
 | Bind failure | Never reaches the server: binding belongs to the transport area (TR-R-030) |
 | A peer that connects and sends nothing | Held open, one task idle, until it closes or shutdown; there is no idle timeout |
 | A peer that closes between ADUs | `Disconnect::Closed` (SV-R-052) |
-| A peer that closes mid-ADU | `ConnectionClosed` to `on_error`, `Disconnect::Failed` (TR-R-014, SV-R-050) |
+| A peer that closes mid-ADU | `ConnectionClosed` to `on_error`, `Disconnect::Failed` (TR-R-014, SV-R-051) |
 | `on_connect` returns `Acceptance::Reject` | Closed with no request read, `Disconnect::Rejected` (SV-R-032) |
 | One connection fails | Others unaffected, accepting continues (SV-R-035) |
 | Accept itself fails | Serving returns the error; connections already running are drained first (SV-R-051) |
@@ -43,6 +47,13 @@ starts.
 
 ## 3. Known limitations
 
+- **A corrupt line produces one error per frame, indefinitely.** On RTU or ASCII
+  the server reports every undecodable frame to `on_error` and keeps serving, by
+  design (SV-R-050) — one frame of noise must not take a device off the bus. A
+  line that is permanently corrupt therefore produces a steady stream of callbacks
+  rather than a closed connection. A service that wants to give up counts them
+  itself, where it knows its own tolerance; the crate cannot pick a threshold that
+  is right for both a quiet bench and a noisy plant floor.
 - **No connection limit.** Every accepted connection gets a task, and nothing
   caps how many. A service that wants a cap enforces it in `on_connect`
   (SV-R-032), where it has the peer address and its own count — the server cannot
