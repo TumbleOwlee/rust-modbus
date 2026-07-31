@@ -204,8 +204,8 @@ pub use client::{
 };
 pub use error::{Error, Result};
 pub use frame::{
-    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode,
-    ExceptionResponse, ExceptionStatus, FileNumber, FileRecordRead, FileRecordReadResponse,
+    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, Direction, ExceptionCode,
+    ExceptionResponse, ExceptionStatus, Extent, FileNumber, FileRecordRead, FileRecordReadResponse,
     FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, Mask, MbapHeader, MeiRequest, MeiResponse,
     Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
     Rtu, Tcp, TransactionId, UnitId, mask_write_result,

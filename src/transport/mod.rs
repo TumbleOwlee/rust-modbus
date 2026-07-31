@@ -189,6 +189,9 @@ where
             AduBoundary::Prefixed { prefix, total } => self.read_prefixed(prefix, total).await,
             AduBoundary::Delimited { start, end } => self.read_delimited(start, end).await,
             AduBoundary::Silence => self.read_until_silence().await,
+            AduBoundary::ContentLength { .. } => {
+                unimplemented!("ContentLength boundary handling is implemented in stage 4")
+            }
         }
     }
 
