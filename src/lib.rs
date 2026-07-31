@@ -199,8 +199,8 @@ mod transport;
 pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
 pub use client::{
-    Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog, TcpClient,
-    UnusableReason,
+    Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
+    RtuOverTcpClient, TcpClient, UnusableReason,
 };
 pub use error::{Error, Result};
 pub use frame::{
@@ -217,8 +217,8 @@ pub use server::{
 };
 #[cfg(feature = "std")]
 pub use transport::{
-    DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,
-    TcpTransport, TransportConfig, connect_tcp,
+    DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
+    TcpConfig, TcpListener, TcpTransport, TransportConfig, connect_tcp, connect_tcp_framed,
 };
 #[cfg(feature = "rtu")]
 pub use transport::{SerialTransport, open_serial};

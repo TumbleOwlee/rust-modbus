@@ -16,10 +16,12 @@ use alloc::vec::Vec;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::{Error, Result};
-use crate::frame::{AduBoundary, Framing, RequestPdu, ResponsePdu};
+use crate::frame::{AduBoundary, Direction, Extent, Framing, RequestPdu, ResponsePdu};
 
 pub use serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
-pub use tcp::{TcpConfig, TcpListener, TcpTransport, connect_tcp};
+pub use tcp::{
+    RtuOverTcpTransport, TcpConfig, TcpListener, TcpTransport, connect_tcp, connect_tcp_framed,
+};
 
 #[cfg(feature = "rtu")]
 pub use rtu::{SerialTransport, open_serial};
@@ -136,7 +138,7 @@ where
     /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
     /// does not decode.
     pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)> {
-        let adu = self.recv_adu().await?;
+        let adu = self.recv_adu(Direction::Request).await?;
         F::decode_request(&adu)
     }
 
@@ -147,7 +149,7 @@ where
     /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
     /// does not decode.
     pub async fn recv_response(&mut self) -> Result<(F::Header, ResponsePdu)> {
-        let adu = self.recv_adu().await?;
+        let adu = self.recv_adu(Direction::Response).await?;
         F::decode_response(&adu)
     }
 
@@ -164,14 +166,14 @@ where
     ///
     /// The ADU's bytes leave the buffer before it is decoded, so a decode
     /// failure costs exactly that frame and no more (TR-R-005).
-    async fn recv_adu(&mut self) -> Result<Vec<u8>> {
+    async fn recv_adu(&mut self, direction: Direction) -> Result<Vec<u8>> {
         if self.receiving {
             // A previous receive was abandoned part-way through an ADU, so the
             // buffer may hold a fragment of one (TR-R-041).
             return Err(Error::Timeout { what: "receive" });
         }
         self.receiving = true;
-        let result = self.read_adu().await;
+        let result = self.read_adu(direction).await;
         self.receiving = false;
         if result.is_err() && F::boundary().is_self_locating() {
             // No ADU was delimited, so these bytes belong to no frame anyone
@@ -184,13 +186,13 @@ where
     }
 
     /// Apply this framing's boundary rule until one ADU is in hand (FR-R-122).
-    async fn read_adu(&mut self) -> Result<Vec<u8>> {
+    async fn read_adu(&mut self, direction: Direction) -> Result<Vec<u8>> {
         match F::boundary() {
             AduBoundary::Prefixed { prefix, total } => self.read_prefixed(prefix, total).await,
             AduBoundary::Delimited { start, end } => self.read_delimited(start, end).await,
             AduBoundary::Silence => self.read_until_silence().await,
-            AduBoundary::ContentLength { .. } => {
-                unimplemented!("ContentLength boundary handling is implemented in stage 4")
+            AduBoundary::ContentLength { min, extent } => {
+                self.read_content_length(min, extent, direction).await
             }
         }
     }
@@ -260,6 +262,36 @@ where
                 // A close after a complete frame ends it just the same.
                 Ok(Err(Error::ConnectionClosed)) => return Ok(self.take(self.buffer.len())),
                 Ok(Err(error)) => return Err(error),
+            }
+        }
+    }
+
+    /// An ADU whose length is derived from its content (TR-R-045, TR-R-046).
+    ///
+    /// Call `extent` repeatedly as bytes arrive to determine when a complete
+    /// ADU has been received. Consume exactly the extent it yields, leaving
+    /// any surplus for the next ADU.
+    async fn read_content_length(
+        &mut self,
+        min: usize,
+        extent: fn(Direction, &[u8]) -> Result<Extent>,
+        direction: Direction,
+    ) -> Result<Vec<u8>> {
+        // Ensure we have at least `min` bytes to start derivation (TR-R-045).
+        self.fill_to(min).await?;
+
+        loop {
+            // Try to determine the extent from the bytes we have (TR-R-045).
+            match extent(direction, &self.buffer)? {
+                Extent::Complete(len) => {
+                    // We have the complete ADU; take exactly those bytes (TR-R-045).
+                    return Ok(self.take(len));
+                }
+                Extent::NeedMore => {
+                    // Need more bytes; check the buffer bound and read more (TR-R-013).
+                    self.check_buffer_bound()?;
+                    self.read_more(true).await?;
+                }
             }
         }
     }
@@ -337,8 +369,8 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::error::Error;
-    use crate::frame::{Address, Quantity, TransactionId, UnitId};
     use crate::frame::{MbapHeader, Tcp};
+    use crate::{Address, Quantity, RequestPdu, TransactionId, UnitId};
     use alloc::vec;
     use tokio::io::{AsyncWriteExt, duplex};
 
@@ -627,6 +659,144 @@ mod ascii_tests {
                 max: Ascii::MAX_ADU_LEN,
             })
         );
+    }
+
+    #[tokio::test]
+    /// TR-R-045 — ContentLength boundary reads one byte at a time until extent
+    /// says the ADU is complete, then consumes exactly those bytes.
+    async fn ut_rtu_over_tcp_boundary_from_content() {
+        use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, RtuOverTcp>::new(server);
+
+        // Create a simple FC 3 request ADU for RtuOverTcp:
+        // FC 3: FC(1) + addr(2) + qty(2) = 5 bytes PDU
+        // RTU ADU: address(1) + PDU(5) + CRC(2) = 8 bytes
+        let req = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let header = UnitId(0x11);
+        let encoded = RtuOverTcp::encode_request(&header, &req).expect("encodes");
+
+        // Write one byte at a time
+        let writer = tokio::spawn(async move {
+            for &byte in encoded.iter() {
+                peer.write_all(&[byte]).await.expect("writes byte");
+            }
+        });
+
+        // Receive should assemble from byte-by-byte delivery
+        let (recv_header, recv_req) = server.recv_request().await.expect("receives request");
+        assert_eq!(recv_header, header);
+        assert_eq!(recv_req, req);
+        writer.await.expect("writer completes");
+    }
+
+    #[tokio::test]
+    /// TR-R-004 — two complete ADUs arriving in one write are delivered one
+    /// per call to recv_request, with the surplus retained.
+    async fn ut_rtu_over_tcp_two_adus_in_one_read() {
+        use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, RtuOverTcp>::new(server);
+
+        let req = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let header = UnitId(0x11);
+        let adu = RtuOverTcp::encode_request(&header, &req).expect("encodes");
+
+        // Write two ADUs in one write
+        let mut both = adu.clone();
+        both.extend_from_slice(&adu);
+        peer.write_all(&both).await.expect("writes both");
+
+        // First receive
+        let (h1, r1) = server.recv_request().await.expect("receives first");
+        assert_eq!(h1, header);
+        assert_eq!(r1, req);
+
+        // Second receive should get the retained bytes
+        let (h2, r2) = server.recv_request().await.expect("receives second");
+        assert_eq!(h2, header);
+        assert_eq!(r2, req);
+    }
+
+    #[tokio::test]
+    /// TR-R-046 — when extent derivation fails, the attempted bytes are retained
+    /// so the stream does not desynchronize.
+    async fn ut_rtu_over_tcp_failed_derivation_retains_the_attempt() {
+        use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, RtuOverTcp>::new(server);
+
+        // Write a valid ADU
+        let req = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let header = UnitId(0x11);
+        let adu = RtuOverTcp::encode_request(&header, &req).expect("encodes");
+
+        // Write it and corrupt the CRC
+        let mut corrupted = adu.clone();
+        let len = corrupted.len();
+        #[allow(clippy::indexing_slicing)]
+        {
+            corrupted[len - 1] ^= 0xFF;
+        }
+        peer.write_all(&corrupted).await.expect("writes corrupted");
+
+        // The decode should fail (CRC mismatch)
+        let result = server.recv_request().await;
+        assert!(result.is_err(), "corrupted CRC should fail decode");
+
+        // Now write a good ADU
+        peer.write_all(&adu).await.expect("writes good");
+
+        // The stream is still usable: the good ADU is received
+        let (h, r) = server.recv_request().await.expect("receives good");
+        assert_eq!(h, header);
+        assert_eq!(r, req);
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-048 — inter-frame silence has no effect on RtuOverTcp framing.
+    /// ContentLength boundaries are derived from bytes, not timing.
+    async fn ut_rtu_over_tcp_ignores_the_inter_frame_interval() {
+        use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
+        let (mut peer, server) = duplex(1024);
+        let mut server = FrameTransport::<_, RtuOverTcp>::new(server);
+
+        let req = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let header = UnitId(0x11);
+        let adu = RtuOverTcp::encode_request(&header, &req).expect("encodes");
+
+        // Write one byte
+        #[allow(clippy::indexing_slicing)]
+        {
+            peer.write_all(&adu[..1]).await.expect("writes first byte");
+        }
+
+        // Sleep for a long time (longer than any inter-frame interval)
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        // Write the rest, still one at a time
+        for &byte in adu.iter().skip(1) {
+            peer.write_all(&[byte])
+                .await
+                .expect("writes byte after long delay");
+        }
+
+        // The receive should complete regardless of the delay
+        let (recv_header, recv_req) = server.recv_request().await.expect("receives despite delay");
+        assert_eq!(recv_header, header);
+        assert_eq!(recv_req, req);
     }
 }
 

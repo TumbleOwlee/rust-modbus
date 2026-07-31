@@ -5,7 +5,7 @@
 //! which unit a received header addresses, and whether that unit is the
 //! broadcast every device acts on and none answers.
 
-use crate::frame::{Ascii, BROADCAST_UNIT, Framing, Rtu, Tcp, UnitId};
+use crate::frame::{Ascii, BROADCAST_UNIT, Framing, Rtu, RtuOverTcp, Tcp, UnitId};
 
 /// A framing a server can answer requests over.
 ///
@@ -50,6 +50,9 @@ macro_rules! serial_framing {
 
 serial_framing!(Rtu);
 serial_framing!(Ascii);
+// RtuOverTcp behaves exactly as Rtu here, and is not gated behind the `rtu`
+// feature: this impl opens no serial port (TR-R-033).
+serial_framing!(RtuOverTcp);
 
 #[cfg(test)]
 mod tests {
@@ -80,5 +83,14 @@ mod tests {
         assert!(Ascii::is_broadcast(UnitId(0)));
         assert!(!Rtu::is_broadcast(UnitId(1)));
         assert!(!Tcp::is_broadcast(UnitId(0)));
+    }
+
+    #[test]
+    /// SV-R-023 — RtuOverTcp behaves exactly as Rtu here too: the header is
+    /// the unit, and unit 0 is the broadcast, though the link is TCP.
+    fn ut_rtu_over_tcp_server_framing_matches_rtu() {
+        assert_eq!(RtuOverTcp::unit(&UnitId(0x11)), UnitId(0x11));
+        assert!(RtuOverTcp::is_broadcast(UnitId(0)));
+        assert!(!RtuOverTcp::is_broadcast(UnitId(1)));
     }
 }

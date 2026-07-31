@@ -4,7 +4,9 @@
 //! trait names exactly the difference: how a header is built, when a received
 //! header answers a sent one, and which unit identifier broadcasts.
 
-use crate::frame::{Ascii, BROADCAST_UNIT, Framing, MbapHeader, Rtu, Tcp, TransactionId, UnitId};
+use crate::frame::{
+    Ascii, BROADCAST_UNIT, Framing, MbapHeader, Rtu, RtuOverTcp, Tcp, TransactionId, UnitId,
+};
 
 /// A framing a client can issue requests over.
 ///
@@ -66,6 +68,11 @@ macro_rules! serial_framing {
 
 serial_framing!(Rtu);
 serial_framing!(Ascii);
+// RtuOverTcp behaves exactly as Rtu here: the header is the address, a
+// response matches on it, and unit 0 broadcasts (CL-R-050). It is not gated
+// behind the `rtu` feature, unlike the macro's other two uses, because this
+// impl opens no serial port (TR-R-033).
+serial_framing!(RtuOverTcp);
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +124,19 @@ mod tests {
         assert!(Ascii::is_broadcast(UnitId(0)));
         assert!(!Rtu::is_broadcast(UnitId(1)));
         assert!(!Tcp::is_broadcast(UnitId(0)));
+    }
+
+    #[test]
+    /// CL-R-050 — RtuOverTcp behaves exactly as Rtu: the header is the
+    /// address, and unit 0 broadcasts even though the link underneath is TCP.
+    fn ut_rtu_over_tcp_client_framing_matches_rtu() {
+        assert_eq!(
+            RtuOverTcp::request_header(UnitId(0x11), TransactionId(7)),
+            UnitId(0x11)
+        );
+        assert!(RtuOverTcp::is_response_to(&UnitId(0x11), &UnitId(0x11)));
+        assert!(!RtuOverTcp::is_response_to(&UnitId(0x11), &UnitId(0x12)));
+        assert!(RtuOverTcp::is_broadcast(UnitId(0)));
+        assert!(!RtuOverTcp::is_broadcast(UnitId(1)));
     }
 }

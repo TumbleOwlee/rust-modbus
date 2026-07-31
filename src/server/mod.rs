@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::error::{Error, Result};
-use crate::frame::{ExceptionResponse, ResponsePdu, UnitId};
+use crate::frame::{ExceptionResponse, ResponsePdu, Tcp, UnitId};
 use crate::transport::FrameTransport;
 
 pub use framing::ServerFraming;
@@ -115,6 +115,25 @@ where
     /// Fails if the listener does. Connections already running are finished
     /// before the failure is returned.
     pub async fn serve(self, listener: crate::transport::TcpListener) -> Result<()> {
+        self.serve_framed::<Tcp>(listener).await
+    }
+
+    /// Serve a listening socket, for any framing (SV-R-053).
+    ///
+    /// `serve` is this with `F` fixed to [`Tcp`] under its existing name, so a
+    /// server that only ever answered Modbus TCP needs no change. A gateway
+    /// server accepting `RtuOverTcp` connections runs this instead, and gets
+    /// the identical per-connection behavior (SV-R-007).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the listener does. Connections already running are finished
+    /// before the failure is returned.
+    pub async fn serve_framed<F>(self, listener: crate::transport::TcpListener) -> Result<()>
+    where
+        F: ServerFraming + Send + 'static,
+        F::Header: Send + Sync,
+    {
         let mut connections: JoinSet<()> = JoinSet::new();
         let mut signal = self.shutdown.subscribe();
         loop {
@@ -128,7 +147,7 @@ where
                     while connections.join_next().await.is_some() {}
                     return Ok(());
                 }
-                accepted = listener.accept() => accepted,
+                accepted = listener.accept_framed::<F>() => accepted,
             };
             match accepted {
                 Ok((mut transport, peer)) => {
