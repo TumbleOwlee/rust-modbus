@@ -191,6 +191,16 @@ pub enum Error {
         actual: crate::frame::FunctionCode,
     },
 
+    /// A function code or MEI type whose length cannot be derived from its bytes
+    /// (FR-R-148). This includes FC 8 in both directions, FC 43 with any MEI type
+    /// other than 14, and every custom function code. A device using any of them
+    /// behind a transparent gateway is not reachable through RTU-over-stream framing.
+    #[error("cannot derive ADU length from function code {function:#04x}")]
+    IndeterminateLength {
+        /// The function code whose length cannot be determined.
+        function: u8,
+    },
+
     /// What the peer will send next is no longer known, so no further request
     /// may be issued on this connection (CL-R-031, CL-R-032).
     #[cfg(feature = "std")]

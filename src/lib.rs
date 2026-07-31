@@ -208,7 +208,7 @@ pub use frame::{
     ExceptionResponse, ExceptionStatus, Extent, FileNumber, FileRecordRead, FileRecordReadResponse,
     FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, Mask, MbapHeader, MeiRequest, MeiResponse,
     Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
-    Rtu, Tcp, TransactionId, UnitId, mask_write_result,
+    Rtu, RtuOverTcp, Tcp, TransactionId, UnitId, mask_write_result,
 };
 #[cfg(feature = "std")]
 pub use server::{
