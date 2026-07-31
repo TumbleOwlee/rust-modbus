@@ -25,8 +25,9 @@ too, but only as a frame format — see [Deliberate omissions](#deliberate-omiss
   silence, ASCII by `:` and CRLF — the next boundary is still on the wire after
   a frame fails to decode, so line noise costs that exchange and nothing more: a
   client stays synchronized, and a server stays on the bus rather than dropping
-  the link (FR-R-144). Modbus TCP carries its length in the frame, so there a
-  frame that cannot be decoded does take the stream's alignment with it.
+  the link (FR-R-144). Modbus TCP carries its length in the frame, and
+  RTU-over-TCP derives its length from the frame's own fields, so on either of
+  those a frame that cannot be decoded does take the stream's alignment with it.
 - **Allocation-free in steady state.** Every encode appends into a buffer the
   caller owns, and a transport reuses one buffer across frames, so sending after
   the first frame allocates nothing at all (NF-R-009). An owning `encode` is
@@ -245,6 +246,32 @@ code round-trips rather than failing to decode. Issue one with `Client::call`.
 The named set is a deliberate contract, not an open list; adding a name is a
 specification change.
 
+## Transparent gateways
+
+Many RS-485-to-Ethernet converters do not speak Modbus TCP. They forward the RTU
+ADU — address, PDU, CRC — verbatim over a socket, with no MBAP header. That is
+`RtuOverTcp` framing:
+
+```rust
+let transport = connect_tcp_framed::<RtuOverTcp>(addr, TcpConfig::default()).await?;
+let mut client = RtuOverTcpClient::new(transport);
+let regs = client.read_holding_registers(UnitId(1), Address(0), Quantity(2)).await?;
+```
+
+The wire format is RTU's, byte for byte. What differs is where a frame ends: a
+socket has no inter-frame silence to observe, so the length is derived from the
+direction, the function code, and the byte-count fields the frame carries
+(FR-R-146). Two consequences worth knowing before you deploy it:
+
+- **Function codes 8, 43 outside MEI type 14, and custom codes are not reachable
+  this way.** Their length is not derivable from their content, and this crate
+  refuses with `Error::IndeterminateLength` rather than guess (FR-R-148).
+- **A bad frame costs the connection.** The boundary is read out of the frame, so
+  a frame that is wrong loses the next one's position too (FR-R-150). Reconnect;
+  do not retry on the same socket.
+
+No `rtu` feature is needed — nothing here opens a serial port.
+
 ## Deliberate omissions
 
 Honest about what this crate does not do, and why. Full reasoning in
@@ -264,8 +291,11 @@ Honest about what this crate does not do, and why. Full reasoning in
   *across* registers is yours.
 - **No blocking / sync API.** Async-first on Tokio. A blocking facade is a
   separate product decision, not a mechanical addition.
-- **No transport beyond TCP and RTU serial.** No UDP, and no RTU-over-TCP
-  gateway emulation.
+- **No transport beyond TCP and RTU serial.** No UDP. RTU-over-TCP *is*
+  supported (see [Transparent gateways](#transparent-gateways)), but a bad frame
+  there costs the link rather than the frame — the boundary comes out of each
+  frame's own length fields, so a frame that is wrong takes the next one's
+  position with it.
 - **No ASCII *transport*.** ASCII framing exists at the frame layer for test
   fixtures and for comparing frames against upstream tooling by eye. Operating a
   serial port in ASCII mode is out of scope; the `AsciiClient` alias exists, but

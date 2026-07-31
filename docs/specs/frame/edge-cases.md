@@ -71,6 +71,10 @@ mistaken for an oversight and silently "fixed".
 | MBAP length field 0, or > 254 | length error, raised before any sizing allocation (FR-R-105) |
 | MBAP length field disagreeing with the bytes supplied | length error (FR-R-106) |
 | Any ADU exceeding its framing's maximum | size error (FR-R-091, FR-R-104, FR-R-113) |
+| RTU-over-stream ADU, function code 8, 43 with MEI ≠ 14, or a custom code | indeterminate-length error naming the function code; the extent is not guessed (FR-R-148) |
+| RTU-over-stream exception response to any function code, custom included | extent is 5 bytes; the exception path stays derivable where the normal path is not (FR-R-147, FR-R-086) |
+| RTU-over-stream derived extent above 256 bytes | oversized-ADU error, raised before it sizes any read (FR-R-149) |
+| RTU-over-stream CRC mismatch | checksum error, and the delimitation is unsound with it: the failure is terminal for the stream, not frame-local (FR-R-150) |
 
 Every row above is an error, never a panic: FR-R-130 admits no exception for any
 input whatsoever.
@@ -134,5 +138,13 @@ input whatsoever.
   validity only; Illegal Data Address is the server area's judgment.
 - **Broadcast is recognised, not enforced.** FR-R-096 names address 0; the rule
   that a server sends no response to a broadcast is server-area behavior.
-- **No Modbus Plus, no serial-line ASCII delimiter negotiation, no
-  RTU-over-TCP gateway emulation.** Three framings only: RTU, ASCII, TCP.
+- **RTU over a stream cannot carry every function code.** The boundary is derived
+  from the frame's own length fields, and function code 8, function code 43
+  outside MEI type 14, and every custom code have no derivable length
+  (FR-R-148). They encode and decode perfectly well; what cannot be done is find
+  where they end in a byte stream that gives no other clue. This is a property of
+  the mode, not of this implementation: a transparent gateway forwards bytes and
+  adds nothing to delimit them, so any stack reading them either derives the
+  length as this one does, guesses, or scans for a CRC that matches by luck.
+- **No Modbus Plus, and no serial-line ASCII delimiter negotiation.** Four
+  framings only: RTU, RTU over stream, ASCII, TCP.

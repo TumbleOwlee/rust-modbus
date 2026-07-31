@@ -79,6 +79,7 @@ the raw code (FR-R-083).
 | Framing | Wrapping | Integrity |
 |---|---|---|
 | RTU | address + PDU + CRC | CRC-16, poly `0xA001`, init `0xFFFF`, low byte first |
+| RTU over stream | address + PDU + CRC, identical to RTU (FR-R-145) | the same CRC-16 |
 | ASCII | `:` + hex(address + PDU + LRC) + CRLF | LRC, two's complement of the 8-bit sum |
 | TCP | MBAP header + PDU | none (TCP provides it) |
 
@@ -107,7 +108,9 @@ crate is `no_std` + `alloc` (NF-R-001), so `Vec` is `alloc::vec::Vec`.
 | `FileRecordReadResponse` | struct | `{ values: Vec<RegisterValue> }` |
 | `FileRecordWrite` | struct | `{ file_number: FileNumber, record_number: RecordNumber, values: Vec<RegisterValue> }` |
 | `Framing` | trait | the ADU abstraction of FR-R-120 |
-| `Rtu`, `Ascii`, `Tcp` | struct | the three framings of §5, each a `Framing` impl |
+| `Rtu`, `RtuOverTcp`, `Ascii`, `Tcp` | struct | the four framings of §5, each a `Framing` impl |
+| `Direction` | enum | `Request`, `Response` — which direction a boundary derivation is asked about (FR-R-146) |
+| `Extent` | enum | `NeedMore`, `Complete(usize)` — the result of a content-derived boundary derivation |
 | `MbapHeader` | struct | `{ transaction_id: TransactionId, unit_id: UnitId }` |
 | `Error`, `Result<T>` | enum, alias | §7; `Result<T> = core::result::Result<T, Error>` |
 | `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-045) |
@@ -190,6 +193,21 @@ pub enum AduBoundary {
     Delimited { start: u8, end: &'static [u8] },
     /// The ADU ends when the line goes quiet.
     Silence,
+    /// The ADU's own content gives its length. `extent` is called once at
+    /// least `min` bytes are in hand, and again after every further read.
+    ContentLength { min: usize, extent: fn(Direction, &[u8]) -> Result<Extent> },
+}
+
+/// Which direction a boundary derivation is being asked about (FR-R-005).
+pub enum Direction { Request, Response }
+
+/// What a content-derived boundary makes of the bytes so far.
+pub enum Extent {
+    /// Not enough bytes yet to say where the ADU ends.
+    NeedMore,
+    /// The ADU is exactly this many bytes long, that count including any bytes
+    /// still to be read.
+    Complete(usize),
 }
 ```
 
@@ -202,24 +220,26 @@ impl AduBoundary {
 
 `is_self_locating` reports whether a failure is recoverable: `Silence` and `Delimited`
 locate the next boundary from the wire itself and are therefore self-locating, while
-`Prefixed` learns the next boundary only from the frame that just failed and is not.
-The client and the server consult it to decide whether an undecodable frame costs one
-frame or the whole link (CL-R-023, SV-R-050).
+`Prefixed` and `ContentLength` learn the next boundary only from the frame that just
+failed and are not. The client and the server consult it to decide whether an
+undecodable frame costs one frame or the whole link (CL-R-023, SV-R-050).
 
 `boundary` states where an ADU ends (FR-R-122) without performing any I/O, so
 the rule stays testable on byte vectors and available on `no_std`. `Tcp` is
 `Prefixed { prefix: 6, .. }` with `total` validating the MBAP length per
 FR-R-105 before returning `6 + length`; `Ascii` is `Delimited { start: b':',
 end: b"\r\n" }`; `Rtu` is `Silence`, whose duration is a serial-port property and
-therefore belongs to the transport area (TR-R-011), not here.
+therefore belongs to the transport area (TR-R-011), not here. `RtuOverTcp` is
+`ContentLength { min: 4, .. }` — an address, a one-byte PDU and a CRC are the
+least an ADU can be — whose `extent` implements FR-R-146 and FR-R-147.
 
 `function` reports the code a PDU carries (FR-R-016) without re-encoding it; for
 `ResponsePdu::Exception` it is the code the exception is *to*, not the code with
 the high bit set, since that is the function the caller asked about.
 
-`Framing::Header` is `UnitId` for `Rtu` and `Ascii` (the server address,
-FR-R-096, FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN` is 256, 513, and
-260 respectively (FR-R-091, FR-R-113, FR-R-104).
+`Framing::Header` is `UnitId` for `Rtu`, `RtuOverTcp` and `Ascii` (the server
+address, FR-R-096, FR-R-117) and `MbapHeader` for `Tcp` (FR-R-101). `MAX_ADU_LEN`
+is 256, 256, 513, and 260 respectively (FR-R-091, FR-R-113, FR-R-104).
 
 `FunctionCode`, `ExceptionCode`, and `DiagnosticSubFunction` each expose
 `decode` and `encode`; the ones whose general variant can hold a named code
@@ -242,7 +262,8 @@ caller has to match on by substring. Adding a variant is a normative change.
 | `Framing` | `element: &'static str` | FR-R-110, FR-R-116 |
 | `InvalidCharacter` | `u8` | FR-R-112 |
 | `ProtocolIdentifier` | `u16` | FR-R-102 |
-| `AduTooLarge` | `len: usize, max: usize` | FR-R-091, FR-R-104, FR-R-113 |
+| `AduTooLarge` | `len: usize, max: usize` | FR-R-091, FR-R-104, FR-R-113, FR-R-149 |
+| `IndeterminateLength` | `function: u8` | FR-R-148 |
 | `ReferenceType` | `u8` | FR-R-054 |
 | `IllegalValue` | `field: &'static str, value: u16` | FR-R-022, FR-R-061, FR-R-065, FR-R-074, FR-R-077 |
 | `ByteCountMismatch` | `expected: usize, actual: usize` | FR-R-033, FR-R-043, FR-R-056, FR-R-057, FR-R-058, FR-R-076 |

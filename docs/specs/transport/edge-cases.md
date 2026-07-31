@@ -20,6 +20,10 @@ here so they are not mistaken for oversights and silently "fixed".
 | An ADU claims or occupies more than `MAX_ADU_LEN` | Oversized-ADU error; the read buffer never grows past that bound (TR-R-013) |
 | A receive fails before the ADU was delimited, RTU or ASCII | The bytes gathered for the attempt are discarded, so the next receive starts at the next boundary the wire provides (TR-R-044) |
 | A receive fails before the ADU was delimited, TCP | The gathered bytes are retained; without the length field there is no later boundary to resume from, so the failure is terminal for the stream (TR-R-044) |
+| An RTU-over-TCP ADU split across any number of reads | Reassembled: the derivation reports that more bytes are needed until the extent is known and in hand (TR-R-045) |
+| Two RTU-over-TCP ADUs coalesced into one read | Both delivered, one per `recv` call; the extent of the first is what separates them, not a gap (TR-R-045, TR-R-004) |
+| An RTU-over-TCP frame whose extent cannot be derived | Indeterminate-length error; the gathered bytes are retained and the failure is terminal for the stream (TR-R-046, FR-R-148) |
+| An idle gap in an RTU-over-TCP stream | Ignored entirely; the inter-frame interval has no effect over a socket (TR-R-048) |
 | A transport that only ever receives | Never allocates a write buffer at all; the cost is paid on the first send (TR-R-043) |
 | An idle transport between sends | Keeps its write buffer's capacity — up to `MAX_ADU_LEN` — resident on purpose; that retention *is* the reuse (TR-R-043) |
 | A send that fails mid-write | The write buffer is cleared before the next frame, so no fragment of the abandoned ADU is ever re-sent (TR-R-043, FR-R-142) |
@@ -64,10 +68,13 @@ owns the desynchronization that TR-R-041 describes.
 - **No UDP.** Modbus over UDP is not part of the specification, and a datagram
   transport has different framing and retransmission semantics than the stream
   the client and server are written against.
-- **No RTU-over-TCP gateway framing.** Some gateways carry a bare RTU ADU inside
-  a TCP stream. That combination has neither a length field nor inter-frame
-  timing, so an ADU boundary cannot be recovered from the stream at all; it is
-  excluded rather than guessed at.
+- **RTU-over-TCP costs the whole link, not one frame.** The mode is supported
+  (FR-R-145), but its boundary is derived from each frame's own content, so it is
+  not self-locating (FR-R-150) and one corrupted or undecodable frame
+  desynchronizes the client (CL-R-023) or ends the server's connection
+  (SV-R-050) — the same posture as Modbus TCP, and unlike RTU on a serial line,
+  where the silence would still be there to resynchronize on. A deployment that
+  expects noise on the far side of the gateway should expect to reconnect.
 - **Serial parity and framing errors are not reported per byte.** The serial
   backend surfaces them, at best, as an I/O error covering an entire read. A byte
   corrupted in a way the UART detected is therefore indistinguishable here from

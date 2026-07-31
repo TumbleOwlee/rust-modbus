@@ -18,6 +18,7 @@ here so they are not mistaken for oversights and silently "fixed".
 | Address or quantity the *application* does not have | Nothing the server can judge — the service returns `IllegalDataAddress` (SV-R-005) |
 | A write to what the consumer considers read-only | The service's refusal; the crate has no read-only notion (SV-R-005) |
 | Unit identifier does not match a configured one | No response at all, connection continues (SV-R-021) |
+| A request to a non-matching unit id over RTU-over-TCP | No response, connection stays open (SV-R-021) — the socket is one gateway, but the bus behind it is many devices, so the identifier is a real address and answering for another device would corrupt its exchange |
 | Unit identifier when none is configured | Dispatched as received; the service decides (SV-R-022) |
 | Unit 0 on RTU or ASCII | Dispatched, never answered (SV-R-023) |
 | The service returns a response that cannot be encoded | `on_error`, no response sent, connection continues (SV-R-014) |
@@ -27,9 +28,9 @@ A service refusal and a decode failure are deliberately different channels: the
 first is a Modbus answer, the second is not answerable at all, because the frame
 that would say which function was being refused is the frame that could not be
 trusted. Whether the connection survives that failure depends on the framing: on
-TCP the reader is left unsure where the next frame starts and the connection ends,
-while RTU and ASCII locate the next boundary from the wire itself and serving
-continues (SV-R-050, FR-R-144).
+TCP and on RTU-over-TCP the reader is left unsure where the next frame starts and
+the connection ends, while RTU and ASCII locate the next boundary from the wire
+itself and serving continues (SV-R-050, FR-R-144).
 
 ## 2. Connections
 

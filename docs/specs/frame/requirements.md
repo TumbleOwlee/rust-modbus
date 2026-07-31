@@ -482,6 +482,69 @@ FR-R-133 applies to the decoded PDU without qualification.
 
 ---
 
+## 10a. RTU over a byte stream
+
+**FR-R-145** — The frame layer shall provide a fourth framing, **RTU over
+stream**, whose ADU is byte-for-byte an RTU ADU (FR-R-090 … FR-R-096): a 1-byte
+address field, the PDU, and the CRC of FR-R-092 low byte first. It shall carry
+the same header as RTU (FR-R-096), the same maximum ADU length of 256 bytes
+(FR-R-091), and shall encode and decode identically. It exists to state a
+different boundary rule, never a different wire format, and no second CRC
+computation shall be defined for it.
+
+**FR-R-146** — The extent of an RTU-over-stream ADU shall be derived from the
+direction the caller states (FR-R-005), the function code, and the length fields
+the ADU itself carries, and from nothing else. The derived extent shall be
+`3 + PDU length`: the address byte, the PDU, and the two CRC bytes. The
+derivation shall be a pure function of the bytes received so far, shall report
+that more bytes are needed rather than reading any, and shall perform no I/O.
+
+**FR-R-147** — The derivation of FR-R-146 shall be defined for exactly the
+following, and the PDU length it yields shall be:
+
+- a response whose function code has its most significant bit set: 2, for every
+  function code including a custom one (FR-R-080, FR-R-086);
+- requests for function codes 1, 2, 3, 4, 5, 6: 5; 7, 11, 12, 17: 1; 22: 7;
+  24: 3;
+- requests for function codes 15, 16: `6 + byte count`, the byte count being the
+  sixth byte of the PDU;
+- requests for function codes 20, 21: `2 + byte count`, the byte count being the
+  second byte of the PDU;
+- a request for function code 23: `10 + write byte count`, the write byte count
+  being the tenth byte of the PDU;
+- a request for function code 43 with MEI type 14: 4;
+- responses for function codes 5, 6, 15, 16, 11: 5; 7: 2; 22: 7;
+- responses for function codes 1, 2, 3, 4, 12, 17, 20, 21, 23: `2 + byte count`,
+  the byte count being the second byte of the PDU;
+- a response for function code 24: `3 + byte count`, the byte count being the
+  2-byte field of FR-R-041;
+- a response for function code 43 with MEI type 14: the length obtained by
+  walking its object list per FR-R-075, each object contributing
+  `2 + object length` bytes.
+
+**FR-R-148** — Any function code or MEI type FR-R-147 does not define shall fail
+the derivation with an indeterminate-length error naming the function code, and
+shall never be guessed at, scanned for, or terminated by a checksum search. This
+covers function code 8 in both directions, whose data-word count the
+specification does not fix (FR-R-061); function code 43 with any MEI type other
+than 14, whose body is opaque (FR-R-071, FR-R-072); and every custom function
+code, whose body is opaque by definition (FR-R-012). A device using any of them
+behind a transparent gateway is not reachable through this framing, and the
+error says so rather than misdelimiting the stream.
+
+**FR-R-149** — An extent the derivation yields that exceeds the framing's maximum
+ADU length (FR-R-091) shall fail with the oversized-ADU error before it sizes any
+read or allocation, on the same terms as FR-R-105.
+
+**FR-R-150** — The RTU-over-stream boundary shall not be self-locating
+(FR-R-144). The extent of a frame is read out of that frame's own bytes, so a
+frame whose content is wrong yields an extent that is wrong, and the position of
+the next frame is lost with it. A CRC that does not match (FR-R-095) is therefore
+evidence that the delimitation was itself unsound, and shall not be treated as a
+frame-local failure on this framing.
+
+---
+
 ## 11. ADU framing abstraction
 
 **FR-R-120** — The frame layer shall expose its three framings behind a single
@@ -497,8 +560,9 @@ caller may route on the header without re-encoding the PDU.
 
 **FR-R-122** — A framing shall declare how the end of an ADU is determined, as
 one of: a length derivable from a fixed-size prefix; a start and end delimiter;
-or inter-frame silence. The declaration shall be a property of the framing and
-shall involve no I/O.
+inter-frame silence; or a length derivable from the ADU's own content together
+with the direction it carries. The declaration shall be a property of the framing
+and shall involve no I/O.
 
 ---
 
@@ -552,7 +616,7 @@ buffer per frame.
 **FR-R-144** — Each ADU boundary rule shall state whether it is **self-locating**:
 whether the next frame boundary can be found from the wire alone, without reference
 to the frame before it. A boundary determined by inter-frame silence or by delimiters
-shall be self-locating. A boundary determined by a length field shall not be, since the
-length that would delimit the next frame is carried by the frame that failed. This
-property shall be derived from the boundary rule itself, so that a framing cannot state
-one rule and behave by another.
+shall be self-locating. A boundary determined by a length field, or derived from the
+ADU's own content, shall not be, since in both cases the information that would delimit
+the next frame is carried by the frame that failed. This property shall be derived from
+the boundary rule itself, so that a framing cannot state one rule and behave by another.

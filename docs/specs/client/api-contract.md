@@ -31,6 +31,7 @@ where
 }
 
 pub type TcpClient = Client<TcpStream, Tcp>;
+pub type RtuOverTcpClient = Client<TcpStream, RtuOverTcp>;
 
 #[cfg(feature = "rtu")]
 pub type RtuClient = Client<SerialStream, Rtu>;
@@ -56,6 +57,12 @@ pub trait ClientFraming: Framing {
 identifier, and broadcast on unit 0 (CL-R-050). `Tcp` builds an `MbapHeader`,
 matches on both of its fields (CL-R-020), and never broadcasts. The trait is
 public because it bounds a public type, and unsealed because `Framing` is.
+
+`RtuOverTcp` behaves exactly as `Rtu` here: the header is the address, a response
+matches on it, and unit 0 broadcasts (CL-R-050) — a transparent gateway forwards
+a broadcast onto the bus it fronts, and no device answers one. Unlike
+`RtuClient`, `RtuOverTcpClient` is not behind the `rtu` feature: it opens no
+serial port (TR-R-033).
 
 ## 2. Request methods
 
