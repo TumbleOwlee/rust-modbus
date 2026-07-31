@@ -37,6 +37,29 @@ impl Default for ClientConfig {
     }
 }
 
+/// Why a client became unusable (CL-R-037).
+///
+/// These values name the observation the client made at the moment it became
+/// desynchronized. They report what the client observed, never whether the peer
+/// is alive — on TCP a peer that vanished without a FIN is indistinguishable
+/// from an idle one until something is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusableReason {
+    /// The peer's end of stream was seen (CL-R-037).
+    PeerClosed,
+    /// The platform reported an I/O failure in either direction (CL-R-037).
+    Io {
+        /// The I/O error kind the platform reported.
+        kind: std::io::ErrorKind,
+    },
+    /// The response timeout elapsed with no matching response (CL-R-031,
+    /// CL-R-037).
+    Silent,
+    /// A frame did not decode on a framing that is not self-locating
+    /// (CL-R-023, CL-R-037).
+    Undecodable,
+}
+
 /// What a client knows about its own usability (CL-R-035).
 ///
 /// These values report what *this client observed*, never whether the peer is
@@ -56,8 +79,9 @@ pub enum ClientState {
     /// The last exchange was not answered, and the client is still usable
     /// (CL-R-023).
     Unanswered,
-    /// Every further request will be refused (CL-R-032).
-    Unusable,
+    /// Every further request will be refused (CL-R-032). The reason names what
+    /// the client observed at the moment it became so.
+    Unusable(UnusableReason),
 }
 
 /// A client over a TCP socket.
@@ -129,7 +153,7 @@ where
     /// disagree.
     #[must_use]
     pub fn is_desynchronized(&self) -> bool {
-        matches!(self.state, ClientState::Unusable)
+        matches!(self.state, ClientState::Unusable(_))
     }
 
     /// What this client knows about its own usability (CL-R-035).
@@ -169,7 +193,7 @@ where
         if let Err(error) = self.transport.send_request(&header, &request).await {
             // The ADU may be on the wire in part. Nothing a later request can
             // do repairs that, so the failure is not recoverable (CL-R-013).
-            self.state = ClientState::Unusable;
+            self.state = ClientState::Unusable(classify_unusable_reason(&error));
             return Err(error);
         }
         self.next_transaction = next(transaction);
@@ -191,7 +215,7 @@ where
                     Err(_elapsed) => {
                         // Nothing failed; the wait ran out. What the peer sends
                         // next is now unaccounted for (CL-R-031).
-                        self.state = ClientState::Unusable;
+                        self.state = ClientState::Unusable(UnusableReason::Silent);
                         return Err(Error::Timeout { what: "response" });
                     }
                 };
@@ -204,7 +228,7 @@ where
                     // silence and delimiters are still on the wire, so there
                     // the failure costs exactly that frame (CL-R-023).
                     self.state = if error.ends_stream() || !F::boundary().is_self_locating() {
-                        ClientState::Unusable
+                        ClientState::Unusable(classify_unusable_reason(&error))
                     } else {
                         // The link survives, but this exchange got no answer
                         // (CL-R-035).
@@ -680,6 +704,31 @@ pub struct CommEventLog {
     /// The event bytes themselves, most recent first. Their meaning is
     /// device-specific, so they are carried raw.
     pub events: Vec<u8>,
+}
+
+/// Classify an error that leaves the client desynchronized into an
+/// [`UnusableReason`] (CL-R-037).
+///
+/// The reason names what the client observed at the moment it became unusable:
+/// it does not assert anything about the peer's condition, which the client
+/// cannot observe. The classification is:
+/// - `ConnectionClosed` or `Io { kind: UnexpectedEof }` → `PeerClosed`
+/// - Other `Io { kind }` → `Io { kind }`
+/// - `Timeout` → `Silent`
+/// - Anything else (frame decoding failures on TCP) → `Undecodable`
+fn classify_unusable_reason(error: &Error) -> UnusableReason {
+    match error {
+        Error::ConnectionClosed => UnusableReason::PeerClosed,
+        Error::Io { kind } => {
+            if *kind == std::io::ErrorKind::UnexpectedEof {
+                UnusableReason::PeerClosed
+            } else {
+                UnusableReason::Io { kind: *kind }
+            }
+        }
+        Error::Timeout { .. } => UnusableReason::Silent,
+        _ => UnusableReason::Undecodable,
+    }
 }
 
 /// Keep the bits asked for and drop the padding the wire adds (CL-R-062).
@@ -1921,5 +1970,104 @@ mod tests {
             listening.await.expect("the server task finishes").is_err(),
             "reporting the state put bytes on the wire"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-037 — the response timeout elapses; state is
+    /// `Unusable(UnusableReason::Silent)`.
+    async fn ut_timeout_reports_silent() {
+        let (mut client, mut server) = pair();
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Silent)
+        );
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-037 — a malformed TCP response; state is
+    /// `Unusable(UnusableReason::Undecodable)`.
+    async fn ut_undecodable_response_on_tcp_reports_undecodable() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        let mut server = server;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            server
+                .write_all(&[
+                    0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x11, 0x03, 0x04, 0x00, 0x2A,
+                ])
+                .await
+                .expect("the reply is written");
+            server
+        });
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "the decoding error should be reported");
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Undecodable)
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test]
+    /// CL-R-037 — drop the peer half, then issue a request; state is
+    /// `Unusable(UnusableReason::Io { kind })`.
+    async fn ut_write_failure_reports_the_io_kind() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        drop(server);
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "the write should fail");
+        match client.state() {
+            ClientState::Unusable(UnusableReason::Io { kind }) => {
+                assert!(!matches!(
+                    kind,
+                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                ));
+            }
+            state => panic!("expected Unusable(Io {{ kind }}), got {:?}", state),
+        }
+    }
+
+    #[tokio::test]
+    /// CL-R-037 — peer reads the request then shuts down; state is
+    /// `Unusable(UnusableReason::PeerClosed)`.
+    async fn ut_peer_close_before_a_response_reports_peer_closed() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        let mut server = server;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            let read_result = server.read_exact(&mut request).await;
+            assert!(read_result.is_ok(), "the request should arrive");
+            // Close the peer end without sending a response.
+            drop(server);
+        });
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "reading from a closed peer should fail");
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::PeerClosed)
+        );
+        let _ = answering.await;
     }
 }

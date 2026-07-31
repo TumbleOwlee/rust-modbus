@@ -200,6 +200,7 @@ pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
 pub use client::{
     Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog, TcpClient,
+    UnusableReason,
 };
 pub use error::{Error, Result};
 pub use frame::{
