@@ -72,6 +72,34 @@ do the work. Size decides how many *stages* the plan has, never whether the gate
 Work on a branch off `main`, never on `main` itself. `<type>/<slug>`, conventional-commit
 type (`feat/`, `fix/`, `docs/`).
 
+### Who does which phase
+
+The gates below are executed by different agents on purpose, and the orchestrator that
+delegates them is responsible for the verification between each one.
+
+- **Planning — an Opus agent.** Gates 1, 1b and 2 (the spec diff, the tracking issue, the
+  implementation plan) are drafted by an agent running Opus. Planning is where a wrong
+  call is cheapest to make and most expensive to keep, so it gets the strongest model.
+- **Verify the plan, then ask.** The orchestrator checks the plan itself before the user
+  ever sees it: that every quoted requirement text matches the file, that appended IDs are
+  genuinely unused, that the plan does not contradict an existing requirement, and that
+  what it proposes is what was asked for. Only then is approval requested.
+- **Implementation — a Haiku agent.** Once the user approves, the plan is handed to an
+  agent running Haiku, which implements it stage by stage under the TDD rules above. The
+  plan is the contract: an implementer that finds the plan wrong stops and reports rather
+  than improvising a different design.
+- **Verify the implementation, then ask.** The orchestrator verifies the work itself —
+  re-running the full build/test/lint/coverage gauntlet rather than trusting the agent's
+  report, checking requirement-ID citations sit directly below their test attributes,
+  mutation-checking any test written after its implementation, and diffing the spec against
+  what was approved. Only then is the next gate's approval requested.
+
+**Every agent works in its own git worktree, one per issue.** Two agents in one checkout
+will interleave their commits, `git add -A` each other's unstaged work into the wrong
+commit, and break each other's build — the branch alone does not isolate them, because a
+branch is not a working tree. The worktree is created before the agent starts and removed
+after its branch merges.
+
 1. **Read the affected area's spec.** Use the routing table below to find it. Read
    `requirements.md` and `edge-cases.md` before proposing anything — `edge-cases.md`
    records behavior that is ugly *on purpose*.
