@@ -37,6 +37,59 @@ impl Default for ClientConfig {
     }
 }
 
+/// Why a client became unusable (CL-R-037).
+///
+/// These values name the observation the client made at the moment it became
+/// desynchronized. They report what the client observed, never whether the peer
+/// is alive — on TCP a peer that vanished without a FIN is indistinguishable
+/// from an idle one until something is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusableReason {
+    /// The peer's end of stream was seen (CL-R-037).
+    PeerClosed,
+    /// The platform reported an I/O failure in either direction (CL-R-037).
+    Io {
+        /// The I/O error kind the platform reported.
+        kind: std::io::ErrorKind,
+    },
+    /// The response timeout elapsed with no matching response (CL-R-031,
+    /// CL-R-037).
+    Silent,
+    /// A frame did not decode on a framing that is not self-locating
+    /// (CL-R-023, CL-R-037).
+    Undecodable,
+}
+
+/// What a client knows about its own usability (CL-R-035).
+///
+/// These values report what *this client observed*, never whether the peer is
+/// alive: on TCP a peer that vanished without a FIN is indistinguishable from an
+/// idle one until something is written. [`ClientState::Answered`] is therefore a
+/// statement about the past, and [`ClientState::Untried`] a statement about this
+/// client. There is no liveness probe (CL-R-039) — proving a server still
+/// answers costs a request, and which requests reach the wire is the caller's to
+/// authorize (CL-R-033).
+///
+/// [`ClientState::Answered`] says the peer replied to the last request this
+/// client sent, not that one would reply now. On TCP a peer that vanished
+/// without a FIN is indistinguishable from an idle one until bytes are written,
+/// so no local check can do better. A failover built on [`ClientState::Answered`]
+/// meaning "alive" is built on a guarantee that does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientState {
+    /// No exchange has been attempted, or only broadcast writes have been
+    /// (CL-R-036).
+    Untried,
+    /// The last exchange was answered, including with an exception (CL-R-036).
+    Answered,
+    /// The last exchange was not answered, and the client is still usable
+    /// (CL-R-023).
+    Unanswered,
+    /// Every further request will be refused (CL-R-032). The reason names what
+    /// the client observed at the moment it became so.
+    Unusable(UnusableReason),
+}
+
 /// A client over a TCP socket.
 pub type TcpClient = Client<tokio::net::TcpStream, crate::frame::Tcp>;
 
@@ -63,8 +116,10 @@ pub struct Client<S, F> {
     config: ClientConfig,
     /// The identifier the next request will carry (CL-R-011).
     next_transaction: TransactionId,
-    /// Whether the byte stream is still accounted for (CL-R-031).
-    desynchronized: bool,
+    /// What this client has observed about its own usability (CL-R-035). The
+    /// desynchronization flag of CL-R-031 is one of its cases rather than a
+    /// second value beside it, so the two cannot disagree (CL-R-034).
+    state: ClientState,
 }
 
 impl<S, F> Client<S, F>
@@ -86,7 +141,7 @@ where
             // Identifier 0 is never allocated, so a matched response is never
             // matched against an unset field (CL-R-011).
             next_transaction: TransactionId(1),
-            desynchronized: false,
+            state: ClientState::Untried,
         }
     }
 
@@ -99,9 +154,23 @@ where
     }
 
     /// Whether this client has given up on the byte stream (CL-R-034).
+    ///
+    /// A projection of [`Client::state`], not a value beside it: the two cannot
+    /// disagree.
     #[must_use]
     pub fn is_desynchronized(&self) -> bool {
-        self.desynchronized
+        matches!(self.state, ClientState::Unusable(_))
+    }
+
+    /// What this client knows about its own usability (CL-R-035).
+    ///
+    /// Answers from what has already been observed: it touches neither the
+    /// transport nor the clock, and never blocks (CL-R-038). It reports this
+    /// client's history, **not** whether the peer is alive — see [`ClientState`]
+    /// for why no local check can do better.
+    #[must_use]
+    pub fn state(&self) -> ClientState {
+        self.state
     }
 
     /// Issue a request and return the response as received (CL-R-061).
@@ -116,7 +185,7 @@ where
     /// matching response arrives within the response timeout, or if the client
     /// is already desynchronized.
     pub async fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>> {
-        if self.desynchronized {
+        if self.is_desynchronized() {
             return Err(Error::Desynchronized);
         }
 
@@ -130,12 +199,14 @@ where
         if let Err(error) = self.transport.send_request(&header, &request).await {
             // The ADU may be on the wire in part. Nothing a later request can
             // do repairs that, so the failure is not recoverable (CL-R-013).
-            self.desynchronized = true;
+            self.state = ClientState::Unusable(classify_unusable_reason(&error));
             return Err(error);
         }
         self.next_transaction = next(transaction);
 
         if F::is_broadcast(unit) {
+            // Nothing was heard, and nothing was expected to be: a broadcast is
+            // no evidence either way, so the report stands as it was (CL-R-036).
             return Ok(None);
         }
 
@@ -150,7 +221,7 @@ where
                     Err(_elapsed) => {
                         // Nothing failed; the wait ran out. What the peer sends
                         // next is now unaccounted for (CL-R-031).
-                        self.desynchronized = true;
+                        self.state = ClientState::Unusable(UnusableReason::Silent);
                         return Err(Error::Timeout { what: "response" });
                     }
                 };
@@ -162,9 +233,13 @@ where
                     // the next boundary was carried by the frame that failed;
                     // silence and delimiters are still on the wire, so there
                     // the failure costs exactly that frame (CL-R-023).
-                    if error.ends_stream() || !F::boundary().is_self_locating() {
-                        self.desynchronized = true;
-                    }
+                    self.state = if error.ends_stream() || !F::boundary().is_self_locating() {
+                        ClientState::Unusable(classify_unusable_reason(&error))
+                    } else {
+                        // The link survives, but this exchange got no answer
+                        // (CL-R-035).
+                        ClientState::Unanswered
+                    };
                     return Err(error);
                 }
             };
@@ -173,6 +248,9 @@ where
                 // waiting against the same deadline (CL-R-021).
                 continue;
             }
+            // The peer answered. What it said may still be wrong, but the link
+            // carried a frame that corresponds to the request (CL-R-036).
+            self.state = ClientState::Answered;
             let actual = response.function();
             if actual != expected {
                 return Err(Error::UnexpectedFunction { expected, actual });
@@ -632,6 +710,31 @@ pub struct CommEventLog {
     /// The event bytes themselves, most recent first. Their meaning is
     /// device-specific, so they are carried raw.
     pub events: Vec<u8>,
+}
+
+/// Classify an error that leaves the client desynchronized into an
+/// [`UnusableReason`] (CL-R-037).
+///
+/// The reason names what the client observed at the moment it became unusable:
+/// it does not assert anything about the peer's condition, which the client
+/// cannot observe. The classification is:
+/// - `ConnectionClosed` or `Io { kind: UnexpectedEof }` → `PeerClosed`
+/// - Other `Io { kind }` → `Io { kind }`
+/// - `Timeout` → `Silent`
+/// - Anything else (frame decoding failures on TCP) → `Undecodable`
+fn classify_unusable_reason(error: &Error) -> UnusableReason {
+    match error {
+        Error::ConnectionClosed => UnusableReason::PeerClosed,
+        Error::Io { kind } => {
+            if *kind == std::io::ErrorKind::UnexpectedEof {
+                UnusableReason::PeerClosed
+            } else {
+                UnusableReason::Io { kind: *kind }
+            }
+        }
+        Error::Timeout { .. } => UnusableReason::Silent,
+        _ => UnusableReason::Undecodable,
+    }
 }
 
 /// Keep the bits asked for and drop the padding the wire adds (CL-R-062).
@@ -1677,5 +1780,300 @@ mod tests {
             "the late response must not answer a later request"
         );
         late.abort();
+    }
+
+    #[tokio::test]
+    /// CL-R-035 — a client that has done nothing says so, rather than claiming
+    /// a health it has no evidence for.
+    async fn ut_new_client_is_untried() {
+        let (client, _server) = pair();
+        assert_eq!(client.state(), ClientState::Untried);
+    }
+
+    #[tokio::test]
+    /// CL-R-035 — an exchange the peer answered is reported as answered, and
+    /// stays that way while nothing further has been observed.
+    async fn ut_answered_after_a_matched_response() {
+        let (mut client, mut server) = pair();
+        let answering = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("responds");
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(registers()))
+        );
+        assert_eq!(client.state(), ClientState::Answered);
+        assert_eq!(
+            client.state(),
+            ClientState::Answered,
+            "reporting the state must not consume it"
+        );
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-036 — an exception is an answer. The server replied; it merely
+    /// refused, which says as much about the link as a success does.
+    async fn ut_exception_counts_as_answered() {
+        let (mut client, mut server) = pair();
+        let exception = ResponsePdu::Exception(ExceptionResponse {
+            function: FunctionCode::ReadHoldingRegisters,
+            exception: ExceptionCode::IllegalDataAddress,
+        });
+        let answering = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            server
+                .send_response(&header, &exception)
+                .await
+                .expect("responds");
+        });
+
+        assert!(
+            client
+                .read_holding_registers(UnitId(0x11), Address(0x006B), Quantity(3))
+                .await
+                .is_err(),
+            "the typed method surfaces the exception as a failure"
+        );
+        assert_eq!(client.state(), ClientState::Answered);
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
+    /// CL-R-036 — a response carrying another function's code is still an
+    /// answer: the frame corresponded to the request and decoded.
+    async fn ut_unexpected_function_counts_as_answered() {
+        let (mut client, mut server) = pair();
+        let answering = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            server
+                .send_response(&header, &ResponsePdu::ReadCoils { coils: vec![true] })
+                .await
+                .expect("responds");
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::UnexpectedFunction {
+                expected: FunctionCode::ReadHoldingRegisters,
+                actual: FunctionCode::ReadCoils,
+            })
+        );
+        assert_eq!(client.state(), ClientState::Answered);
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-036 — a broadcast is heard by no one that answers, so it leaves the
+    /// report exactly as it found it: `Untried` stays untried, and an earlier
+    /// answer is neither confirmed nor erased.
+    async fn ut_broadcast_write_leaves_state_unchanged() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let good = Rtu::encode_response(&UnitId(0x11), &registers()).expect("the response encodes");
+
+        let answering = tokio::spawn(async move {
+            let mut frame = [0u8; 8];
+            server
+                .read_exact(&mut frame)
+                .await
+                .expect("the broadcast arrives whole");
+            server
+                .read_exact(&mut frame)
+                .await
+                .expect("the request arrives whole");
+            server.write_all(&good).await.expect("responds");
+            server
+                .read_exact(&mut frame)
+                .await
+                .expect("the second broadcast arrives whole");
+            server
+        });
+
+        let broadcast = RequestPdu::WriteSingleRegister {
+            address: Address(0x0001),
+            value: RegisterValue(0x0003),
+        };
+        assert_eq!(client.call(UnitId(0), broadcast.clone()).await, Ok(None));
+        assert_eq!(
+            client.state(),
+            ClientState::Untried,
+            "writing where nobody answers is not evidence of an answer"
+        );
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(registers()))
+        );
+        assert_eq!(client.state(), ClientState::Answered);
+
+        assert_eq!(client.call(UnitId(0), broadcast).await, Ok(None));
+        assert_eq!(
+            client.state(),
+            ClientState::Answered,
+            "a broadcast must not overwrite what was actually observed"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-034 — a corrupt frame on a self-locating framing leaves the client
+    /// usable but the exchange unanswered, and the boolean report agrees with
+    /// the state it is a projection of.
+    async fn ut_undecodable_response_on_rtu_reports_unanswered() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+
+        let good = Rtu::encode_response(&UnitId(0x11), &registers()).expect("the response encodes");
+        let mut corrupt = good.clone();
+        let last = corrupt.last_mut().expect("the ADU carries a CRC");
+        *last ^= 0xFF;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 8];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            server
+                .write_all(&corrupt)
+                .await
+                .expect("writes the corrupt frame");
+            server
+        });
+
+        assert!(matches!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Checksum { .. })
+        ));
+        assert_eq!(client.state(), ClientState::Unanswered);
+        assert!(
+            !client.is_desynchronized(),
+            "the boolean must agree with the state it projects"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test]
+    /// CL-R-038 — the report is made of what has already been observed: asking
+    /// for it writes nothing, reads nothing, and returns the same answer twice.
+    async fn ut_state_reports_without_touching_the_transport() {
+        let (client, mut server) = pair();
+        assert_eq!(client.state(), ClientState::Untried);
+        assert_eq!(client.state(), ClientState::Untried);
+        assert!(!client.is_desynchronized());
+
+        // Nothing may have reached the wire, so a receive on the far end must
+        // still be waiting when the client is dropped.
+        let listening = tokio::spawn(async move { server.recv_request().await });
+        drop(client);
+        assert!(
+            listening.await.expect("the server task finishes").is_err(),
+            "reporting the state put bytes on the wire"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-037 — the response timeout elapses; state is
+    /// `Unusable(UnusableReason::Silent)`.
+    async fn ut_timeout_reports_silent() {
+        let (mut client, mut server) = pair();
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Silent)
+        );
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-037 — a malformed TCP response; state is
+    /// `Unusable(UnusableReason::Undecodable)`.
+    async fn ut_undecodable_response_on_tcp_reports_undecodable() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        let mut server = server;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            server
+                .write_all(&[
+                    0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x11, 0x03, 0x04, 0x00, 0x2A,
+                ])
+                .await
+                .expect("the reply is written");
+            server
+        });
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "the decoding error should be reported");
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Undecodable)
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test]
+    /// CL-R-037 — drop the peer half, then issue a request; state is
+    /// `Unusable(UnusableReason::Io { kind })`.
+    async fn ut_write_failure_reports_the_io_kind() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        drop(server);
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "the write should fail");
+        match client.state() {
+            ClientState::Unusable(UnusableReason::Io { kind }) => {
+                assert!(!matches!(
+                    kind,
+                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                ));
+            }
+            state => panic!("expected Unusable(Io {{ kind }}), got {:?}", state),
+        }
+    }
+
+    #[tokio::test]
+    /// CL-R-037 — peer reads the request then shuts down; state is
+    /// `Unusable(UnusableReason::PeerClosed)`.
+    async fn ut_peer_close_before_a_response_reports_peer_closed() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+        let mut server = server;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            let read_result = server.read_exact(&mut request).await;
+            assert!(read_result.is_ok(), "the request should arrive");
+            // Close the peer end without sending a response.
+            drop(server);
+        });
+
+        let result = client.call(UnitId(0x11), read_holding()).await;
+        assert!(result.is_err(), "reading from a closed peer should fail");
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::PeerClosed)
+        );
+        let _ = answering.await;
     }
 }

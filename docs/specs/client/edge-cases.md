@@ -39,7 +39,25 @@ new transport, and a new client. This is deliberate: a retried write is a second
 request the caller never authorized, and on a serial line a duplicated write is
 observable at the device.
 
-## 3. Known limitations
+## 3. What the reported state says
+
+| Condition | Reported state |
+|---|---|
+| Client just constructed | `Untried` (CL-R-035) |
+| Only broadcast writes issued so far | `Untried` — the bytes went out, but no peer answered and none was expected (CL-R-036) |
+| Last exchange returned a response, an `Exception`, or `UnexpectedFunction` | `Answered` — the peer replied, whatever it said (CL-R-036) |
+| Last response failed to decode on RTU or ASCII | `Unanswered`; the client stays usable and the next request proceeds (CL-R-023) |
+| Broadcast write after an answered exchange | `Answered`, unchanged — a broadcast neither confirms nor refutes what came before (CL-R-036) |
+| Peer closed cleanly before any response byte, or mid-ADU | `Unusable(PeerClosed)` (CL-R-037) |
+| Write failed because the peer had gone | `Unusable(Io { kind })` — typically `BrokenPipe` or `ConnectionReset`; only an end of stream on the *read* side is classified `PeerClosed` |
+| Any other I/O failure, either direction | `Unusable(Io { kind })` (CL-R-037) |
+| Response timeout elapsed | `Unusable(Silent)` — the client stopped waiting; the peer may be alive and slow |
+| Response undecodable on TCP | `Unusable(Undecodable)` (CL-R-023) |
+
+Reading the state touches nothing and blocks on nothing (CL-R-038); it may be
+called on a client that has never been used and between requests without cost.
+
+## 4. Known limitations
 
 - **A timeout is unrecoverable, not just unanswered.** The transport refuses a
   receive that follows an abandoned one (TR-R-041), so the client cannot resume
@@ -63,3 +81,19 @@ observable at the device.
 - **No unit-id default.** Every method names its unit explicitly (CL-R-003). A
   default would make the most consequential argument of a Modbus request the one
   most easily forgotten.
+- **`Answered` is history, not liveness.** It says a peer replied to the last
+  request this client sent, not that one would reply now. On TCP a peer that
+  vanished without a FIN is indistinguishable from an idle one until bytes are
+  written, so no local check can do better. A failover built on `Answered`
+  meaning "alive" is built on a guarantee that does not exist.
+- **A quiet link and a dead one are the same observation.** `Silent` means this
+  client's deadline elapsed. A server that is merely slow, a cable that was
+  pulled, and a process that was killed all produce it, and the client does not
+  guess between them — which is why it is not folded into `PeerClosed`.
+- **There is no probe** (CL-R-039). Proving a peer answers costs a request, and
+  unauthorized requests are what CL-R-033 exists to prevent. A caller that wants
+  one issues it with `call` and applies its own policy to the result.
+- **A reason is a promise.** Both reported enums are exhaustive (NF-R-017), so a
+  fifth reason is a breaking change. The four are coarse on purpose; finer
+  classification would either need `#[non_exhaustive]` — which this crate does
+  not use — or a minor bump every time the platform surprises us.

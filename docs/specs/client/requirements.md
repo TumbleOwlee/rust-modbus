@@ -116,7 +116,39 @@ draining, reconnecting, or retrying — each would issue a request the caller di
 not authorize.
 
 **CL-R-034** — The client shall report whether it is desynchronized, so that a
-caller may discard it without first provoking an error.
+caller may discard it without first provoking an error. That report shall be a
+projection of the client state of CL-R-035 rather than a value maintained beside
+it, so the two can never disagree.
+
+**CL-R-035** — The client shall report a state value describing what it knows
+about its own usability, distinguishing four cases: that no exchange has yet been
+attempted; that the last exchange was answered by the peer; that the last
+exchange was not answered and the client remains usable; and that the client is
+unusable and will refuse every further request (CL-R-032).
+
+**CL-R-036** — An exchange shall count as answered when a frame corresponding to
+the request was received and decoded, including an exception response (CL-R-040)
+and a response carrying another function's code (CL-R-022): in each case the peer
+answered, whatever it said. A broadcast write shall leave the reported state
+unchanged rather than count as answered, since no server replies to a broadcast
+(CL-R-051) and nothing was therefore heard from any peer.
+
+**CL-R-037** — Where the client is unusable, the state shall name what the client
+observed at the moment it became so, distinguishing: that the peer's end of
+stream was seen; that the platform reported another I/O failure; that the
+response timeout elapsed with no matching response; and that a frame failed to
+decode on a framing that is not self-locating (CL-R-023). The reason shall name
+the observation and shall not assert anything about the peer's condition, which
+the client cannot observe.
+
+**CL-R-038** — The reported state shall be derived only from observations the
+client has already made. Reporting it shall not read from or write to the
+transport, shall not block, and shall not change the state it reports.
+
+**CL-R-039** — The client shall not offer a liveness probe. Establishing that a
+peer still answers requires issuing a request, and which requests reach the wire
+is the caller's to authorize (CL-R-033); a caller that wants a probe shall issue
+it through the raw request method (CL-R-061).
 
 ---
 

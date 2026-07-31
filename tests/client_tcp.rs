@@ -11,8 +11,9 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
 use rust_modbus::{
-    Address, Client, Error, ExceptionCode, ExceptionResponse, FrameTransport, FunctionCode,
-    Quantity, RegisterValue, RequestPdu, ResponsePdu, TcpConfig, TcpListener, UnitId, connect_tcp,
+    Address, Client, ClientState, Error, ExceptionCode, ExceptionResponse, FrameTransport,
+    FunctionCode, Quantity, RegisterValue, RequestPdu, ResponsePdu, TcpConfig, TcpListener, UnitId,
+    UnusableReason, connect_tcp,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -171,4 +172,35 @@ async fn it_client_surrenders_a_live_socket() {
     let transport: FrameTransport<_, _> = client.into_inner();
     drop(transport);
     serving.await.expect("the server task finishes");
+}
+
+#[tokio::test]
+/// CL-R-037 — bind an ephemeral port, accept, read one request, drop the
+/// socket; the client's next exchange fails and `state()` is
+/// `Unusable(UnusableReason::PeerClosed)`.
+async fn it_client_reports_peer_closed_after_server_drops() {
+    let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+    let address = listener.local_addr().expect("reports its address");
+    let closing = tokio::spawn(async move {
+        let (mut transport, _peer) = listener.accept().await.expect("accepts");
+        let _ = transport.recv_request().await;
+        // Close the peer end without sending a response.
+        drop(transport);
+    });
+
+    let mut client = Client::new(
+        connect_tcp(address, TcpConfig::default())
+            .await
+            .expect("connects"),
+    );
+
+    let result = client
+        .read_holding_registers(UnitId(0x11), Address(0), Quantity(1))
+        .await;
+    assert!(result.is_err(), "reading from a closed peer should fail");
+    assert_eq!(
+        client.state(),
+        ClientState::Unusable(UnusableReason::PeerClosed)
+    );
+    closing.await.expect("the server task finishes");
 }
