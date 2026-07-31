@@ -84,10 +84,18 @@ delegates them is responsible for the verification between each one.
   ever sees it: that every quoted requirement text matches the file, that appended IDs are
   genuinely unused, that the plan does not contradict an existing requirement, and that
   what it proposes is what was asked for. Only then is approval requested.
-- **Implementation — a Haiku agent.** Once the user approves, the plan is handed to an
-  agent running Haiku, which implements it stage by stage under the TDD rules above. The
+- **Implementation — a Sonnet agent.** Once the user approves, the plan is handed to an
+  agent running Sonnet, which implements it stage by stage under the TDD rules above. The
   plan is the contract: an implementer that finds the plan wrong stops and reports rather
-  than improvising a different design.
+  than improvising a different design. Sonnet is the floor, not a preference — Haiku was
+  tried and produced work that did not hold up: it stopped mid-plan and called the
+  remaining stages future work, committed `unimplemented!()` into non-test code as a
+  "green" checkpoint, and reported an integration test as verified that in fact deadlocked
+  and had never been run.
+- **An agent's own report of its verification is not verification.** Every failure above
+  was caught by re-running the tools, never by reading the report — which claimed success
+  in each case. The orchestrator runs the full gauntlet itself, in the agent's worktree,
+  and reads the code the report describes.
 - **Verify the implementation, then ask.** The orchestrator verifies the work itself —
   re-running the full build/test/lint/coverage gauntlet rather than trusting the agent's
   report, checking requirement-ID citations sit directly below their test attributes,
