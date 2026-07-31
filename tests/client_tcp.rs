@@ -193,7 +193,6 @@ async fn it_client_reports_peer_closed_after_server_drops() {
             .await
             .expect("connects"),
     );
-    closing.await.expect("the server task finishes");
 
     let result = client
         .read_holding_registers(UnitId(0x11), Address(0), Quantity(1))
@@ -203,4 +202,5 @@ async fn it_client_reports_peer_closed_after_server_drops() {
         client.state(),
         ClientState::Unusable(UnusableReason::PeerClosed)
     );
+    closing.await.expect("the server task finishes");
 }
