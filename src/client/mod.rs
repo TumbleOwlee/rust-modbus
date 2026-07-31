@@ -69,6 +69,12 @@ pub enum UnusableReason {
 /// client. There is no liveness probe (CL-R-039) — proving a server still
 /// answers costs a request, and which requests reach the wire is the caller's to
 /// authorize (CL-R-033).
+///
+/// [`ClientState::Answered`] says the peer replied to the last request this
+/// client sent, not that one would reply now. On TCP a peer that vanished
+/// without a FIN is indistinguishable from an idle one until bytes are written,
+/// so no local check can do better. A failover built on [`ClientState::Answered`]
+/// meaning "alive" is built on a guarantee that does not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
     /// No exchange has been attempted, or only broadcast writes have been
