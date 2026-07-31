@@ -100,6 +100,7 @@ point per `NF-R-021`:
 | `NF-R-016`, `NF-R-017`, `NF-R-018`, `NF-R-019` | Release process, `CHANGELOG.md`, and review. `NF-R-018`'s "every combination compiles" half is checked by the `features` and `bare-metal` CI jobs; what a feature may *mean* is a review judgment |
 | `NF-R-020`, `NF-R-021`, `NF-R-023`, `NF-R-024` | Conventions on the test suite itself; a test cannot assert its own naming or its own port choice |
 | `NF-R-022` | The `coverage` CI job |
+| `CL-R-039` | Design posture: an API that does not exist. Enforced by the absence of a probe method in `client/api-contract.md` and by review |
 
 **Kind 2 — cross-cutting restatements asserted under the owning area:**
 

@@ -37,6 +37,9 @@ until it ships.
   permissive allow-list and the reasoning for each non-standard licence in the
   tree live in `deny.toml`.
 
+- `Client::state`, `ClientState`, and `UnusableReason`: what a client knows about
+  its own usability, including why it became unusable (CL-R-034 … CL-R-038).
+
 - A `README.md`, crate-level documentation with runnable doctests, and three
   examples: `tcp_client`, `rtu_client` (needs the `rtu` feature and hardware),
   and `interop_server`.

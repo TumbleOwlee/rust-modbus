@@ -27,6 +27,7 @@ where
     pub fn with_config(transport: FrameTransport<S, F>, config: ClientConfig) -> Self;
     pub fn into_inner(self) -> FrameTransport<S, F>;
     pub fn is_desynchronized(&self) -> bool;
+    pub fn state(&self) -> ClientState;
 }
 
 pub type TcpClient = Client<TcpStream, Tcp>;
@@ -154,3 +155,49 @@ that variant already means.
 `Timeout { what: "response" }` is the transport area's existing variant reused,
 not a fourth one: a caller distinguishes a response timeout from a connect
 timeout by the field, and CL-R-031 means the client is desynchronized either way.
+
+## 6. Reported state
+
+What a caller may ask a client about itself (CL-R-035). Both types are
+`std`-gated, `Debug + Clone + Copy + PartialEq + Eq`, and exhaustive per
+NF-R-017 — adding a state or a reason is a breaking change, which is why the
+reason set names four coarse observations rather than a taxonomy that will want
+extending.
+
+```rust
+pub enum ClientState {
+    /// No exchange has been attempted, or only broadcast writes have been
+    /// (CL-R-036).
+    Untried,
+    /// The last exchange was answered, including with an exception (CL-R-036).
+    Answered,
+    /// The last exchange was not answered, and the client is still usable
+    /// (CL-R-023).
+    Unanswered,
+    /// Every further request will be refused (CL-R-032).
+    Unusable(UnusableReason),
+}
+
+pub enum UnusableReason {
+    /// The peer's end of stream was seen.
+    PeerClosed,
+    /// The platform reported an I/O failure, in either direction.
+    Io { kind: std::io::ErrorKind },
+    /// The response timeout elapsed with no matching response (CL-R-031).
+    Silent,
+    /// A frame did not decode on a framing that is not self-locating
+    /// (CL-R-023).
+    Undecodable,
+}
+```
+
+`is_desynchronized` is retained and is exactly
+`matches!(self.state(), ClientState::Unusable(_))` (CL-R-034).
+
+**These values report what this client observed, not whether the peer is alive.**
+On TCP a peer that vanished without a FIN is indistinguishable from an idle one
+until something is written, so `Answered` is a statement about the past and
+`Untried` is a statement about this client, never about the link. There is no
+probe (CL-R-039). A caller that needs proof a server still answers issues a
+request with `call` and reads the result — that is supervision policy, and it
+stays with the caller.
