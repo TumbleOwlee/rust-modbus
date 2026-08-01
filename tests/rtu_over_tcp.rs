@@ -155,9 +155,9 @@ async fn it_register_write_round_trips_over_the_gateway() {
 }
 
 #[tokio::test]
-/// FR-R-147, CL-R-042 — an exception response derives its extent (5 bytes)
-/// exactly as FR-R-147 states, arrives at the client as a typed exception, and
-/// leaves the connection usable for the next request.
+/// FR-R-147, CL-R-042 — an exception response derives its extent of 5 bytes
+/// from the rule alone, arrives at the client as a typed exception, and leaves
+/// the connection usable for the next request.
 async fn it_exception_response_round_trips_over_the_gateway() {
     let running = start(ServerConfig::default()).await;
     let mut client = connect(running.address).await;
