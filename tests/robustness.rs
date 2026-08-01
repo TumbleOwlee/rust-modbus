@@ -7,8 +7,11 @@
 
 use proptest::prelude::*;
 use rust_modbus::{
-    Address, Ascii, Error, Framing, Quantity, RequestPdu, ResponsePdu, Rtu, Tcp, TransactionId,
-    UnitId,
+    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, Direction, Error,
+    ExceptionCode, ExceptionResponse, ExceptionStatus, FileNumber, FileRecordRead,
+    FileRecordReadResponse, FileRecordWrite, Framing, FunctionCode, Mask, MeiRequest, MeiResponse,
+    Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
+    Rtu, RtuOverTcp, Tcp, TransactionId, UnitId,
 };
 
 /// Byte sequences up to a little over the largest ADU any framing permits
@@ -171,6 +174,250 @@ fn it_every_truncation_of_a_valid_adu_is_rejected() {
                 _ => Ascii::decode_request(prefix).map(|(_, pdu)| pdu),
             };
             assert!(decoded.is_err(), "{name} accepted a {len}-byte prefix");
+        }
+    }
+}
+
+/// One instance of every `RequestPdu` variant this crate can encode, each with
+/// field values inside the ranges encoding accepts (FR-R-021, FR-R-022,
+/// FR-R-031, FR-R-033, FR-R-038, FR-R-056), so every arm of FR-R-147's table
+/// — and the custom and opaque-MEI arms FR-R-148 refuses — is reachable.
+fn every_request_pdu() -> Vec<RequestPdu> {
+    vec![
+        RequestPdu::ReadCoils {
+            address: Address(0x0013),
+            quantity: Quantity(2000),
+        },
+        RequestPdu::ReadDiscreteInputs {
+            address: Address(0x00C4),
+            quantity: Quantity(2000),
+        },
+        RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(125),
+        },
+        RequestPdu::ReadInputRegisters {
+            address: Address(0x0008),
+            quantity: Quantity(125),
+        },
+        RequestPdu::WriteSingleCoil {
+            address: Address(0x00AC),
+            value: true,
+        },
+        RequestPdu::WriteSingleRegister {
+            address: Address(0x0001),
+            value: RegisterValue(0x0003),
+        },
+        RequestPdu::WriteMultipleCoils {
+            address: Address(0x0013),
+            coils: vec![true; 1968],
+        },
+        RequestPdu::WriteMultipleRegisters {
+            address: Address(0x0001),
+            registers: vec![RegisterValue(0x000A); 123],
+        },
+        RequestPdu::MaskWriteRegister {
+            address: Address(0x0004),
+            and_mask: Mask(0x00F2),
+            or_mask: Mask(0x0025),
+        },
+        RequestPdu::ReadWriteMultipleRegisters {
+            read_address: Address(0x0003),
+            read_quantity: Quantity(125),
+            write_address: Address(0x000E),
+            registers: vec![RegisterValue(0x00FF); 121],
+        },
+        RequestPdu::ReadExceptionStatus,
+        RequestPdu::Diagnostics {
+            sub_function: DiagnosticSubFunction::ReturnQueryData,
+            data: vec![0xA537, 0x0102],
+        },
+        RequestPdu::GetCommEventCounter,
+        RequestPdu::GetCommEventLog,
+        RequestPdu::ReportServerId,
+        RequestPdu::ReadFileRecord {
+            records: vec![FileRecordRead {
+                file_number: FileNumber(4),
+                record_number: RecordNumber(1),
+                record_length: RecordLength(1),
+            }],
+        },
+        RequestPdu::WriteFileRecord {
+            records: vec![FileRecordWrite {
+                file_number: FileNumber(4),
+                record_number: RecordNumber(7),
+                values: vec![RegisterValue(0x06AF)],
+            }],
+        },
+        RequestPdu::ReadFifoQueue {
+            address: Address(0x04DE),
+        },
+        RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::ReadDeviceIdentification {
+            read_device_id_code: ReadDeviceIdCode::Basic,
+            object_id: 0x00,
+        }),
+        RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::CanOpen {
+            data: vec![0x01, 0x02, 0x03],
+        }),
+        RequestPdu::EncapsulatedInterfaceTransport(MeiRequest::Other {
+            mei_type: 0x0D,
+            data: vec![0xAA],
+        }),
+        RequestPdu::Custom {
+            code: 0x41,
+            data: vec![0x01, 0x02, 0x03],
+        },
+    ]
+}
+
+/// One instance of every `ResponsePdu` variant this crate can encode,
+/// including the exception path FR-R-147 always derives (FR-R-086).
+fn every_response_pdu() -> Vec<ResponsePdu> {
+    vec![
+        ResponsePdu::ReadCoils {
+            coils: vec![true; 16],
+        },
+        ResponsePdu::ReadDiscreteInputs {
+            inputs: vec![false; 16],
+        },
+        ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0x022B); 3],
+        },
+        ResponsePdu::ReadInputRegisters {
+            registers: vec![RegisterValue(0x000A); 3],
+        },
+        ResponsePdu::WriteSingleCoil {
+            address: Address(0x00AC),
+            value: true,
+        },
+        ResponsePdu::WriteSingleRegister {
+            address: Address(0x0001),
+            value: RegisterValue(0x0003),
+        },
+        ResponsePdu::WriteMultipleCoils {
+            address: Address(0x0013),
+            quantity: Quantity(2),
+        },
+        ResponsePdu::WriteMultipleRegisters {
+            address: Address(0x0001),
+            quantity: Quantity(2),
+        },
+        ResponsePdu::MaskWriteRegister {
+            address: Address(0x0004),
+            and_mask: Mask(0x00F2),
+            or_mask: Mask(0x0025),
+        },
+        ResponsePdu::ReadWriteMultipleRegisters {
+            registers: vec![RegisterValue(0x00FF); 3],
+        },
+        ResponsePdu::ReadExceptionStatus {
+            status: ExceptionStatus(0x6D),
+        },
+        ResponsePdu::Diagnostics {
+            sub_function: DiagnosticSubFunction::ReturnQueryData,
+            data: vec![0xA537],
+        },
+        ResponsePdu::GetCommEventCounter {
+            status: 0xFFFF,
+            event_count: 0x0108,
+        },
+        ResponsePdu::GetCommEventLog {
+            status: 0x0000,
+            event_count: 0x0108,
+            message_count: 0x0121,
+            events: vec![0x20, 0x00],
+        },
+        ResponsePdu::ReportServerId {
+            data: vec![0x11, 0xFF],
+        },
+        ResponsePdu::ReadFileRecord {
+            records: vec![FileRecordReadResponse {
+                values: vec![
+                    RegisterValue(0x0DFE),
+                    RegisterValue(0x0000),
+                    RegisterValue(0x0001),
+                ],
+            }],
+        },
+        ResponsePdu::WriteFileRecord {
+            records: vec![FileRecordWrite {
+                file_number: FileNumber(4),
+                record_number: RecordNumber(7),
+                values: vec![RegisterValue(0x06AF)],
+            }],
+        },
+        ResponsePdu::ReadFifoQueue {
+            values: vec![RegisterValue(0x01B8)],
+        },
+        ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::ReadDeviceIdentification {
+            read_device_id_code: ReadDeviceIdCode::Basic,
+            conformity_level: 0x01,
+            more_follows: false,
+            next_object_id: 0x00,
+            objects: vec![DeviceIdObject {
+                id: 0,
+                value: vec![0x41, 0x42],
+            }],
+        }),
+        ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::CanOpen { data: vec![0x01] }),
+        ResponsePdu::EncapsulatedInterfaceTransport(MeiResponse::Other {
+            mei_type: 0x0D,
+            data: vec![0xAA],
+        }),
+        ResponsePdu::Custom {
+            code: 0x41,
+            data: vec![0x01, 0x02],
+        },
+        ResponsePdu::Exception(ExceptionResponse {
+            function: FunctionCode::ReadHoldingRegisters,
+            exception: ExceptionCode::IllegalDataAddress,
+        }),
+    ]
+}
+
+#[test]
+/// FR-R-146, FR-R-147, FR-R-148, FR-R-149 — the extent derivation never
+/// panics: not on any prefix of any ADU this crate can encode, in either
+/// direction, and not on any function-code byte at any short length, including
+/// codes no PDU above happens to produce. This is the permanent floor under
+/// the length table, run on every `cargo test`, not a spot check performed
+/// once by hand.
+fn it_derive_extent_never_panics_on_any_prefix_or_short_input() {
+    let AduBoundary::ContentLength { extent, .. } = RtuOverTcp::boundary() else {
+        panic!("RtuOverTcp is a ContentLength framing");
+    };
+    let unit = UnitId(0x11);
+
+    for request in every_request_pdu() {
+        if let Ok(encoded) = RtuOverTcp::encode_request(&unit, &request) {
+            for len in 0..=encoded.len() {
+                let prefix = encoded.get(..len).expect("len <= encoded.len()");
+                let _ = extent(Direction::Request, prefix);
+            }
+        }
+    }
+    for response in every_response_pdu() {
+        if let Ok(encoded) = RtuOverTcp::encode_response(&unit, &response) {
+            for len in 0..=encoded.len() {
+                let prefix = encoded.get(..len).expect("len <= encoded.len()");
+                let _ = extent(Direction::Response, prefix);
+            }
+        }
+    }
+
+    // Every function-code byte, at every length up to 12, in both directions:
+    // this reaches codes no PDU above produces (128–255 outside an exception,
+    // and every unnamed custom code) and every length too short for any field
+    // the table reads to exist yet.
+    for direction in [Direction::Request, Direction::Response] {
+        for function in 0u8..=255 {
+            for len in 0..=12usize {
+                let mut bytes = vec![0u8; len];
+                if let Some(second) = bytes.get_mut(1) {
+                    *second = function;
+                }
+                let _ = extent(direction, &bytes);
+            }
         }
     }
 }

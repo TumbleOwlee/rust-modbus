@@ -6,6 +6,33 @@ use core::fmt::Debug;
 use crate::error::Result;
 use crate::frame::pdu::{RequestPdu, ResponsePdu};
 
+/// Which direction a PDU derivation is asked about (FR-R-146).
+///
+/// The PDU length derivation for RTU-over-stream depends on the direction
+/// (request vs response) and the function code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// The ADU carries a request from client to server.
+    Request,
+    /// The ADU carries a response from server to client.
+    Response,
+}
+
+/// Result of attempting to derive an ADU's extent from its bytes (FR-R-146).
+///
+/// A content-length derivation applies repeatedly as bytes arrive: first when
+/// the minimum is in hand, then after each read, until it reports `Complete` or
+/// an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extent {
+    /// More bytes are needed. The derivation performed no I/O and raised no error.
+    NeedMore,
+    /// The ADU is complete and is `n` bytes long, counting from the start of the
+    /// buffer passed to the derivation. The extent includes the complete ADU:
+    /// address, PDU, and trailer.
+    Complete(usize),
+}
+
 /// How the end of an ADU is determined (FR-R-122).
 ///
 /// This is a description, not a reader: it names the rule so the transport can
@@ -36,6 +63,19 @@ pub enum AduBoundary {
     /// The ADU ends when the line falls silent for long enough. How long is a
     /// property of the port, not of the framing (TR-R-011).
     Silence,
+    /// The ADU's own content gives its length. The extent function is called
+    /// once at least `min` bytes are in hand, and again after every further read,
+    /// to determine whether more bytes are needed (FR-R-146, TR-R-045).
+    ContentLength {
+        /// Minimum bytes that must be buffered before calling `extent`.
+        min: usize,
+        /// Applied to buffered bytes to determine the ADU's length.
+        /// Given the direction and the bytes received so far, returns either
+        /// `NeedMore` if more bytes are needed, or `Complete(n)` where `n` is
+        /// the total length of the ADU (address + PDU + trailer), or an error if
+        /// the length cannot be determined from these bytes.
+        extent: fn(Direction, &[u8]) -> Result<Extent>,
+    },
 }
 
 impl AduBoundary {
@@ -53,7 +93,7 @@ impl AduBoundary {
     pub fn is_self_locating(&self) -> bool {
         match *self {
             Self::Delimited { .. } | Self::Silence => true,
-            Self::Prefixed { .. } => false,
+            Self::Prefixed { .. } | Self::ContentLength { .. } => false,
         }
     }
 }

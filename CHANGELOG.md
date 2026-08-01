@@ -53,7 +53,23 @@ until it ships.
   performs no allocation at all (NF-R-009) — asserted by counting allocator
   calls in `tests/allocation.rs`, not merely stated.
 
+- Modbus RTU framing over a TCP socket, for transparent serial gateways
+  (FR-R-145 … FR-R-150, TR-R-024, TR-R-033, TR-R-045, TR-R-046, TR-R-048,
+  SV-R-053). `RtuOverTcp` carries the RTU ADU byte for byte and differs only in
+  where a frame ends: the extent is derived from the direction, the function
+  code, and the frame's own byte-count fields, since a socket has no inter-frame
+  silence to observe. New public items: `RtuOverTcp`, `Direction`, `Extent`,
+  `Error::IndeterminateLength`, `AduBoundary::ContentLength`,
+  `RtuOverTcpTransport`, `RtuOverTcpClient`, `connect_tcp_framed`,
+  `TcpListener::accept_framed`, and `Server::serve_framed`. Function code 8,
+  function code 43 outside MEI type 14, and custom codes are refused with
+  `IndeterminateLength` rather than misdelimited, and the boundary is not
+  self-locating, so a bad frame costs the connection (FR-R-150).
+
 ### Changed
+
+- `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a
+  `match` on it outside this crate must handle the new variant (NF-R-017).
 
 - `Framing`'s required methods are now `encode_request_into` and
   `encode_response_into`; `encode_request` and `encode_response` became provided

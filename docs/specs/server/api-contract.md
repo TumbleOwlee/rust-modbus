@@ -23,6 +23,7 @@ impl<S: Service> Server<S> {
     pub fn handle(&self) -> ServerHandle;
 
     pub async fn serve(self, listener: TcpListener) -> Result<()>;
+    pub async fn serve_framed<F: ServerFraming>(self, listener: TcpListener) -> Result<()>;
 
     pub async fn serve_link<T, F>(self, transport: FrameTransport<T, F>) -> Result<()>
     where
@@ -41,15 +42,17 @@ pub trait ServerFraming: Framing {
 }
 ```
 
-`Rtu` and `Ascii` take the header itself as the unit and broadcast on unit 0
-(FR-R-096, FR-R-117); `Tcp` takes the MBAP header's unit field and never
-broadcasts. Public because it bounds a public method, unsealed because `Framing`
+`Rtu`, `RtuOverTcp` and `Ascii` take the header itself as the unit and broadcast
+on unit 0 (FR-R-096, FR-R-117); `Tcp` takes the MBAP header's unit field and
+never broadcasts. Public because it bounds a public method, unsealed because `Framing`
 is.
 
 `serve` accepts connections and handles each concurrently (SV-R-030);
 `serve_link` runs one already-established transport, which is how a serial line
-is served (SV-R-007). Both consume the server, so the handle of SV-R-040 is taken
-first:
+is served (SV-R-007). `serve` is `serve_framed::<Tcp>` under its existing name
+(SV-R-053), so a listener carrying gateway-framed connections is
+`serve_framed::<RtuOverTcp>` and runs the identical per-connection behavior. All
+consume the server, so the handle of SV-R-040 is taken first:
 
 ```rust
 let server = Server::with_config(my_service, ServerConfig { unit: Some(UnitId(1)) });

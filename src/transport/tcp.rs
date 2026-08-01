@@ -8,11 +8,15 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 use crate::error::{Error, Result};
-use crate::frame::Tcp;
+use crate::frame::{Framing, RtuOverTcp, Tcp};
 use crate::transport::FrameTransport;
 
 /// A transport over a TCP socket, framed as Modbus TCP.
 pub type TcpTransport = FrameTransport<TcpStream, Tcp>;
+
+/// A transport over a TCP socket carrying RTU-over-stream framing, for a
+/// transparent serial gateway (TR-R-024, TR-R-033).
+pub type RtuOverTcpTransport = FrameTransport<TcpStream, RtuOverTcp>;
 
 /// How a TCP connection is made (TR-R-021, TR-R-022).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +43,23 @@ impl Default for TcpConfig {
 /// Fails if the connection is refused, if the network reports any other error,
 /// or if the connect timeout expires first.
 pub async fn connect_tcp(addr: SocketAddr, config: TcpConfig) -> Result<TcpTransport> {
+    connect_tcp_framed::<Tcp>(addr, config).await
+}
+
+/// Connect to a Modbus server over TCP, for any framing (TR-R-024).
+///
+/// Establishing the socket does not differ by framing; only what is read off
+/// it does. `connect_tcp` is this with `F` fixed to [`Tcp`] under its existing
+/// name, so no call site that only ever spoke Modbus TCP needs to change.
+///
+/// # Errors
+///
+/// Fails if the connection is refused, if the network reports any other error,
+/// or if the connect timeout expires first.
+pub async fn connect_tcp_framed<F: Framing>(
+    addr: SocketAddr,
+    config: TcpConfig,
+) -> Result<FrameTransport<TcpStream, F>> {
     let stream = with_connect_timeout(config.connect_timeout, TcpStream::connect(addr)).await?;
     stream.set_nodelay(config.nodelay)?;
     Ok(FrameTransport::new(stream))
@@ -79,6 +100,21 @@ impl TcpListener {
     ///
     /// Fails if the accept does.
     pub async fn accept(&self) -> Result<(TcpTransport, SocketAddr)> {
+        self.accept_framed::<Tcp>().await
+    }
+
+    /// Accept one connection, for any framing (TR-R-024).
+    ///
+    /// `accept` is this with `F` fixed to [`Tcp`] under its existing name, so a
+    /// listener that only ever accepted Modbus TCP connections needs no change.
+    /// A gateway listener accepts `RtuOverTcp` connections through this instead.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the accept does.
+    pub async fn accept_framed<F: Framing>(
+        &self,
+    ) -> Result<(FrameTransport<TcpStream, F>, SocketAddr)> {
         let (stream, peer) = self.inner.accept().await?;
         Ok((FrameTransport::new(stream), peer))
     }

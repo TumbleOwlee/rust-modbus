@@ -93,6 +93,13 @@ pub enum ClientState {
 /// A client over a TCP socket.
 pub type TcpClient = Client<tokio::net::TcpStream, crate::frame::Tcp>;
 
+/// A client over a TCP socket carrying RTU-over-stream framing, for a
+/// transparent serial gateway (TR-R-024).
+///
+/// Unlike [`RtuClient`], this is not behind the `rtu` feature: it opens no
+/// serial port (TR-R-033).
+pub type RtuOverTcpClient = Client<tokio::net::TcpStream, crate::frame::RtuOverTcp>;
+
 /// A client over a serial line in RTU framing.
 #[cfg(feature = "rtu")]
 pub type RtuClient = Client<tokio_serial::SerialStream, crate::frame::Rtu>;

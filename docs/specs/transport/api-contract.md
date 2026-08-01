@@ -43,7 +43,8 @@ the whole of the difference between the roles at this layer (TR-R-002).
 
 `TransportConfig` carries what boundary detection needs and nothing else — the
 RTU inter-frame interval of TR-R-011, derived from a `SerialConfig` or set
-directly. TCP and ASCII boundaries are self-delimiting and ignore it.
+directly. TCP, RTU-over-TCP and ASCII boundaries are found in the bytes and
+ignore it (TR-R-048).
 
 ```rust
 pub struct TransportConfig { pub inter_frame_interval: Duration }  // 2.005 ms
@@ -66,6 +67,7 @@ its timing cannot disagree.
 
 ```rust
 pub type TcpTransport = FrameTransport<TcpStream, Tcp>;
+pub type RtuOverTcpTransport = FrameTransport<TcpStream, RtuOverTcp>;
 
 pub struct TcpConfig {
     pub connect_timeout: Duration,  // 5 s (TR-R-021)
@@ -73,6 +75,10 @@ pub struct TcpConfig {
 }
 
 pub async fn connect_tcp(addr: SocketAddr, config: TcpConfig) -> Result<TcpTransport>;
+pub async fn connect_tcp_framed<F: Framing>(
+    addr: SocketAddr,
+    config: TcpConfig,
+) -> Result<FrameTransport<TcpStream, F>>;
 
 pub struct TcpListener { /* … */ }
 
@@ -80,8 +86,17 @@ impl TcpListener {
     pub async fn bind(addr: SocketAddr) -> Result<Self>;
     pub fn local_addr(&self) -> Result<SocketAddr>;
     pub async fn accept(&self) -> Result<(TcpTransport, SocketAddr)>;
+    pub async fn accept_framed<F: Framing>(&self)
+        -> Result<(FrameTransport<TcpStream, F>, SocketAddr)>;
 }
 ```
+
+`connect_tcp` and `accept` are `connect_tcp_framed::<Tcp>` and
+`accept_framed::<Tcp>` under their existing names (TR-R-024), kept so the common
+case needs no turbofish and no existing call site changes. A gateway link is
+`connect_tcp_framed::<RtuOverTcp>`, which gets the connect timeout and the
+`TCP_NODELAY` default of TR-R-021 and TR-R-022 unchanged — nothing about
+establishing the socket differs, only what is read off it.
 
 `local_addr` exists so a test can bind port 0 and read the assigned port back,
 which the testing conventions require of every listener.

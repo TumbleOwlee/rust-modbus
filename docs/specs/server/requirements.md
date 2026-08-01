@@ -180,3 +180,7 @@ serving. Serving shall fail only for a failure of the listener itself.
 **SV-R-052** — A peer that closes the connection between two ADUs shall end the
 connection with the closed reason of SV-R-033, not as a failure. A close
 part-way through an ADU is a failure (TR-R-014).
+
+**SV-R-053** — Serving a TCP listener shall be available for any framing, so that
+a listener accepting gateway-framed connections runs the same per-connection
+behavior as one accepting MBAP-framed connections (SV-R-007).

@@ -38,6 +38,10 @@ The four combinations are all first-class and none is an afterthought:
 - **ASCII framing for testability.** Modbus ASCII is encodable and decodable at
   the frame layer, so frames are readable in test fixtures and comparable against
   upstream tooling by eye.
+- **Reachability through transparent gateways.** A device behind a converter that
+  forwards bare RTU ADUs over a socket is addressable with the same client and
+  server types as any other, with the mode's limits stated in the specification
+  rather than discovered on a live bus.
 
 ## Non-goals
 
@@ -64,8 +68,12 @@ The four combinations are all first-class and none is an afterthought:
   boundary is where the standard's own authority ends — byte order *within* a
   register is protocol and is implemented (FR-R-003, big-endian on the wire);
   order *across* registers is convention and stays the caller's.
-- **No transport beyond TCP and RTU serial** (no UDP, no RTU-over-TCP gateway
-  emulation) unless later specified.
+- **No transport beyond TCP, RTU serial, and RTU framing over TCP** (no UDP)
+  unless later specified. RTU-over-TCP is in scope because the installed base of
+  serial-to-Ethernet converters is large and a user who has bought one cannot
+  choose what it speaks; it is supported on the honest terms its wire allows —
+  a content-derived frame boundary, function codes whose length is not derivable
+  refused rather than guessed, and a link that does not survive a bad frame.
 
 ## Users
 

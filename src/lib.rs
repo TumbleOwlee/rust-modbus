@@ -199,16 +199,16 @@ mod transport;
 pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
 pub use client::{
-    Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog, TcpClient,
-    UnusableReason,
+    Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
+    RtuOverTcpClient, TcpClient, UnusableReason,
 };
 pub use error::{Error, Result};
 pub use frame::{
-    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, ExceptionCode,
-    ExceptionResponse, ExceptionStatus, FileNumber, FileRecordRead, FileRecordReadResponse,
+    Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, Direction, ExceptionCode,
+    ExceptionResponse, ExceptionStatus, Extent, FileNumber, FileRecordRead, FileRecordReadResponse,
     FileRecordWrite, Framing, FunctionCode, MAX_PDU_LEN, Mask, MbapHeader, MeiRequest, MeiResponse,
     Quantity, ReadDeviceIdCode, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu,
-    Rtu, Tcp, TransactionId, UnitId, mask_write_result,
+    Rtu, RtuOverTcp, Tcp, TransactionId, UnitId, mask_write_result,
 };
 #[cfg(feature = "std")]
 pub use server::{
@@ -217,8 +217,8 @@ pub use server::{
 };
 #[cfg(feature = "std")]
 pub use transport::{
-    DataBits, FlowControl, FrameTransport, Parity, SerialConfig, StopBits, TcpConfig, TcpListener,
-    TcpTransport, TransportConfig, connect_tcp,
+    DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
+    TcpConfig, TcpListener, TcpTransport, TransportConfig, connect_tcp, connect_tcp_framed,
 };
 #[cfg(feature = "rtu")]
 pub use transport::{SerialTransport, open_serial};

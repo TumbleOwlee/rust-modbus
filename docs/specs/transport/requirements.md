@@ -75,6 +75,16 @@ bounded by the framing's maximum ADU length.
 `MAX_ADU_LEN` bytes for a single ADU. Input exceeding it shall fail with the
 oversized-ADU error rather than grow the buffer.
 
+**TR-R-045** — Over RTU-over-stream framing, an ADU's boundary shall be
+determined by applying the derivation of FR-R-146 to the bytes buffered so far,
+reading further bytes only when it reports that more are needed, and consuming
+exactly the extent it yields. No inter-frame timing shall be consulted.
+
+**TR-R-046** — A receive on a framing whose boundary is derived from content
+shall retain the bytes it gathered when the derivation fails, on the same terms
+TR-R-044 sets for a length-prefixed framing: the failure is terminal for that
+stream, and discarding would only conceal it.
+
 **TR-R-014** — A stream that ends cleanly between two ADUs shall report
 end-of-stream; one that ends part-way through an ADU shall report a distinct
 connection-closed error.
@@ -97,6 +107,12 @@ overridable.
 **TR-R-023** — The crate shall provide a TCP listener that binds an address and
 accepts connections, yielding a `FrameTransport` per accepted connection.
 
+**TR-R-024** — The TCP connector (TR-R-020) and the TCP listener (TR-R-023) shall
+each be usable with any framing, not with Modbus TCP framing alone, so that a
+socket carrying RTU-over-stream ADUs is established, configured, and accepted by
+the same code paths and with the same configuration (TR-R-021, TR-R-022) as one
+carrying MBAP-framed ADUs.
+
 ---
 
 ## 4. RTU serial
@@ -110,6 +126,11 @@ field shall be independently settable.
 
 **TR-R-032** — Serial support shall be gated behind an off-by-default `rtu`
 feature, so a TCP-only consumer does not acquire a serial dependency.
+
+**TR-R-033** — RTU-over-stream framing shall be available with the `rtu` feature
+off. It opens no serial port and derives no character time, so gating it behind
+the serial backend would deny a TCP-only consumer a purely TCP capability
+(TR-R-032).
 
 ---
 
@@ -125,3 +146,9 @@ desynchronized and shall not be reused for a further receive.
 **TR-R-042** — The transport area shall not impose a response timeout.
 Per-request timing is the client's (`CL-R-*`); the only timeouts here are connect
 and RTU inter-frame silence.
+
+**TR-R-048** — The inter-frame interval of TR-R-011 shall have no effect on
+RTU-over-stream framing, and no idle-gap heuristic shall be offered as a boundary
+rule over a socket. A gap in a TCP stream measures the network and the peer's
+buffering, not the bus: it would split a frame the network fragmented and join
+two the gateway coalesced.
