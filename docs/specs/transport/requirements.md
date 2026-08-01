@@ -152,3 +152,46 @@ RTU-over-stream framing, and no idle-gap heuristic shall be offered as a boundar
 rule over a socket. A gap in a TCP stream measures the network and the peer's
 buffering, not the bus: it would split a frame the network fragmented and join
 two the gateway coalesced.
+
+---
+
+## 6. RS-485 kernel direction control
+
+**TR-R-050** — The crate shall, on Linux and only under the off-by-default `rs485`
+feature, support configuring the kernel's RS-485 direction-control mode (`TIOCSRS485`)
+for a serial port opened by TR-R-030: whether it is enabled, the RTS polarity asserted
+while transmitting, and the delay before and after a transmission during which RTS is
+held. No application-driven GPIO hook shall be provided; direction control is delegated
+entirely to the kernel driver.
+
+**TR-R-051** — The `rs485` feature shall be off by default and shall imply the `rtu`
+feature, so RS-485 configuration is only reachable through the serial opener it configures.
+
+**TR-R-052** — `SerialConfig` shall carry an `rs485: Option<Rs485Config>` field, present
+only when the `rs485` feature is enabled, so a build without the feature has no field whose
+value could be silently ignored. `None`, the default, requests no RS-485 configuration and
+issues no ioctl.
+
+**TR-R-053** — `open_serial`, when the opened configuration's `rs485` field is `Some`,
+shall issue the `TIOCSRS485` ioctl with the requested flags and delays after the port is
+opened and before the transport is returned to the caller, so a caller never holds a
+transport whose direction control silently failed to apply.
+
+**TR-R-054** — On a target whose `target_os` is not `linux`, or when the opened driver's
+`TIOCSRS485` ioctl fails with an error indicating the mode is not implemented,
+`open_serial` shall fail with a typed error distinguishing "RS-485 not supported" from an
+ordinary I/O failure, and the port shall not be returned to the caller.
+
+**TR-R-055** — The `TIOCSRS485` ioctl call shall be the crate's only unsafe code, compiled
+only when the `rs485` feature is enabled and only for `target_os = "linux"`; every other
+build configuration shall compile with zero unsafe code, per NF-R-011.
+
+**TR-R-056** — `Rs485Config`'s pre- and post-send delays shall be expressed as `Duration`
+and truncated to whole milliseconds at the point they are written to the ioctl, since the
+kernel field's own resolution is one millisecond. A `Duration` whose millisecond count does
+not fit in a `u32` shall fail with `Error::Configuration` rather than wrap.
+
+**TR-R-057** — The RTS level asserted after a transmission shall be the logical complement
+of the level asserted during it, matching the drive-enable/idle-disable pattern every
+two-wire RS-485 transceiver expects; the crate shall not expose an independently
+configurable after-send polarity.

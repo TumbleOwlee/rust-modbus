@@ -50,7 +50,17 @@ inter-frame interval: per-request timing belongs to the client (TR-R-042). A
 caller wanting a bounded receive wraps it in `tokio::time::timeout` — and then
 owns the desynchronization that TR-R-041 describes.
 
-## 3. Known limitations
+## 3. RS-485 kernel direction control
+
+| Condition | Behavior |
+|---|---|
+| `rs485` requested on a non-Linux target | `Error::Rs485Unsupported` at `open_serial` time; no ioctl is attempted (TR-R-054) |
+| The driver accepts `TIOCSRS485` but the hardware ignores a field | Not detectable. The ioctl reports success on write; the crate cannot read the delays back and would not know a mismatch if it could |
+| A `Duration` finer than one millisecond passed as a delay | Rounded down to whole milliseconds at the ioctl boundary (TR-R-056); the kernel field has no finer resolution |
+| Whether the line physically turned around | Never verified by this crate. `TIOCSRS485` configures the driver's intent; a scope on the bus is the only real verification |
+| An independently-set after-send RTS polarity | Not offered (TR-R-057). The kernel struct allows it; no two-wire board this crate targets wants it |
+
+## 4. Known limitations
 
 - **The RTU t1.5 intra-character timeout is not enforced.** The Modbus serial
   specification calls for a frame to be rejected when more than 1.5 character

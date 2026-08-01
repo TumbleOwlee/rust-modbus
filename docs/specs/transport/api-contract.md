@@ -133,18 +133,50 @@ paths never need but the pure calculation is testable without a serial port.
 `open_serial` is generic over the framing because a serial line carries RTU or
 ASCII framing at the operator's choice, over identical port settings.
 
-## 4. Feature flags
+## 4. RS-485 kernel direction control
+
+```rust
+#[cfg(feature = "rs485")]
+pub struct SerialConfig {
+    // ...existing fields unchanged...
+    pub rs485: Option<Rs485Config>,   // TR-R-052; default None
+}
+
+#[cfg(feature = "rs485")]
+pub struct Rs485Config {
+    pub rts_on_send: RtsPolarity,      // TR-R-050; level asserted while transmitting
+    pub delay_before_send: Duration,   // TR-R-050, TR-R-056
+    pub delay_after_send: Duration,    // TR-R-050, TR-R-056
+}
+
+#[cfg(feature = "rs485")]
+pub enum RtsPolarity { High, Low }     // TR-R-057
+```
+
+`Option<Rs485Config>` is used rather than a `bool` plus loose fields — there is
+no way to construct "disabled, but with delays set", which would mean nothing.
+Delays are `Duration`, not a newtype: `Duration` already carries its unit (unlike
+a bare integer, which is what the typed-domain-value rule exists to prevent), and
+`TransportConfig.inter_frame_interval: Duration` is the existing precedent in this
+crate. `RtsPolarity` has two variants rather than the kernel's two independent
+flag bits; TR-R-057 fixes after-send as the complement.
+
+Per NF-R-017 these types are exhaustive, so the new `SerialConfig` field and the
+new `Error` variant below are both breaking changes.
+
+## 5. Feature flags
 
 | Feature | Default | Gates |
 |---|---|---|
 | `std` | on | everything outside the frame area (NF-R-002) |
 | `rtu` | **off** | `open_serial` and the serial backend (TR-R-032) |
+| `rs485` | **off** | The `TIOCSRS485` ioctl, `Rs485Config`, `RtsPolarity`, `SerialConfig.rs485`, `Error::Rs485Unsupported`; implies `rtu`; the crate's only unsafe code, `target_os = "linux"` only (TR-R-050, TR-R-051, TR-R-055) |
 
-`rtu` implies `std`. The frame area's RTU *framing* is not gated: encoding an RTU
-ADU is pure computation and stays available on `no_std`. Only opening a physical
-port is gated.
+`rtu` implies `std`. `rs485` implies `rtu`. The frame area's RTU *framing* is not
+gated: encoding an RTU ADU is pure computation and stays available on `no_std`.
+Only opening a physical port, and configuring its RS-485 mode, is gated.
 
-## 5. Error variants
+## 6. Error variants
 
 Added by this area, all gated on `std`:
 
@@ -154,6 +186,7 @@ Added by this area, all gated on `std`:
 | `Timeout` | `what: &'static str` | TR-R-021, TR-R-041 |
 | `ConnectionClosed` | — | TR-R-014 |
 | `Configuration` | `field: &'static str` | TR-R-031 |
+| `Rs485Unsupported` | — (`#[cfg(feature = "rs485")]`) | TR-R-054 |
 
 `Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error`
 derives `PartialEq`, which `io::Error` does not implement; the kind is the part a
