@@ -66,6 +66,20 @@ until it ships.
   `IndeterminateLength` rather than misdelimited, and the boundary is not
   self-locating, so a bad frame costs the connection (FR-R-150).
 
+- RS-485 kernel direction control on Linux, behind the off-by-default `rs485`
+  feature (implies `rtu`): `SerialConfig.rs485: Option<Rs485Config>`,
+  `Rs485Config`, `RtsPolarity`, and `Error::Rs485Unsupported` (TR-R-050 …
+  TR-R-057). `open_serial` issues the `TIOCSRS485` ioctl after the port opens
+  and before the transport is returned, so a caller never holds a transport
+  whose direction control silently failed to apply; off Linux, or when the
+  driver refuses the ioctl, `open_serial` fails with `Rs485Unsupported` rather
+  than the port. No application-driven GPIO hook — direction control is
+  delegated entirely to the kernel driver, and the after-send RTS level is
+  always the on-send level's complement. This is the crate's only unsafe
+  code, admitted by narrowing `forbid(unsafe_code)` to `deny(unsafe_code)`
+  when `rs485` is enabled (NF-R-011); every other build configuration still
+  forbids it outright.
+
 ### Changed
 
 - `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a

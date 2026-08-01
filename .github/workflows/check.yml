@@ -36,10 +36,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo check --all-features
 
-  # TR-R-032. The `rtu` feature is off by default, so the default build must
-  # keep compiling without the serial backend and the featured build must
-  # compile with it. Checking only `--all-features` would hide a break in
-  # either direction.
+  # TR-R-032, TR-R-051. The `rtu` and `rs485` features are each off by
+  # default, so the default build must keep compiling without either, `rtu`
+  # alone must keep compiling without `rs485`, and `rs485` must compile on its
+  # own (proving it correctly implies `rtu` rather than merely being tested
+  # alongside it via --all-features). Checking only `--all-features` would
+  # hide a break in any of these directions.
   features:
     runs-on: ubuntu-latest
     steps:
@@ -47,6 +49,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo check
       - run: cargo check --features rtu
+      - run: cargo check --features rs485
 
   # NF-R-014, NF-R-023, NF-R-024. The default test run includes the property-based
   # robustness suite that pins NF-R-012, and needs no serial hardware, no device
@@ -71,6 +74,19 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup target add thumbv7em-none-eabi
       - run: cargo build --target thumbv7em-none-eabi --no-default-features
+
+  # TR-R-054, TR-R-055. `rs485` is Linux-only in effect: off Linux `open_serial`
+  # always fails with `Rs485Unsupported` rather than issuing the ioctl, and the
+  # crate's only unsafe code is gated to `target_os = "linux"`. This job proves
+  # the non-Linux stub actually compiles -- not merely that it is believed to --
+  # and, since `libc` is declared only under `[target.'cfg(target_os =
+  # "linux")'.dependencies]`, that it never enters a Windows dependency tree.
+  windows-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-pc-windows-gnu
+      - run: cargo check --all-features --target x86_64-pc-windows-gnu
 
   # NF-R-005. Builds and tests on exactly the declared MSRV, so `rust-version` in
   # Cargo.toml is verified rather than asserted. The floor is set by `let` chains
