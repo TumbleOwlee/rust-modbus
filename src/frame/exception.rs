@@ -1,6 +1,8 @@
 //! Modbus exception responses (FR-R-080 … FR-R-086).
 
 #[cfg(test)]
+use alloc::format;
+#[cfg(test)]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -87,6 +89,26 @@ impl ExceptionCode {
             }
         };
         Ok(byte)
+    }
+}
+
+impl core::fmt::Display for ExceptionCode {
+    /// FR-R-154 — a named code renders as its English name (FR-R-082); an
+    /// unnamed one as `"Other exception "` followed by its decimal byte value.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::IllegalFunction => "Illegal Function",
+            Self::IllegalDataAddress => "Illegal Data Address",
+            Self::IllegalDataValue => "Illegal Data Value",
+            Self::ServerDeviceFailure => "Server Device Failure",
+            Self::Acknowledge => "Acknowledge",
+            Self::ServerDeviceBusy => "Server Device Busy",
+            Self::MemoryParityError => "Memory Parity Error",
+            Self::GatewayPathUnavailable => "Gateway Path Unavailable",
+            Self::GatewayTargetDeviceFailedToRespond => "Gateway Target Device Failed To Respond",
+            Self::Other(byte) => return write!(f, "Other exception {byte}"),
+        };
+        f.write_str(name)
     }
 }
 
@@ -320,5 +342,43 @@ mod tests {
                 assert_eq!(decoded.encode(), Ok(pdu.to_vec()), "round-tripping {pdu:?}");
             }
         }
+    }
+
+    #[test]
+    /// FR-R-154 — every named exception code Displays as the exact English name
+    /// FR-R-082 gives it. Transcribed by hand from the spec, not read from
+    /// `NAMED`, so a table typo cannot pass by construction.
+    fn ut_exception_code_display_names_every_named_code() {
+        let expected = [
+            (ExceptionCode::IllegalFunction, "Illegal Function"),
+            (ExceptionCode::IllegalDataAddress, "Illegal Data Address"),
+            (ExceptionCode::IllegalDataValue, "Illegal Data Value"),
+            (ExceptionCode::ServerDeviceFailure, "Server Device Failure"),
+            (ExceptionCode::Acknowledge, "Acknowledge"),
+            (ExceptionCode::ServerDeviceBusy, "Server Device Busy"),
+            (ExceptionCode::MemoryParityError, "Memory Parity Error"),
+            (
+                ExceptionCode::GatewayPathUnavailable,
+                "Gateway Path Unavailable",
+            ),
+            (
+                ExceptionCode::GatewayTargetDeviceFailedToRespond,
+                "Gateway Target Device Failed To Respond",
+            ),
+        ];
+        assert_eq!(expected.len(), 9, "all nine named codes are covered");
+        for (code, name) in expected {
+            assert_eq!(format!("{code}"), name);
+        }
+    }
+
+    #[test]
+    /// FR-R-154 — an unnamed exception code Displays with its decimal byte
+    /// value, since there is no name to substitute.
+    fn ut_exception_code_display_other() {
+        assert_eq!(
+            format!("{}", ExceptionCode::Other(0x7F)),
+            "Other exception 127"
+        );
     }
 }

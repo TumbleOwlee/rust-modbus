@@ -173,3 +173,11 @@ behavior shall be exercised over an in-memory duplex pair. A test that requires 
 real `/dev/tty*` device or a separately started external Modbus endpoint shall be
 marked `#[ignore]` with a reason naming what it needs, so it is opt-in and never
 runs in CI.
+
+**NF-R-025** — The crate shall expose an off-by-default `serde` feature gating the
+`Serialize`/`Deserialize` implementations named by FR-R-151, CL-R-065, SV-R-054, TR-R-058 and
+TR-R-059. The `serde` dependency shall be declared `default-features = false` with exactly the
+`derive` and `alloc` features enabled, so enabling `serde` never pulls in `std` on a build that
+has excluded it (NF-R-001, NF-R-002) and never enables any serde data format as a transitive
+dependency. CI shall build the bare-metal target of NF-R-003 with `serde` enabled and `std`
+excluded, in addition to the existing no-feature build.

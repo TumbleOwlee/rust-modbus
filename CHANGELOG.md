@@ -80,6 +80,29 @@ until it ships.
   when `rs485` is enabled (NF-R-011); every other build configuration still
   forbids it outright.
 
+- `core::fmt::Display` for the ten domain value types of FR-R-007 (unadorned
+  wrapped value, e.g. `UnitId(17)` renders `"17"`), for `FunctionCode` (English
+  name, e.g. `"Read Holding Registers"`, or `"Custom function <n>"`), and for
+  `ExceptionCode` (English name, or `"Other exception <n>"`) — unconditional,
+  not feature-gated (FR-R-152, FR-R-153, FR-R-154).
+
+- An off-by-default `serde` feature (NF-R-025), `default-features = false`
+  with only `derive` and `alloc`. `Serialize`/`Deserialize` for the ten domain
+  value types as `#[serde(transparent)]` (FR-R-151), and for `ClientConfig`,
+  `ServerConfig`, `SerialConfig`, `TcpConfig`, `TransportConfig`,
+  `Rs485Config` (with `rs485`), and the serial enums `DataBits`, `Parity`,
+  `StopBits`, `FlowControl`, `RtsPolarity` (CL-R-065, SV-R-054, TR-R-058,
+  TR-R-059). `Duration` fields keep `Duration`'s own representation
+  (`{secs, nanos}`) rather than a count in one unit, so every value a caller
+  can construct round-trips exactly: the 19200-8E1 default interval of
+  2,005,208 ns, a sub-millisecond timeout, and a duration whose nanosecond
+  count would overflow an integer field alike. A single-unit representation
+  would have been tidier in a config file at the cost of rounding the first
+  two and failing on the third. The field names are a compatibility surface
+  from here on. A deserialized `SerialConfig` with a zero baud rate is
+  accepted exactly as direct construction accepts it — the configuration error
+  fires on first use, not at deserialize time.
+
 ### Changed
 
 - `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a

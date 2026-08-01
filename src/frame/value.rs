@@ -11,13 +11,18 @@
 
 /// Define a transparent wrapper over one integer.
 ///
-/// A declarative macro rather than a derive dependency: the generated code is
-/// three impls per type, which is less than the cost of a proc-macro crate in
-/// the tree of a protocol library.
+/// A declarative macro rather than a derive dependency: the generated code for
+/// the mandatory impls (`Debug`, the `Copy`/`Eq`/`Ord`/`Hash` family, `From` in
+/// both directions, and `Display`) is smaller than the cost of a proc-macro
+/// crate in the tree of a protocol library. The `serde` derives are opt-in
+/// (FR-R-151) via `#[cfg_attr]`, which does not change that trade-off: they add
+/// no dependency unless the feature is enabled.
 macro_rules! value {
     ($(#[$meta:meta])* $name:ident($inner:ty)) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", serde(transparent))]
         pub struct $name(pub $inner);
 
         impl From<$inner> for $name {
@@ -29,6 +34,14 @@ macro_rules! value {
         impl From<$name> for $inner {
             fn from(value: $name) -> Self {
                 value.0
+            }
+        }
+
+        impl core::fmt::Display for $name {
+            /// FR-R-152 — the bare wrapped value, with no type name, field
+            /// name, or surrounding punctuation.
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -97,6 +110,7 @@ value! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     #[test]
     /// FR-R-007 — each domain value is a transparent wrapper: the wrapped
@@ -117,5 +131,28 @@ mod tests {
         assert_eq!(UnitId(u8::MAX).0, u8::MAX);
         assert_eq!(Quantity(u16::MAX).0, u16::MAX);
         assert_eq!(Address(u16::MAX).0, u16::MAX);
+    }
+
+    #[test]
+    /// FR-R-152 — a domain value Displays as its bare wrapped value, with no
+    /// type name, field name, or punctuation; Debug is unaffected.
+    fn ut_values_display_bare() {
+        assert_eq!(format!("{}", UnitId(17)), "17");
+        assert_eq!(format!("{:?}", UnitId(17)), "UnitId(17)");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// FR-R-151 — a domain value serializes and deserializes transparently:
+    /// the JSON text is the bare wrapped integer, not `{"0":17}`. Asserting on
+    /// the text, not merely on a round trip, is what would catch
+    /// `#[serde(transparent)]` being dropped.
+    fn ut_domain_values_serde_transparent() {
+        let text = serde_json::to_string(&UnitId(17)).expect("serializes");
+        assert_eq!(text, "17");
+        assert_eq!(
+            serde_json::from_str::<UnitId>(&text).expect("deserializes"),
+            UnitId(17)
+        );
     }
 }

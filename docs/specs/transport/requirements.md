@@ -195,3 +195,20 @@ not fit in a `u32` shall fail with `Error::Configuration` rather than wrap.
 of the level asserted during it, matching the drive-enable/idle-disable pattern every
 two-wire RS-485 transceiver expects; the crate shall not expose an independently
 configurable after-send polarity.
+
+**TR-R-058** — Behind the crate's `serde` feature, `SerialConfig`, `TcpConfig`,
+`TransportConfig`, `DataBits`, `Parity`, `StopBits` and `FlowControl` shall implement
+`serde::Serialize` and `serde::Deserialize` with no validation beyond their field and variant
+types'. Every `Duration` field shall keep `Duration`'s own serde representation rather than a
+count in any single unit, so that every value `Duration` can hold survives a round trip exactly
+— both `TransportConfig`'s baud-derived `inter_frame_interval`, whose default is 2,005,208 ns,
+and a duration whose nanosecond count would not fit an integer field. A deserialized
+`SerialConfig` with a zero baud rate shall be
+accepted exactly as direct construction accepts it: the existing configuration error fires the
+first time the value is used, not at deserialize time.
+
+**TR-R-059** — Behind the crate's `serde` feature together with the `rs485` feature,
+`Rs485Config` and `RtsPolarity` shall implement `serde::Serialize` and `serde::Deserialize` on
+the same terms as TR-R-058, both delays included. The truncation TR-R-056 applies belongs to
+the ioctl boundary, not to the configuration: a delay survives a round trip exactly as it was
+configured, and only the kernel sees whole milliseconds.

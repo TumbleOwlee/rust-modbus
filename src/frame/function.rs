@@ -132,9 +132,40 @@ impl FunctionCode {
     }
 }
 
+impl core::fmt::Display for FunctionCode {
+    /// FR-R-153 — a named code renders as its English name (FR-R-010); a
+    /// custom code as `"Custom function "` followed by its decimal byte value.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::ReadCoils => "Read Coils",
+            Self::ReadDiscreteInputs => "Read Discrete Inputs",
+            Self::ReadHoldingRegisters => "Read Holding Registers",
+            Self::ReadInputRegisters => "Read Input Registers",
+            Self::WriteSingleCoil => "Write Single Coil",
+            Self::WriteSingleRegister => "Write Single Register",
+            Self::ReadExceptionStatus => "Read Exception Status",
+            Self::Diagnostics => "Diagnostics",
+            Self::GetCommEventCounter => "Get Comm Event Counter",
+            Self::GetCommEventLog => "Get Comm Event Log",
+            Self::WriteMultipleCoils => "Write Multiple Coils",
+            Self::WriteMultipleRegisters => "Write Multiple Registers",
+            Self::ReportServerId => "Report Server ID",
+            Self::ReadFileRecord => "Read File Record",
+            Self::WriteFileRecord => "Write File Record",
+            Self::MaskWriteRegister => "Mask Write Register",
+            Self::ReadWriteMultipleRegisters => "Read/Write Multiple Registers",
+            Self::ReadFifoQueue => "Read FIFO Queue",
+            Self::EncapsulatedInterfaceTransport => "Encapsulated Interface Transport",
+            Self::Custom(byte) => return write!(f, "Custom function {byte}"),
+        };
+        f.write_str(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     #[test]
     /// FR-R-010 — all nineteen public function codes are named, and each maps to
@@ -224,5 +255,56 @@ mod tests {
             let code = FunctionCode::decode(byte).expect("1..=127 is always valid");
             assert_eq!(code.encode(), Ok(byte), "round-tripping {byte}");
         }
+    }
+
+    #[test]
+    /// FR-R-153 — every named function code Displays as the exact English name
+    /// FR-R-010 gives it. Transcribed by hand from the spec, not read from
+    /// `NAMED`, so a table typo cannot pass by construction.
+    fn ut_function_code_display_names_every_named_code() {
+        let expected = [
+            (FunctionCode::ReadCoils, "Read Coils"),
+            (FunctionCode::ReadDiscreteInputs, "Read Discrete Inputs"),
+            (FunctionCode::ReadHoldingRegisters, "Read Holding Registers"),
+            (FunctionCode::ReadInputRegisters, "Read Input Registers"),
+            (FunctionCode::WriteSingleCoil, "Write Single Coil"),
+            (FunctionCode::WriteSingleRegister, "Write Single Register"),
+            (FunctionCode::ReadExceptionStatus, "Read Exception Status"),
+            (FunctionCode::Diagnostics, "Diagnostics"),
+            (FunctionCode::GetCommEventCounter, "Get Comm Event Counter"),
+            (FunctionCode::GetCommEventLog, "Get Comm Event Log"),
+            (FunctionCode::WriteMultipleCoils, "Write Multiple Coils"),
+            (
+                FunctionCode::WriteMultipleRegisters,
+                "Write Multiple Registers",
+            ),
+            (FunctionCode::ReportServerId, "Report Server ID"),
+            (FunctionCode::ReadFileRecord, "Read File Record"),
+            (FunctionCode::WriteFileRecord, "Write File Record"),
+            (FunctionCode::MaskWriteRegister, "Mask Write Register"),
+            (
+                FunctionCode::ReadWriteMultipleRegisters,
+                "Read/Write Multiple Registers",
+            ),
+            (FunctionCode::ReadFifoQueue, "Read FIFO Queue"),
+            (
+                FunctionCode::EncapsulatedInterfaceTransport,
+                "Encapsulated Interface Transport",
+            ),
+        ];
+        assert_eq!(expected.len(), 19, "all nineteen named codes are covered");
+        for (code, name) in expected {
+            assert_eq!(format!("{code}"), name);
+        }
+    }
+
+    #[test]
+    /// FR-R-153 — a custom code Displays with its decimal byte value, since
+    /// there is no name to substitute.
+    fn ut_function_code_display_custom() {
+        assert_eq!(
+            format!("{}", FunctionCode::Custom(100)),
+            "Custom function 100"
+        );
     }
 }

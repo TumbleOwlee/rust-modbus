@@ -61,7 +61,13 @@ owns the desynchronization that TR-R-041 describes.
 | An independently-set after-send RTS polarity | Not offered (TR-R-057). The kernel struct allows it; no two-wire board this crate targets wants it |
 | `rs485: None` on a port where RS-485 mode is already enabled — by the device tree, by `setserial`, or by an earlier process | The mode stays enabled. `None` issues no ioctl at all (TR-R-052) rather than issuing one that clears `SER_RS485_ENABLED`, so this crate can turn RS-485 on but never off. Disabling it is the operator's job, outside this crate |
 
-## 4. Known limitations
+## 4. Serde
+
+| Condition | Behavior |
+|---|---|
+| A deserialized `SerialConfig` with `baud_rate: 0` | Accepted at deserialize time; rejected the first time it is asked for an inter-frame interval or to open a port, exactly as a hand-built zero-baud config is today (TR-R-058). Validating earlier would give the serde path stricter semantics than the constructor, which this crate has never had |
+
+## 5. Known limitations
 
 - **The RTU t1.5 intra-character timeout is not enforced.** The Modbus serial
   specification calls for a frame to be rejected when more than 1.5 character

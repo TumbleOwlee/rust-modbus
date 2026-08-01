@@ -36,12 +36,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo check --all-features
 
-  # TR-R-032, TR-R-051. The `rtu` and `rs485` features are each off by
-  # default, so the default build must keep compiling without either, `rtu`
-  # alone must keep compiling without `rs485`, and `rs485` must compile on its
-  # own (proving it correctly implies `rtu` rather than merely being tested
-  # alongside it via --all-features). Checking only `--all-features` would
-  # hide a break in any of these directions.
+  # TR-R-032, TR-R-051, NF-R-025. The `rtu`, `rs485`, and `serde` features are
+  # each off by default, so the default build must keep compiling without any
+  # of them, `rtu` alone must keep compiling without `rs485`, and `rs485` and
+  # `serde` must each compile on their own (proving `rs485` correctly implies
+  # `rtu`, and that `serde` is independent of both, rather than merely being
+  # tested alongside them via --all-features). Checking only `--all-features`
+  # would hide a break in any of these directions.
   features:
     runs-on: ubuntu-latest
     steps:
@@ -50,6 +51,7 @@ jobs:
       - run: cargo check
       - run: cargo check --features rtu
       - run: cargo check --features rs485
+      - run: cargo check --features serde
 
   # NF-R-014, NF-R-023, NF-R-024. The default test run includes the property-based
   # robustness suite that pins NF-R-012, and needs no serial hardware, no device
@@ -63,17 +65,22 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo test --all-features
 
-  # NF-R-003, CL-R-004, SV-R-006. Builds for a bare-metal target with no default
-  # features, so the `no_std` guarantee is checked by the compiler rather than
-  # asserted in prose. A `std` dependency reintroduced anywhere in the frame area
-  # fails here, as does a client, server, or transport item escaping its `std`
-  # gate — which is why those two requirements have no unit test of their own.
+  # NF-R-003, CL-R-004, SV-R-006, NF-R-025. Builds for a bare-metal target with
+  # no default features, so the `no_std` guarantee is checked by the compiler
+  # rather than asserted in prose. A `std` dependency reintroduced anywhere in
+  # the frame area fails here, as does a client, server, or transport item
+  # escaping its `std` gate — which is why those two requirements have no unit
+  # test of their own. The second build proves the same with `serde` enabled,
+  # so `serde`'s `default-features = false` declaration in Cargo.toml is
+  # verified rather than merely asserted: were `std` to leak in through it,
+  # only this leg would catch it.
   no-std:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add thumbv7em-none-eabi
       - run: cargo build --target thumbv7em-none-eabi --no-default-features
+      - run: cargo build --target thumbv7em-none-eabi --no-default-features --features serde
 
   # TR-R-054, TR-R-055. `rs485` is Linux-only in effect: off Linux `open_serial`
   # always fails with `Rs485Unsupported` rather than issuing the ioctl, and the

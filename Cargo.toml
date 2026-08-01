@@ -29,6 +29,11 @@ rtu = ["std", "dep:tokio-serial"]
 # `target_os = "linux"`, so the `libc` dependency below is scoped there and
 # never enters a non-Linux dependency tree.
 rs485 = ["rtu", "dep:libc"]
+# NF-R-025. Off by default; gates Serialize/Deserialize on the domain value
+# types and the configuration types. `default-features = false` with only
+# `derive` and `alloc` so enabling it never pulls in `std` on a `no_std` build
+# and never enables a serde data format as a transitive dependency.
+serde = ["dep:serde"]
 
 # NF-R-004. Every dependency below carries `default-features = false` and names
 # only the features the crate actually uses. This table is where that
@@ -46,6 +51,10 @@ winnow = { version = "1.0.4", default-features = false, features = ["alloc", "as
 tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # The only maintained async serial port for Tokio; wraps `serialport`.
 tokio-serial = { version = "5.5", optional = true, default-features = false }
+# NF-R-025. `derive` and `alloc` only: no `std`, so the bare-metal build of
+# NF-R-003 stays `no_std` with `serde` enabled, and no serde data format
+# (`serde_json`, `serde_yaml`, ...) is pulled in transitively.
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 # TR-R-050, TR-R-055. The `TIOCSRS485` ioctl is declared by neither `libc` nor
 # `nix`, but the raw syscall plumbing (`ioctl`, error numbers) is `libc`'s.
@@ -63,6 +72,8 @@ proptest = "1"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "test-util"] }
 # The pty test pinning TR-R-053 needs a real pty pair; only `openpty` is used.
 nix = { version = "0.29", default-features = false, features = ["term"] }
+# Exercises the serde round trips against real JSON text (NF-R-025). Dev-only.
+serde_json = "1"
 
 [lints.clippy]
 # Every fallible call in non-test code documents why it cannot fail via
