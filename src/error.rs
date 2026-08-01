@@ -206,6 +206,13 @@ pub enum Error {
     #[cfg(feature = "std")]
     #[error("the exchange is desynchronized; a new connection is required")]
     Desynchronized,
+
+    /// The kernel's RS-485 direction-control mode could not be applied: the
+    /// target is not Linux, or the driver's `TIOCSRS485` ioctl reported the
+    /// mode is not implemented (TR-R-054).
+    #[cfg(feature = "rs485")]
+    #[error("RS-485 kernel mode is not supported on this platform or by this driver")]
+    Rs485Unsupported,
 }
 
 #[cfg(feature = "std")]

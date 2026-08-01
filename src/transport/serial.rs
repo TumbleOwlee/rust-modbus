@@ -79,6 +79,13 @@ pub struct SerialConfig {
     pub stop_bits: StopBits,
     /// Flow control.
     pub flow_control: FlowControl,
+    /// Kernel RS-485 direction control (TR-R-050, TR-R-052).
+    ///
+    /// `None`, the default, requests no RS-485 configuration and issues no
+    /// ioctl. Present only when the `rs485` feature is enabled, so a build
+    /// without it has no field whose value could be silently ignored.
+    #[cfg(feature = "rs485")]
+    pub rs485: Option<Rs485Config>,
 }
 
 impl Default for SerialConfig {
@@ -89,8 +96,40 @@ impl Default for SerialConfig {
             parity: Parity::default(),
             stop_bits: StopBits::default(),
             flow_control: FlowControl::default(),
+            #[cfg(feature = "rs485")]
+            rs485: None,
         }
     }
+}
+
+/// Kernel RS-485 direction control for a serial port (TR-R-050).
+///
+/// Applied by `open_serial` (TR-R-053) via the `TIOCSRS485` ioctl. There is no
+/// application-driven GPIO hook: direction control is delegated entirely to the
+/// kernel driver.
+#[cfg(feature = "rs485")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rs485Config {
+    /// The RTS level asserted while transmitting. The level asserted
+    /// afterwards is always its complement (TR-R-057).
+    pub rts_on_send: RtsPolarity,
+    /// Delay held before a transmission begins, truncated to whole
+    /// milliseconds (TR-R-056).
+    pub delay_before_send: Duration,
+    /// Delay held after a transmission ends, truncated to whole milliseconds
+    /// (TR-R-056).
+    pub delay_after_send: Duration,
+}
+
+/// The RTS level asserted while transmitting, under RS-485 kernel direction
+/// control (TR-R-050).
+#[cfg(feature = "rs485")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtsPolarity {
+    /// RTS driven high while transmitting.
+    High,
+    /// RTS driven low while transmitting.
+    Low,
 }
 
 impl SerialConfig {
@@ -153,6 +192,8 @@ mod tests {
                 parity: Parity::Even,
                 stop_bits: StopBits::One,
                 flow_control: FlowControl::None,
+                #[cfg(feature = "rs485")]
+                rs485: None,
             }
         );
     }
@@ -228,5 +269,13 @@ mod tests {
             config.inter_frame_interval(),
             Err(Error::Configuration { field: "baud_rate" })
         );
+    }
+
+    #[cfg(feature = "rs485")]
+    #[test]
+    /// TR-R-052 — `SerialConfig::default().rs485` is `None`: requesting no
+    /// RS-485 configuration issues no ioctl.
+    fn ut_rs485_field_default_is_none() {
+        assert_eq!(SerialConfig::default().rs485, None);
     }
 }
