@@ -20,6 +20,7 @@ pub type RtuOverTcpTransport = FrameTransport<TcpStream, RtuOverTcp>;
 
 /// How a TCP connection is made (TR-R-021, TR-R-022).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TcpConfig {
     /// How long to wait for the connection to be established.
     pub connect_timeout: Duration,
@@ -163,6 +164,25 @@ mod tests {
                 connect_timeout: Duration::from_secs(5),
                 nodelay: true,
             }
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// TR-R-058 — `TcpConfig` round-trips through JSON.
+    fn ut_tcp_config_serde_roundtrip() {
+        let config = TcpConfig {
+            connect_timeout: Duration::from_secs(5),
+            nodelay: true,
+        };
+        let text = serde_json::to_string(&config).expect("serializes");
+        assert_eq!(
+            text,
+            r#"{"connect_timeout":{"secs":5,"nanos":0},"nodelay":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<TcpConfig>(&text).expect("deserializes"),
+            config
         );
     }
 }

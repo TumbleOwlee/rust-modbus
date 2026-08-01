@@ -192,6 +192,8 @@ extern crate alloc;
 
 #[cfg(feature = "std")]
 mod client;
+#[cfg(feature = "serde")]
+mod duration_serde;
 mod error;
 mod frame;
 mod parse;

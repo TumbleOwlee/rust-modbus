@@ -35,8 +35,16 @@ pub use rtu::{SerialTransport, open_serial};
 ///
 /// Only RTU consults it: TCP and ASCII ADUs are self-delimiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransportConfig {
     /// Silence that ends an RTU frame.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            rename = "inter_frame_interval_ns",
+            with = "crate::duration_serde::nanos"
+        )
+    )]
     pub inter_frame_interval: Duration,
 }
 
@@ -568,6 +576,23 @@ mod tests {
             .expect("writes head");
         drop(peer);
         assert_eq!(server.recv_request().await, Err(Error::ConnectionClosed));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// TR-R-058 — `TransportConfig` round-trips through JSON, with
+    /// `inter_frame_interval` under the field name `inter_frame_interval_ns`
+    /// in whole nanoseconds. The default (2,005,208 ns, derived from 19200
+    /// 8E1) must survive exactly: a millisecond representation would round it
+    /// to 2 ms and silently change RTU framing timing.
+    fn ut_transport_config_serde_roundtrip() {
+        let config = TransportConfig::default();
+        let text = serde_json::to_string(&config).expect("serializes");
+        assert_eq!(text, r#"{"inter_frame_interval_ns":2005208}"#);
+        assert_eq!(
+            serde_json::from_str::<TransportConfig>(&text).expect("deserializes"),
+            config
+        );
     }
 }
 

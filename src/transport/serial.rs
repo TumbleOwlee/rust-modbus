@@ -17,6 +17,7 @@ const FIXED_INTERVAL: Duration = Duration::from_micros(1_750);
 
 /// Bits per character, excluding start, parity, and stop bits (TR-R-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataBits {
     /// Five data bits.
     Five,
@@ -31,6 +32,7 @@ pub enum DataBits {
 
 /// Parity checking (TR-R-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Parity {
     /// No parity bit.
     None,
@@ -43,6 +45,7 @@ pub enum Parity {
 
 /// Stop bits following a character (TR-R-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StopBits {
     /// One stop bit, the Modbus default.
     #[default]
@@ -53,6 +56,7 @@ pub enum StopBits {
 
 /// Flow control on the line (TR-R-031).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlowControl {
     /// No flow control, the Modbus default.
     #[default]
@@ -68,6 +72,7 @@ pub enum FlowControl {
 /// [`Default`] is the Modbus serial-line default: 19200 baud, 8 data bits, even
 /// parity, one stop bit, no flow control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SerialConfig {
     /// Symbols per second.
     pub baud_rate: u32,
@@ -109,15 +114,27 @@ impl Default for SerialConfig {
 /// kernel driver.
 #[cfg(feature = "rs485")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rs485Config {
     /// The RTS level asserted while transmitting. The level asserted
     /// afterwards is always its complement (TR-R-057).
     pub rts_on_send: RtsPolarity,
     /// Delay held before a transmission begins, truncated to whole
     /// milliseconds (TR-R-056).
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            rename = "delay_before_send_ms",
+            with = "crate::duration_serde::millis"
+        )
+    )]
     pub delay_before_send: Duration,
     /// Delay held after a transmission ends, truncated to whole milliseconds
     /// (TR-R-056).
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "delay_after_send_ms", with = "crate::duration_serde::millis")
+    )]
     pub delay_after_send: Duration,
 }
 
@@ -125,6 +142,7 @@ pub struct Rs485Config {
 /// control (TR-R-050).
 #[cfg(feature = "rs485")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RtsPolarity {
     /// RTS driven high while transmitting.
     High,
@@ -277,5 +295,67 @@ mod tests {
     /// RS-485 configuration issues no ioctl.
     fn ut_rs485_field_default_is_none() {
         assert_eq!(SerialConfig::default().rs485, None);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// TR-R-058 — `SerialConfig` round-trips through JSON.
+    fn ut_serial_config_serde_roundtrip() {
+        let config = SerialConfig::default();
+        let text = serde_json::to_string(&config).expect("serializes");
+        #[cfg(feature = "rs485")]
+        assert_eq!(
+            text,
+            r#"{"baud_rate":19200,"data_bits":"Eight","parity":"Even","stop_bits":"One","flow_control":"None","rs485":null}"#
+        );
+        #[cfg(not(feature = "rs485"))]
+        assert_eq!(
+            text,
+            r#"{"baud_rate":19200,"data_bits":"Eight","parity":"Even","stop_bits":"One","flow_control":"None"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<SerialConfig>(&text).expect("deserializes"),
+            config
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// TR-R-058 — a deserialized `SerialConfig` with a zero baud rate is
+    /// accepted exactly as direct construction accepts it: the configuration
+    /// error fires the first time the value is used, not at deserialize time.
+    fn ut_serial_config_zero_baud_deserializes_without_error() {
+        let config = SerialConfig {
+            baud_rate: 0,
+            ..SerialConfig::default()
+        };
+        let text = serde_json::to_string(&config).expect("serializes");
+        let deserialized: SerialConfig =
+            serde_json::from_str(&text).expect("deserializing a zero baud rate does not fail");
+        assert_eq!(
+            deserialized.inter_frame_interval(),
+            Err(Error::Configuration { field: "baud_rate" })
+        );
+    }
+
+    #[cfg(all(feature = "serde", feature = "rs485"))]
+    #[test]
+    /// TR-R-059 — `Rs485Config` round-trips through JSON, with both delays
+    /// under field names suffixed `_ms` in whole milliseconds.
+    fn ut_rs485_config_serde_roundtrip() {
+        let config = Rs485Config {
+            rts_on_send: RtsPolarity::High,
+            delay_before_send: Duration::from_millis(10),
+            delay_after_send: Duration::from_millis(20),
+        };
+        let text = serde_json::to_string(&config).expect("serializes");
+        assert_eq!(
+            text,
+            r#"{"rts_on_send":"High","delay_before_send_ms":10,"delay_after_send_ms":20}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Rs485Config>(&text).expect("deserializes"),
+            config
+        );
     }
 }

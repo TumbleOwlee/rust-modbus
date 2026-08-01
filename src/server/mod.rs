@@ -21,6 +21,7 @@ pub use service::{Acceptance, Connection, ConnectionId, Disconnect, Service};
 
 /// How a server answers (SV-R-008).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ServerConfig {
     /// The only unit identifier to answer, or `None` to leave the decision to
     /// the service (SV-R-020, SV-R-022).
@@ -1288,6 +1289,21 @@ mod tests {
                 .filter(|event| matches!(event, Event::Request(..)))
                 .count(),
             1
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// SV-R-054 — `ServerConfig` round-trips through JSON.
+    fn ut_server_config_serde_roundtrip() {
+        let config = ServerConfig {
+            unit: Some(UnitId(17)),
+        };
+        let text = serde_json::to_string(&config).expect("serializes");
+        assert_eq!(text, r#"{"unit":17}"#);
+        assert_eq!(
+            serde_json::from_str::<ServerConfig>(&text).expect("deserializes"),
+            config
         );
     }
 }

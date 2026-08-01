@@ -24,8 +24,13 @@ pub use framing::ClientFraming;
 /// One field: CL-R-033 rules out retry and reconnect, so there is no policy for
 /// them to configure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClientConfig {
     /// How long a response may take before the exchange is abandoned.
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "response_timeout_ms", with = "crate::duration_serde::millis")
+    )]
     pub response_timeout: Duration,
 }
 
@@ -1220,6 +1225,22 @@ mod tests {
             ClientConfig {
                 response_timeout: Duration::from_secs(1),
             }
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// CL-R-065 — `ClientConfig` round-trips through JSON, with the timeout
+    /// under the field name `response_timeout_ms` in whole milliseconds.
+    fn ut_client_config_serde_roundtrip() {
+        let config = ClientConfig {
+            response_timeout: Duration::from_millis(1500),
+        };
+        let text = serde_json::to_string(&config).expect("serializes");
+        assert_eq!(text, r#"{"response_timeout_ms":1500}"#);
+        assert_eq!(
+            serde_json::from_str::<ClientConfig>(&text).expect("deserializes"),
+            config
         );
     }
 
