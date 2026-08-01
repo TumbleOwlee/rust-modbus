@@ -176,8 +176,13 @@
 //! `SV-R-*`, `TR-R-*`, `NF-R-*`) refer to it. `PRD.md` states what the library
 //! is and is not for, and `ARCHITECTURE.md` maps the modules.
 
-// NF-R-011: no `unsafe` anywhere, enforced by the compiler rather than by review.
-#![forbid(unsafe_code)]
+// NF-R-011. With `rs485` off, no `unsafe` anywhere, enforced by the compiler
+// rather than by review. Enabling `rs485` narrows this to `deny`, admitting
+// exactly the one documented `#[allow(unsafe_code)]` block that issues the
+// `TIOCSRS485` ioctl (TR-R-055) — every other unsafe block, in this crate
+// today or added later, still fails the build.
+#![cfg_attr(not(feature = "rs485"), forbid(unsafe_code))]
+#![cfg_attr(feature = "rs485", deny(unsafe_code))]
 #![warn(missing_docs)]
 // NF-R-001, NF-R-002: `core` + `alloc` always; `std` only where the transport,
 // client, and server areas need it.
@@ -220,5 +225,7 @@ pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
     TcpConfig, TcpListener, TcpTransport, TransportConfig, connect_tcp, connect_tcp_framed,
 };
+#[cfg(feature = "rs485")]
+pub use transport::{Rs485Config, RtsPolarity};
 #[cfg(feature = "rtu")]
 pub use transport::{SerialTransport, open_serial};

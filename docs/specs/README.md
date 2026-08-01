@@ -94,7 +94,7 @@ point per `NF-R-021`:
 | `NF-R-005`, `NF-R-007` | `rust-version` in `Cargo.toml` and the `msrv` CI job |
 | `NF-R-006` | `rust-toolchain.toml` |
 | `NF-R-008`, `NF-R-010` | Design posture. No benchmark gates CI, by decision (`NF-R-010`) |
-| `NF-R-011` | `forbid(unsafe_code)` in `src/lib.rs` |
+| `NF-R-011` | The `cfg_attr` pair in `src/lib.rs`: `forbid(unsafe_code)` when `rs485` is off, `deny(unsafe_code)` when it is on |
 | `NF-R-013` | `[lints.clippy]` in `Cargo.toml`, `clippy.toml`, and the `clippy` CI job |
 | `NF-R-015` | `deny.toml` and the `deny` CI job |
 | `NF-R-016`, `NF-R-017`, `NF-R-018`, `NF-R-019` | Release process, `CHANGELOG.md`, and review. `NF-R-018`'s "every combination compiles" half is checked by the `features` and `bare-metal` CI jobs; what a feature may *mean* is a review judgment |
@@ -111,6 +111,8 @@ point per `NF-R-021`:
 | `SV-R-005` | Structural: nothing to test is the point. Recorded in `server/data-contract.md`, and a shipped data model would be a visible addition to `server/api-contract.md` |
 | `SV-R-006` | The `std` gate on the server module, checked by the bare-metal CI job, whose comment cites it |
 | `TR-R-032` | The `rtu` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
+| `TR-R-051` | The `rs485` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
+| `TR-R-055` | The `cfg_attr` pair in `src/lib.rs` and the `#[allow(unsafe_code)]` block in `src/transport/rs485.rs`, both commented; verified manually per the RS-485 implementation plan that a second, unrelated unsafe block is still rejected with `rs485` enabled |
 
 ## Keeping specs true
 

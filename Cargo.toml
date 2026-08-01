@@ -23,6 +23,12 @@ std = ["dep:tokio"]
 # TR-R-032. Off by default so a TCP-only consumer acquires no serial
 # dependency; the frame area's RTU *framing* is not gated, only opening a port.
 rtu = ["std", "dep:tokio-serial"]
+# TR-R-051. Off by default; implies `rtu` so RS-485 configuration is only
+# reachable through the serial opener it configures. Linux-only in effect
+# (TR-R-054): the ioctl this feature gates is declared only under
+# `target_os = "linux"`, so the `libc` dependency below is scoped there and
+# never enters a non-Linux dependency tree.
+rs485 = ["rtu", "dep:libc"]
 
 # NF-R-004. Every dependency below carries `default-features = false` and names
 # only the features the crate actually uses. This table is where that
@@ -41,6 +47,13 @@ tokio = { version = "1.53", optional = true, default-features = false, features 
 # The only maintained async serial port for Tokio; wraps `serialport`.
 tokio-serial = { version = "5.5", optional = true, default-features = false }
 
+# TR-R-050, TR-R-055. The `TIOCSRS485` ioctl is declared by neither `libc` nor
+# `nix`, but the raw syscall plumbing (`ioctl`, error numbers) is `libc`'s.
+# Scoped to Linux since the feature is Linux-only in effect (TR-R-054), so no
+# other target's dependency tree acquires it.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true, default-features = false }
+
 [dev-dependencies]
 # FR-R-130 (no panic on any input) and FR-R-133 (round-trip) are universally
 # quantified; a property test states them directly where a fixture list only
@@ -48,6 +61,8 @@ tokio-serial = { version = "5.5", optional = true, default-features = false }
 proptest = "1"
 # The runtime and the in-memory duplex pair every transport test runs on.
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "test-util"] }
+# The pty test pinning TR-R-053 needs a real pty pair; only `openpty` is used.
+nix = { version = "0.29", default-features = false, features = ["term"] }
 
 [lints.clippy]
 # Every fallible call in non-test code documents why it cannot fail via

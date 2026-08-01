@@ -7,6 +7,8 @@ use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 use crate::error::{Error, Result};
 use crate::frame::Framing;
+#[cfg(feature = "rs485")]
+use crate::transport::rs485;
 use crate::transport::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use crate::transport::{FrameTransport, TransportConfig};
 
@@ -36,6 +38,13 @@ pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<Seria
         .flow_control(flow_control(config.flow_control))
         .open_native_async()
         .map_err(convert)?;
+    // TR-R-053: applied after the port opens and before the transport is
+    // returned, so a caller never holds a transport whose direction control
+    // silently failed to apply.
+    #[cfg(feature = "rs485")]
+    if let Some(rs485_config) = &config.rs485 {
+        rs485::apply(&port, rs485_config)?;
+    }
     Ok(FrameTransport::with_config(port, transport))
 }
 
@@ -122,5 +131,82 @@ mod tests {
                 .expect_err("zero baud cannot be used"),
             Error::Configuration { field: "baud_rate" }
         );
+    }
+
+    #[cfg(feature = "rs485")]
+    #[test]
+    /// TR-R-053 — `open_serial` issues `TIOCSRS485` after the port is opened
+    /// and before the transport is returned, so a caller never holds a
+    /// transport whose direction control silently failed to apply. A pty
+    /// rejects the ioctl with `ENOTTY`, so `rs485: Some(..)` fails at open
+    /// time rather than yielding a live transport. The `None` case over the
+    /// *same* pty still opens successfully, proving the ioctl is issued only
+    /// when requested and not merely that ptys are unusable.
+    fn ut_open_serial_applies_rs485_at_open() {
+        use core::time::Duration;
+
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+
+        use crate::transport::serial::{Rs485Config, RtsPolarity};
+
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let slave_path = ptsname_r(&master).expect("ptsname_r");
+
+        // `open_native_async` registers the port with Tokio's reactor once it
+        // actually succeeds in opening a real device, so this synchronous
+        // test needs one entered even though `open_serial` itself is not
+        // async.
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let _guard = runtime.enter();
+
+        let with_rs485 = SerialConfig {
+            rs485: Some(Rs485Config {
+                rts_on_send: RtsPolarity::High,
+                delay_before_send: Duration::ZERO,
+                delay_after_send: Duration::ZERO,
+            }),
+            ..SerialConfig::default()
+        };
+        let opened = open_serial::<Rtu>(&slave_path, with_rs485);
+        assert_eq!(
+            opened.err(),
+            Some(Error::Rs485Unsupported),
+            "a pty must reject TIOCSRS485"
+        );
+
+        let opened_without = open_serial::<Rtu>(&slave_path, SerialConfig::default());
+        assert!(
+            opened_without.is_ok(),
+            "rs485: None must still open the same pty; got {opened_without:?}"
+        );
+    }
+
+    #[cfg(feature = "rs485")]
+    #[ignore = "requires RS-485-capable hardware: a real serial device whose driver implements TIOCSRS485"]
+    #[test]
+    /// TR-R-050, TR-R-053 — end to end against a real RS-485-capable port.
+    /// Named `ut_*`, never `it_*`, because it lives in a source file
+    /// (`NF-R-020`); `it_*` is reserved for `tests/`. Opt-in only: no CI
+    /// runner has the hardware this exercises (NF-R-024).
+    fn ut_open_serial_rs485_hardware_end_to_end() {
+        use core::time::Duration;
+
+        use crate::transport::serial::{Rs485Config, RtsPolarity};
+
+        let path =
+            std::env::var("RUST_MODBUS_RS485_TEST_DEVICE").expect("set to a real RS-485 device");
+        let config = SerialConfig {
+            rs485: Some(Rs485Config {
+                rts_on_send: RtsPolarity::High,
+                delay_before_send: Duration::from_millis(1),
+                delay_after_send: Duration::from_millis(1),
+            }),
+            ..SerialConfig::default()
+        };
+        let opened = open_serial::<Rtu>(&path, config);
+        assert!(opened.is_ok(), "expected success, got {opened:?}");
     }
 }

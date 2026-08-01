@@ -71,9 +71,14 @@ CI asserts on is a scope decision, not an incremental addition.
 
 ## 3. Security and robustness
 
-**NF-R-011** — The crate shall contain no `unsafe` code. This shall be enforced
-by the compiler through a crate-level `forbid(unsafe_code)` attribute, not by
-review.
+**NF-R-011** — The crate shall contain no `unsafe` code under its default feature set,
+and under any feature combination that excludes `rs485`; this shall be enforced by the
+compiler through a crate-level `forbid(unsafe_code)` attribute active whenever `rs485` is
+not enabled. Enabling the off-by-default `rs485` feature (TR-R-051) narrows this to
+`deny(unsafe_code)`, admitting exactly one `#[allow(unsafe_code)]` block: the single,
+documented `TIOCSRS485` ioctl call, gated to `target_os = "linux"` (TR-R-050, TR-R-055).
+Every other unsafe block — in this crate today or introduced by a future change — remains
+denied and fails the build.
 
 **NF-R-012** — No input from a peer — however malformed, truncated, oversized,
 or deliberately hostile — shall cause a panic, an out-of-bounds access, or an
