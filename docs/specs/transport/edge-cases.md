@@ -59,6 +59,7 @@ owns the desynchronization that TR-R-041 describes.
 | A `Duration` finer than one millisecond passed as a delay | Rounded down to whole milliseconds at the ioctl boundary (TR-R-056); the kernel field has no finer resolution |
 | Whether the line physically turned around | Never verified by this crate. `TIOCSRS485` configures the driver's intent; a scope on the bus is the only real verification |
 | An independently-set after-send RTS polarity | Not offered (TR-R-057). The kernel struct allows it; no two-wire board this crate targets wants it |
+| `rs485: None` on a port where RS-485 mode is already enabled — by the device tree, by `setserial`, or by an earlier process | The mode stays enabled. `None` issues no ioctl at all (TR-R-052) rather than issuing one that clears `SER_RS485_ENABLED`, so this crate can turn RS-485 on but never off. Disabling it is the operator's job, outside this crate |
 
 ## 4. Known limitations
 
