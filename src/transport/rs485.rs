@@ -46,10 +46,6 @@ const SER_RS485_RTS_AFTER_SEND: u32 = 1 << 2;
 /// gives the struct itself no padding between three `u32`s and a `[u32; 5]`,
 /// since every field shares the same 4-byte alignment), no field it would
 /// otherwise need to zero individually (TR-R-050).
-// `build` and `KernelRs485` are wired into `open_serial` by the next stage,
-// which issues the ioctl this struct is assembled for; until then only the
-// tests below construct them.
-#[allow(dead_code)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct KernelRs485 {
@@ -67,7 +63,6 @@ pub(crate) struct KernelRs485 {
 ///
 /// Fails with [`Error::Configuration`] if either delay's millisecond count
 /// does not fit in a `u32` (TR-R-056).
-#[allow(dead_code)]
 pub(crate) fn build(config: &Rs485Config) -> Result<KernelRs485> {
     let mut flags = SER_RS485_ENABLED;
     // TR-R-057: the after-send level is always the complement of the
@@ -93,6 +88,85 @@ pub(crate) fn build(config: &Rs485Config) -> Result<KernelRs485> {
 /// in a `u32`, rather than wrapping.
 fn truncate_to_millis(delay: Duration, field: &'static str) -> Result<u32> {
     u32::try_from(delay.as_millis()).map_err(|_| Error::Configuration { field })
+}
+
+/// `TIOCSRS485`, as declared in `include/uapi/asm-generic/ioctls.h`. Defined
+/// by neither `libc` nor `nix`, so this crate declares it itself. `libc::Ioctl`
+/// is the request parameter's actual type for `libc::ioctl` on this target —
+/// `c_ulong` on glibc, `c_int` on musl — so the constant is typed with it
+/// rather than a fixed integer width, and no cast is left to hope about at the
+/// call site (TR-R-050).
+#[cfg(target_os = "linux")]
+const TIOCSRS485: libc::Ioctl = 0x542F;
+
+/// Issue `TIOCSRS485` against an already-open file descriptor (TR-R-050).
+///
+/// Split out from [`apply`] so a test can exercise the real syscall and its
+/// error mapping against a file that is not a serial port at all — `/dev/null`
+/// reliably answers `ENOTTY` — without needing a `SerialStream`.
+///
+/// # Errors
+///
+/// Maps `ENOTTY`, `EINVAL`, and `ENOSYS` — every errno a driver or a
+/// non-serial file uses to say "this ioctl is not implemented" — to
+/// [`Error::Rs485Unsupported`] (TR-R-054). Any other errno surfaces as
+/// [`Error::Io`].
+#[cfg(target_os = "linux")]
+fn issue_ioctl(fd: std::os::unix::io::RawFd, kernel: &KernelRs485) -> Result<()> {
+    // SAFETY: `fd` is a valid, open file descriptor for the duration of this
+    // call (borrowed from the caller, which owns it). `kernel` is a valid,
+    // fully initialized `KernelRs485` whose layout matches the kernel's
+    // `struct serial_rs485` (see its doc comment), and `TIOCSRS485` is the
+    // ioctl request the kernel defines for writing exactly that struct. This
+    // is the crate's only unsafe code (TR-R-055).
+    #[allow(unsafe_code)]
+    let result = unsafe { libc::ioctl(fd, TIOCSRS485, kernel) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENOTTY) | Some(libc::EINVAL) | Some(libc::ENOSYS) => {
+            Err(Error::Rs485Unsupported)
+        }
+        _ => Err(error.into()),
+    }
+}
+
+/// Apply RS-485 configuration to an already-open serial port (TR-R-053).
+///
+/// # Errors
+///
+/// Fails with [`Error::Configuration`] if a delay does not fit in the
+/// kernel's field (TR-R-056), or with [`Error::Rs485Unsupported`] if the
+/// driver refuses the ioctl (TR-R-054).
+#[cfg(target_os = "linux")]
+pub(crate) fn apply(port: &tokio_serial::SerialStream, config: &Rs485Config) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+
+    let kernel = build(config)?;
+    issue_ioctl(port.as_raw_fd(), &kernel)
+}
+
+/// Off Linux, RS-485 kernel direction control does not exist, so it always
+/// fails (TR-R-054). Split from [`apply`] so a test can exercise it without
+/// an actual open port — nothing about it depends on one.
+#[cfg(not(target_os = "linux"))]
+fn unsupported_off_linux() -> Result<()> {
+    Err(Error::Rs485Unsupported)
+}
+
+/// Apply RS-485 configuration to an already-open serial port (TR-R-053).
+///
+/// Off Linux this is the whole of the story: no `libc` dependency, no unsafe
+/// code, no ioctl, just [`Error::Rs485Unsupported`] (TR-R-054).
+///
+/// # Errors
+///
+/// Always fails off Linux; see [`unsupported_off_linux`].
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn apply(_port: &tokio_serial::SerialStream, _config: &Rs485Config) -> Result<()> {
+    unsupported_off_linux()
 }
 
 #[cfg(test)]
@@ -173,5 +247,36 @@ mod tests {
                 field: "delay_before_send"
             })
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    /// TR-R-054 — `/dev/null` really rejects `TIOCSRS485` with `ENOTTY`, and
+    /// that is mapped to `Rs485Unsupported`, not a generic I/O error. Exercises
+    /// the real unsafe ioctl call and the real error mapping.
+    fn ut_rs485_ioctl_maps_enotty_to_unsupported() {
+        use std::fs::File;
+        use std::os::unix::io::AsRawFd;
+
+        let file = File::open("/dev/null").expect("/dev/null always exists");
+        let kernel = build(&Rs485Config {
+            rts_on_send: RtsPolarity::High,
+            delay_before_send: Duration::ZERO,
+            delay_after_send: Duration::ZERO,
+        })
+        .expect("valid delays");
+        assert_eq!(
+            issue_ioctl(file.as_raw_fd(), &kernel),
+            Err(Error::Rs485Unsupported)
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    /// TR-R-054 — off Linux the stub reports unsupported without touching
+    /// `libc` at all, so this is the only build where an actual RS-485 device
+    /// is unreachable regardless of a driver's own support.
+    fn ut_rs485_unsupported_stub_on_non_linux() {
+        assert_eq!(unsupported_off_linux(), Err(Error::Rs485Unsupported));
     }
 }
