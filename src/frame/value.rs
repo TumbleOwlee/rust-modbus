@@ -21,6 +21,8 @@ macro_rules! value {
     ($(#[$meta:meta])* $name:ident($inner:ty)) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", serde(transparent))]
         pub struct $name(pub $inner);
 
         impl From<$inner> for $name {
@@ -137,5 +139,20 @@ mod tests {
     fn ut_values_display_bare() {
         assert_eq!(format!("{}", UnitId(17)), "17");
         assert_eq!(format!("{:?}", UnitId(17)), "UnitId(17)");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// FR-R-151 — a domain value serializes and deserializes transparently:
+    /// the JSON text is the bare wrapped integer, not `{"0":17}`. Asserting on
+    /// the text, not merely on a round trip, is what would catch
+    /// `#[serde(transparent)]` being dropped.
+    fn ut_domain_values_serde_transparent() {
+        let text = serde_json::to_string(&UnitId(17)).expect("serializes");
+        assert_eq!(text, "17");
+        assert_eq!(
+            serde_json::from_str::<UnitId>(&text).expect("deserializes"),
+            UnitId(17)
+        );
     }
 }
