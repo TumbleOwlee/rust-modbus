@@ -4,6 +4,8 @@
 //! Role-agnostic: a client and a server use the same types, differing only in
 //! which direction they send and which they receive (TR-R-002).
 
+#[cfg(feature = "rs485")]
+mod rs485;
 #[cfg(feature = "rtu")]
 mod rtu;
 mod serial;
@@ -19,6 +21,8 @@ use crate::error::{Error, Result};
 use crate::frame::{AduBoundary, Direction, Extent, Framing, RequestPdu, ResponsePdu};
 
 pub use serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
+#[cfg(feature = "rs485")]
+pub use serial::{Rs485Config, RtsPolarity};
 pub use tcp::{
     RtuOverTcpTransport, TcpConfig, TcpListener, TcpTransport, connect_tcp, connect_tcp_framed,
 };

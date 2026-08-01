@@ -220,5 +220,7 @@ pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
     TcpConfig, TcpListener, TcpTransport, TransportConfig, connect_tcp, connect_tcp_framed,
 };
+#[cfg(feature = "rs485")]
+pub use transport::{Rs485Config, RtsPolarity};
 #[cfg(feature = "rtu")]
 pub use transport::{SerialTransport, open_serial};
