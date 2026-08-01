@@ -27,10 +27,6 @@ pub use framing::ClientFraming;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClientConfig {
     /// How long a response may take before the exchange is abandoned.
-    #[cfg_attr(
-        feature = "serde",
-        serde(rename = "response_timeout_ms", with = "crate::duration_serde::millis")
-    )]
     pub response_timeout: Duration,
 }
 
@@ -1230,17 +1226,44 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// CL-R-065 — `ClientConfig` round-trips through JSON, with the timeout
-    /// under the field name `response_timeout_ms` in whole milliseconds.
+    /// CL-R-065 — `ClientConfig` round-trips through JSON. The timeout keeps
+    /// `Duration`'s own representation, so every value `Duration` can hold
+    /// survives: one finer than a millisecond, and one far larger than any
+    /// nanosecond count would fit.
     fn ut_client_config_serde_roundtrip() {
         let config = ClientConfig {
             response_timeout: Duration::from_millis(1500),
         };
         let text = serde_json::to_string(&config).expect("serializes");
-        assert_eq!(text, r#"{"response_timeout_ms":1500}"#);
+        assert_eq!(text, r#"{"response_timeout":{"secs":1,"nanos":500000000}}"#);
         assert_eq!(
             serde_json::from_str::<ClientConfig>(&text).expect("deserializes"),
             config
+        );
+
+        let fine = ClientConfig {
+            response_timeout: Duration::from_nanos(1_500_001),
+        };
+        let text = serde_json::to_string(&fine).expect("serializes");
+        assert_eq!(text, r#"{"response_timeout":{"secs":0,"nanos":1500001}}"#);
+        assert_eq!(
+            serde_json::from_str::<ClientConfig>(&text).expect("deserializes"),
+            fine
+        );
+
+        // Whole seconds past what a nanosecond count could hold: `u64::MAX`
+        // nanoseconds is about 584 years, and this is `u64::MAX` *seconds*.
+        // Representing the field as a nanosecond integer would fail here
+        // rather than round — which is why it does not.
+        let vast = ClientConfig {
+            response_timeout: Duration::new(u64::MAX, 999_999_999),
+        };
+        assert_eq!(
+            serde_json::from_str::<ClientConfig>(
+                &serde_json::to_string(&vast).expect("serializes")
+            )
+            .expect("deserializes"),
+            vast
         );
     }
 

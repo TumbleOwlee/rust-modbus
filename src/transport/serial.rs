@@ -119,22 +119,12 @@ pub struct Rs485Config {
     /// The RTS level asserted while transmitting. The level asserted
     /// afterwards is always its complement (TR-R-057).
     pub rts_on_send: RtsPolarity,
-    /// Delay held before a transmission begins, truncated to whole
-    /// milliseconds (TR-R-056).
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            rename = "delay_before_send_ms",
-            with = "crate::duration_serde::millis"
-        )
-    )]
+    /// Delay held before a transmission begins. Kept at full resolution here;
+    /// truncated to whole milliseconds only where it is written to the ioctl
+    /// (TR-R-056).
     pub delay_before_send: Duration,
     /// Delay held after a transmission ends, truncated to whole milliseconds
     /// (TR-R-056).
-    #[cfg_attr(
-        feature = "serde",
-        serde(rename = "delay_after_send_ms", with = "crate::duration_serde::millis")
-    )]
     pub delay_after_send: Duration,
 }
 
@@ -341,7 +331,8 @@ mod tests {
     #[cfg(all(feature = "serde", feature = "rs485"))]
     #[test]
     /// TR-R-059 — `Rs485Config` round-trips through JSON, with both delays
-    /// under field names suffixed `_ms` in whole milliseconds.
+    /// under field names suffixed `_ns` in whole nanoseconds, so a delay the
+    /// ioctl would later truncate still survives the round trip unchanged.
     fn ut_rs485_config_serde_roundtrip() {
         let config = Rs485Config {
             rts_on_send: RtsPolarity::High,
@@ -351,11 +342,23 @@ mod tests {
         let text = serde_json::to_string(&config).expect("serializes");
         assert_eq!(
             text,
-            r#"{"rts_on_send":"High","delay_before_send_ms":10,"delay_after_send_ms":20}"#
+            r#"{"rts_on_send":"High","delay_before_send":{"secs":0,"nanos":10000000},"delay_after_send":{"secs":0,"nanos":20000000}}"#
         );
         assert_eq!(
             serde_json::from_str::<Rs485Config>(&text).expect("deserializes"),
             config
+        );
+
+        // TR-R-056 truncates at the ioctl, not here: the configured value is
+        // preserved exactly, and only the kernel sees whole milliseconds.
+        let fine = Rs485Config {
+            delay_before_send: Duration::from_nanos(1_500_001),
+            ..config
+        };
+        assert_eq!(
+            serde_json::from_str::<Rs485Config>(&serde_json::to_string(&fine).expect("serializes"))
+                .expect("deserializes"),
+            fine
         );
     }
 }

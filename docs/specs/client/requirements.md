@@ -211,5 +211,6 @@ detect via CL-R-061; the client shall not fail a request over it.
 
 **CL-R-065** — Behind the crate's `serde` feature, `ClientConfig` shall implement
 `serde::Serialize` and `serde::Deserialize` with no validation beyond its field types'. Its
-`response_timeout` shall be represented as a whole number of milliseconds under the field name
-`response_timeout_ms`.
+`response_timeout` shall keep `Duration`'s own serde representation rather than a count in any
+single unit, so that every value `Duration` can hold survives a round trip exactly — including
+one whose nanosecond count would not fit an integer field.

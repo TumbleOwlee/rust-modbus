@@ -38,13 +38,6 @@ pub use rtu::{SerialTransport, open_serial};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransportConfig {
     /// Silence that ends an RTU frame.
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            rename = "inter_frame_interval_ns",
-            with = "crate::duration_serde::nanos"
-        )
-    )]
     pub inter_frame_interval: Duration,
 }
 
@@ -588,7 +581,10 @@ mod tests {
     fn ut_transport_config_serde_roundtrip() {
         let config = TransportConfig::default();
         let text = serde_json::to_string(&config).expect("serializes");
-        assert_eq!(text, r#"{"inter_frame_interval_ns":2005208}"#);
+        assert_eq!(
+            text,
+            r#"{"inter_frame_interval":{"secs":0,"nanos":2005208}}"#
+        );
         assert_eq!(
             serde_json::from_str::<TransportConfig>(&text).expect("deserializes"),
             config

@@ -92,17 +92,16 @@ until it ships.
   `ServerConfig`, `SerialConfig`, `TcpConfig`, `TransportConfig`,
   `Rs485Config` (with `rs485`), and the serial enums `DataBits`, `Parity`,
   `StopBits`, `FlowControl`, `RtsPolarity` (CL-R-065, SV-R-054, TR-R-058,
-  TR-R-059). Three `Duration` fields carry an explicit unit in their wire
-  field name rather than serde's own `{secs, nanos}` shape, which is a
-  compatibility surface from here on: `ClientConfig::response_timeout` as
-  whole milliseconds under `response_timeout_ms`;
-  `TransportConfig::inter_frame_interval` as whole nanoseconds under
-  `inter_frame_interval_ns` (a millisecond field would round the 19200-8E1
-  default of 2,005,208 ns to 2 ms); `Rs485Config`'s two delays as whole
-  milliseconds under `delay_before_send_ms` / `delay_after_send_ms`. A
-  deserialized `SerialConfig` with a zero baud rate is accepted exactly as
-  direct construction accepts it — the configuration error fires on first use,
-  not at deserialize time.
+  TR-R-059). `Duration` fields keep `Duration`'s own representation
+  (`{secs, nanos}`) rather than a count in one unit, so every value a caller
+  can construct round-trips exactly: the 19200-8E1 default interval of
+  2,005,208 ns, a sub-millisecond timeout, and a duration whose nanosecond
+  count would overflow an integer field alike. A single-unit representation
+  would have been tidier in a config file at the cost of rounding the first
+  two and failing on the third. The field names are a compatibility surface
+  from here on. A deserialized `SerialConfig` with a zero baud rate is
+  accepted exactly as direct construction accepts it — the configuration error
+  fires on first use, not at deserialize time.
 
 ### Changed
 
