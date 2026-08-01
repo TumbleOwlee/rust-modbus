@@ -90,7 +90,16 @@ input whatsoever.
 | ASCII appending encode | Uses one scratch buffer per frame; RTU and TCP use none (FR-R-143) |
 | `encode` (the allocating form) | One allocation, sized on the framing maximum, then the appending path unchanged (FR-R-140) |
 
-## 5. Known limitations
+## 5. Serde and Display
+
+| Condition | Behavior |
+|---|---|
+| Deserializing a value the protocol would reject — `UnitId(250)`, `Quantity(2001)` | Succeeds. The wrapped integer's width is the only bound; anything wider simply fails to parse as that integer. Deserialize adds no validation the constructor does not already skip (FR-R-007, FR-R-151) |
+| `Display` of a value no function code would accept | Renders like any other value; `format!("{}", UnitId(250))` is `"250"`. Legality belongs to encoding (FR-R-021 and friends), not to formatting |
+| `Display` of `FunctionCode::Custom` or `ExceptionCode::Other` | Always carries the number, since there is no name to substitute — the one place these impls differ from the named case, which never shows a number |
+| The serde representation as a compatibility surface | Changing a domain type's wrapped width, or a config field's serde name or unit, changes what an already-stored TOML or JSON file parses as, independently of whether the Rust API broke. NF-R-017 did not previously need to consider this, because nothing was serializable |
+
+## 6. Known limitations
 
 - **Bit padding is treated differently in requests and responses, on purpose.**
   A bit-read *response* keeps all `8 × byte count` values including padding

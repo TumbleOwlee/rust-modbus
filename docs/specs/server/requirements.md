@@ -184,3 +184,6 @@ part-way through an ADU is a failure (TR-R-014).
 **SV-R-053** — Serving a TCP listener shall be available for any framing, so that
 a listener accepting gateway-framed connections runs the same per-connection
 behavior as one accepting MBAP-framed connections (SV-R-007).
+
+**SV-R-054** — Behind the crate's `serde` feature, `ServerConfig` shall implement
+`serde::Serialize` and `serde::Deserialize` with no validation beyond its field types'.

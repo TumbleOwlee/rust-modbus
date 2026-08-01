@@ -208,3 +208,8 @@ from encoding, so one rule has one home.
 **CL-R-064** — A typed method shall not compare the fields a server echoes
 against the fields sent. An echo mismatch is a server defect the caller may
 detect via CL-R-061; the client shall not fail a request over it.
+
+**CL-R-065** — Behind the crate's `serde` feature, `ClientConfig` shall implement
+`serde::Serialize` and `serde::Deserialize` with no validation beyond its field types'. Its
+`response_timeout` shall be represented as a whole number of milliseconds under the field name
+`response_timeout_ms`.

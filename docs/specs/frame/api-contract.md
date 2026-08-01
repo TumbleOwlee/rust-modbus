@@ -15,28 +15,28 @@ they are carried as `Custom(u8)` with an opaque body (FR-R-011, FR-R-012).
 All nineteen public function codes of the Modbus Application Protocol
 specification are named (FR-R-010):
 
-| Code | Function | Notes |
-|---|---|---|
-| 1 / `0x01` | Read Coils | |
-| 2 / `0x02` | Read Discrete Inputs | |
-| 3 / `0x03` | Read Holding Registers | |
-| 4 / `0x04` | Read Input Registers | |
-| 5 / `0x05` | Write Single Coil | |
-| 6 / `0x06` | Write Single Register | |
-| 7 / `0x07` | Read Exception Status | serial line only |
-| 8 / `0x08` | Diagnostics | serial line only; sub-functions in §2 |
-| 11 / `0x0B` | Get Comm Event Counter | serial line only |
-| 12 / `0x0C` | Get Comm Event Log | serial line only |
-| 15 / `0x0F` | Write Multiple Coils | |
-| 16 / `0x10` | Write Multiple Registers | |
-| 17 / `0x11` | Report Server ID | serial line only |
-| 20 / `0x14` | Read File Record | |
-| 21 / `0x15` | Write File Record | |
-| 22 / `0x16` | Mask Write Register | |
-| 23 / `0x17` | Read/Write Multiple Registers | |
-| 24 / `0x18` | Read FIFO Queue | |
-| 43 / `0x2B` | Encapsulated Interface Transport | MEI types in §3 |
-| *any other 1–127* | `Custom(u8)` | opaque body (FR-R-012) |
+| Code | Function | Notes | `Display` |
+|---|---|---|---|
+| 1 / `0x01` | Read Coils | | `Read Coils` |
+| 2 / `0x02` | Read Discrete Inputs | | `Read Discrete Inputs` |
+| 3 / `0x03` | Read Holding Registers | | `Read Holding Registers` |
+| 4 / `0x04` | Read Input Registers | | `Read Input Registers` |
+| 5 / `0x05` | Write Single Coil | | `Write Single Coil` |
+| 6 / `0x06` | Write Single Register | | `Write Single Register` |
+| 7 / `0x07` | Read Exception Status | serial line only | `Read Exception Status` |
+| 8 / `0x08` | Diagnostics | serial line only; sub-functions in §2 | `Diagnostics` |
+| 11 / `0x0B` | Get Comm Event Counter | serial line only | `Get Comm Event Counter` |
+| 12 / `0x0C` | Get Comm Event Log | serial line only | `Get Comm Event Log` |
+| 15 / `0x0F` | Write Multiple Coils | | `Write Multiple Coils` |
+| 16 / `0x10` | Write Multiple Registers | | `Write Multiple Registers` |
+| 17 / `0x11` | Report Server ID | serial line only | `Report Server ID` |
+| 20 / `0x14` | Read File Record | | `Read File Record` |
+| 21 / `0x15` | Write File Record | | `Write File Record` |
+| 22 / `0x16` | Mask Write Register | | `Mask Write Register` |
+| 23 / `0x17` | Read/Write Multiple Registers | | `Read/Write Multiple Registers` |
+| 24 / `0x18` | Read FIFO Queue | | `Read FIFO Queue` |
+| 43 / `0x2B` | Encapsulated Interface Transport | MEI types in §3 | `Encapsulated Interface Transport` |
+| *any other 1–127* | `Custom(u8)` | opaque body (FR-R-012) | `Custom function <n>` (FR-R-153) |
 
 Code 0 is invalid; 128–255 are exception-response space and never denote a
 request (FR-R-014, FR-R-015).
@@ -66,10 +66,21 @@ raw byte and an opaque body.
 
 ## 4. Exception codes
 
-Named exception codes (FR-R-082): 1 Illegal Function, 2 Illegal Data Address,
-3 Illegal Data Value, 4 Server Device Failure, 5 Acknowledge, 6 Server Device
-Busy, 8 Memory Parity Error, 10 Gateway Path Unavailable, 11 Gateway Target
-Device Failed To Respond.
+Named exception codes (FR-R-082), with the `Display` rendering FR-R-154 gives
+each:
+
+| Code | Exception | `Display` |
+|---|---|---|
+| 1 | Illegal Function | `Illegal Function` |
+| 2 | Illegal Data Address | `Illegal Data Address` |
+| 3 | Illegal Data Value | `Illegal Data Value` |
+| 4 | Server Device Failure | `Server Device Failure` |
+| 5 | Acknowledge | `Acknowledge` |
+| 6 | Server Device Busy | `Server Device Busy` |
+| 8 | Memory Parity Error | `Memory Parity Error` |
+| 10 | Gateway Path Unavailable | `Gateway Path Unavailable` |
+| 11 | Gateway Target Device Failed To Respond | `Gateway Target Device Failed To Respond` |
+| *any other byte, including 0* | `Other(u8)` | `Other exception <n>` |
 
 Every other byte, including 0, is carried as a general exception value holding
 the raw code (FR-R-083).
@@ -272,3 +283,24 @@ caller has to match on by substring. Adding a variant is a normative change.
 
 `Error` implements `core::error::Error` via `thiserror`, so it is usable in
 `no_std` builds and composes with `std::error::Error` where `std` is present.
+
+## 8. Serde support (feature-gated)
+
+Behind the crate's `serde` feature (NF-R-025), the ten domain value types of
+§"Domain value types (FR-R-007)" — `UnitId`, `TransactionId`, `Address`,
+`Quantity`, `RegisterValue`, `Mask`, `FileNumber`, `RecordNumber`,
+`RecordLength`, `ExceptionStatus` — implement `serde::Serialize` and
+`serde::Deserialize` as `#[serde(transparent)]` (FR-R-151): each serializes and
+deserializes as its bare wrapped integer, with no wrapping structure of its own.
+No other frame type (`RequestPdu`, `ResponsePdu`, `MbapHeader`, `ExceptionCode`,
+`FunctionCode`, or any other frame type) implements either trait.
+
+## 9. Display
+
+Unconditional, not feature-gated:
+
+- Every domain value type of §"Domain value types (FR-R-007)" implements
+  `core::fmt::Display`, rendering exactly its wrapped value (FR-R-152).
+- `FunctionCode` implements `core::fmt::Display` per the table in §1 (FR-R-153).
+- `ExceptionCode` implements `core::fmt::Display` per the table in §4
+  (FR-R-154).

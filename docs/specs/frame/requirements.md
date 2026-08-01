@@ -620,3 +620,27 @@ shall be self-locating. A boundary determined by a length field, or derived from
 ADU's own content, shall not be, since in both cases the information that would delimit
 the next frame is carried by the frame that failed. This property shall be derived from
 the boundary rule itself, so that a framing cannot state one rule and behave by another.
+
+## 14. Serde support and Display
+
+**FR-R-151** — Behind the crate's `serde` feature, each domain value type of FR-R-007 shall
+implement `serde::Serialize` and `serde::Deserialize` as `#[serde(transparent)]`: the wrapped
+integer serializes and deserializes with no wrapping structure of its own, so a `UnitId(17)`
+field serializes identically to a bare `17`. Deserialization shall impose no validation beyond
+the wrapped integer's own width, on the same terms FR-R-007 already states for construction: a
+value that deserializes is always constructible, including one no function code would accept.
+
+**FR-R-152** — Every domain value type of FR-R-007 shall implement `core::fmt::Display`,
+rendering exactly the wrapped value with no type name, no field name and no surrounding
+punctuation, so that `format!("unit {unit}")` composes without the caller stripping a wrapper.
+This is unconditional, not gated by any feature. `Debug` is unaffected and continues to show
+the wrapper.
+
+**FR-R-153** — `FunctionCode` shall implement `core::fmt::Display`, unconditionally. A named
+code shall render as the English name FR-R-010 gives it, spelled exactly as FR-R-010 spells it
+— including `Read/Write Multiple Registers` and `Read FIFO Queue`. `Custom(u8)` shall render as
+`"Custom function "` followed by the decimal byte value.
+
+**FR-R-154** — `ExceptionCode` shall implement `core::fmt::Display`, unconditionally. A named
+code shall render as the English name FR-R-082 gives it, spelled exactly as FR-R-082 spells it.
+`Other(u8)` shall render as `"Other exception "` followed by the decimal byte value.
