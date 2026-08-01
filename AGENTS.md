@@ -1,178 +1,139 @@
 # AGENTS.md
 
-Router for AI coding agents working in this repo. Read this first; it points to
-everything else.
+Router for AI coding agents. Read first.
 
-## What this repo is
+## Repo
 
-`rust-modbus` — a Rust library providing **async Modbus client and server**
-capabilities over **RTU** and **TCP**. A single crate, organised into modules; no
-binary is shipped. Product framing: [`PRD.md`](./PRD.md). Structure and module map:
-[`ARCHITECTURE.md`](./ARCHITECTURE.md).
+`rust-modbus` — async Modbus client and server over RTU and TCP. One library crate, no
+binary. Product framing: [`PRD.md`](./PRD.md). Structure: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## Spec-driven — read this before you change behavior
+## Spec-driven
 
-`docs/specs/` is the **authoritative** specification: the code conforms to it, not the
-other way around. Read an area's `requirements.md` before editing code in it. A behavior
-change with no spec change is incomplete.
+- `docs/specs/` is authoritative. Code conforms to the spec, not the reverse.
+- Read the area's `requirements.md` **and** `edge-cases.md` before editing that area.
+  `edge-cases.md` records deliberate ugliness — check it before "fixing" something.
+- A behavior change with no spec change is incomplete.
+- `main` never holds an unfinished spec: a requirement on `main` describes code that
+  exists and is tested. A branch may hold a spec commit ahead of its code; the squash
+  merge keeps that off `main`.
+- Pre-existing spec/code disagreement that is not the task you were given: stop, raise it
+  separately. Folding it in widens already-approved work and skips its own review.
+- Specs carry no `file:line`. Locate code with search tools.
+- Requirement IDs are stable and append-only. Cite them in commits and PRs.
 
-**`main` never contains an unfinished spec.** A requirement on `main` is a statement
-about code that exists and is tested. A feature branch may hold a spec commit ahead of
-its implementation; `main` may not, which the squash merge guarantees.
+## TDD — fixed order within every stage
 
-If the code and the spec already disagree and it is *not* what you were asked to fix:
-**stop and raise it as its own task.** Folding it in silently widens approved work, and
-the fix deserves its own review.
+1. Write the test. Its doc comment cites the requirement ID (`/// FR-R-012 — …`).
+2. Run it, watch it fail for the right reason, report the failure. A wrong assertion, a
+   test-side compile error, or a pass before the code exists proves nothing.
+3. Minimum implementation that passes.
+4. Refactor green.
 
-Specs carry no `file:line` pointers by design — locate code with your own search tools.
-Requirements have stable IDs (`FR-R-*`, `CL-R-*`, `SV-R-*`, `TR-R-*`, `NF-R-*`);
-reference them in commits and PRs.
+- Implementation without a preceding failing test: not done. Test written afterwards to
+  fit the code: not done.
+- Derive expected wire bytes from the Modbus standard, never from a debug print of your
+  own encoder.
+- Coverage floor 80% of lines, CI-gated on every push and PR. A floor, not a target —
+  never inflate it with tests that execute code without asserting.
 
-## Test-driven — the test comes before the implementation
+## Workflow
 
-Within a stage the order is fixed:
+Triggers on **behavior change, any size**: a new function code, a changed default, a new
+error variant, any observable API semantics. Not a behavior change: refactor, rename,
+perf work with identical semantics, tests, docs — no gates, just do it. Size sets the
+number of stages, never whether the gates exist.
 
-1. Write the test that pins the requirement. Its doc comment cites the requirement ID
-   (`/// FR-R-012 — …`).
-2. **Run it and watch it fail** for the right reason, and report what the failure was. A
-   wrong assertion, a compile error in the test itself, or a test that passes before the
-   code exists is a test that proves nothing.
-3. Write the minimum implementation that makes it pass.
-4. Refactor with the test green.
+- Replaces any generic workflow skill (`/workflow`); do not run one. `docs/specs/` is
+  already the PRD and the design record.
+- Branch off `main`, never commit to `main`. `<type>/<slug>`, type ∈ {`feat`, `fix`, `docs`}.
+- Delegate gates to agents. **All agents run Sonnet**, planning and implementation alike.
+  Sonnet is a floor: Haiku stopped mid-plan and called the rest future work, committed
+  `unimplemented!()` as a "green" checkpoint, and reported a deadlocking test as verified.
+- **One git worktree per issue, per agent.** Two agents in one checkout interleave commits
+  and `git add -A` each other's work — a branch is not a working tree. Create before the
+  agent starts, remove after its branch merges.
+- The plan is a contract. An implementer who finds it wrong stops and reports; it does not
+  improvise a different design.
+- **An agent's report of its own verification is not verification.** Re-run the tools.
 
-A stage that adds implementation without a preceding failing test is not done, and
-neither is a stage whose test was written afterwards to fit the code. Wire protocols are
-exactly where after-the-fact tests rot — a test written against the encoder you just
-wrote asserts what you built, not what Modbus requires. Where the wire format is
-specified by the standard, derive the expected bytes from the spec document, not from a
-debug print of your own output.
+Verify before every approval request:
 
-**Coverage floor: 80% of lines**, gating every push and pull request via `cargo llvm-cov
---fail-under-lines 80`. A floor, not a target: it catches untested modules, it does not
-certify tested ones. Never chase it with tests that execute code without asserting.
-
-## Workflow — follow this for every behavior change
-
-This workflow **replaces** any generic workflow skill (including `/workflow`); do not run
-one here. `docs/specs/` is already the PRD and the design record — a second
-design-artifact system would only give the "why" two homes to diverge in.
-
-**It triggers on behavior change, not on size.** Ask: *does this change what the software
-is required to do?* Yes — a new function code, a changed timeout default, a different
-error variant, any observable API semantics — the full workflow applies, however small the
-diff. No — a refactor, a rename, perf work with identical semantics, tests, docs — there
-is no spec diff to approve, so skip the gates and do the work. Size decides how many
-*stages* the plan has, never whether the gates exist.
-
-Work on a branch off `main`, never on `main` itself: `<type>/<slug>`, conventional-commit
-type (`feat/`, `fix/`, `docs/`).
-
-### Who does which phase
-
-Gates are delegated to agents; the orchestrator verifies between each one.
-
-- **Every agent runs Sonnet** — planning (gates 1, 1b, 2) and implementation alike. Sonnet
-  is the floor, not a preference: Haiku was tried and failed three ways — it stopped
-  mid-plan and called the remaining stages future work, committed `unimplemented!()` into
-  non-test code as a "green" checkpoint, and reported an integration test as verified that
-  in fact deadlocked and had never been run.
-- **The plan is the contract.** An implementer that finds the plan wrong stops and reports
-  rather than improvising a different design.
-- **An agent's own report of its verification is not verification.** Every failure above
-  was caught by re-running the tools, never by reading the report — which claimed success
-  in each case.
-- **Verify, then ask** — before the user sees anything. For a plan: every quoted
-  requirement text matches the file, appended IDs are genuinely unused, nothing
-  contradicts an existing requirement, and what it proposes is what was asked for. For an
-  implementation: re-run the whole build/test/lint/coverage gauntlet yourself in the
-  agent's worktree, read the code the report describes, check requirement-ID citations sit
+- **A plan** — quoted requirement text matches the file, appended IDs are genuinely
+  unused, nothing contradicts an existing requirement, and it proposes what was asked.
+- **An implementation** — re-run the full build/test/lint/coverage gauntlet yourself in
+  the agent's worktree, read the code the report describes, check ID citations sit
   directly below their test attributes, mutation-check any test written after its
-  implementation, and diff the spec against what was approved.
+  implementation, diff the spec against what was approved.
 
-**Every agent works in its own git worktree, one per issue.** Two agents in one checkout
-interleave their commits, `git add -A` each other's unstaged work into the wrong commit,
-and break each other's build — a branch is not a working tree. Create the worktree before
-the agent starts; remove it after its branch merges.
+### Gate 1 — spec diff. Stop for approval.
 
-1. **Read the affected area's spec** — `requirements.md` *and* `edge-cases.md`, which
-   records behavior that is ugly *on purpose*. Routing table below.
+- Propose the normative text itself: the "shall" statements with appended IDs, plus
+  `edge-cases.md` entries. Ready to land, not prose about intent.
+- Observable design is spec: public type and function signatures, the error enum, feature
+  gating.
+- Bug fix where the spec is right and the code is wrong: no diff — state the violated
+  requirement and continue.
 
-2. **Gate 1 — the behavior contract.** Propose the **spec diff itself**: the actual
-   "shall" text of new or changed requirements with their appended IDs, plus any
-   `edge-cases.md` entries. Not prose about what you intend to build — normative text,
-   ready to land. Observable design choices *are* spec and get settled here; for a library
-   that includes public type and function signatures, the error enum, and feature-flag
-   gating. **Stop for approval.** For a bug fix where the spec is already right and the
-   code is wrong there is no diff: state the requirement the code violates and move on.
+### Gate 1b — tracking issue. Stop for approval.
 
-3. **Gate 1b — the tracking issue.** Once the spec is approved, search open issues
-   (`gh issue list`) and closed ones for the **same goal**. If one exists, use it and
-   reference its number from here on — never open a second. Otherwise draft title and body,
-   **stop for approval**, and run `gh issue create` only once confirmed.
+- Search `gh issue list` and closed issues for the same goal. Reuse what exists and
+  reference its number; never open a second. Otherwise draft, get approval, `gh issue create`.
+- Title: plain language a maintainer can scan. Not a slug, an ID, or a commit subject.
+- Self-contained — the spec is not pushed yet, so quote the full normative text beside
+  each new ID, each changed requirement as old → new, plus `api-contract.md` and
+  `edge-cases.md` entries. An ID with no text is useless.
+- Goal and normative changes only. No implementation detail (structure, files, functions,
+  approach) — that belongs to gate 2 and the PR.
+- `##` sections, not prose: `## Background`/`## Why`, `## Scope`, `## Goal`, more as
+  warranted. Compact enumerations, grouped ID ranges. Same shape for PR bodies.
 
-   - **Human-friendly title** — a plain-language summary a maintainer can scan, not a slug,
-     a requirement ID, or a restated commit subject.
-   - **Self-contained.** The spec still lives only in the working tree, so a reader cannot
-     look an ID up: quote the full normative text of every new requirement beside its ID,
-     every changed requirement as old → new, and the `api-contract.md` and `edge-cases.md`
-     entries. An ID with no text is useless.
-   - **Goal and normative changes only.** Never implementation detail — code structure,
-     which files or functions change, the chosen approach. That belongs to the plan
-     (gate 2) and the PR.
-   - **`##` section headers, not a wall of prose**: `## Background` (or `## Why`) for
-     problem and context, `## Scope` (or the requirement changes) for what is in scope,
-     `## Goal` for the outcome, plus whatever else the issue warrants. Keep enumerations
-     compact — grouped ID ranges, not a paragraph per item. Same shape for PR bodies.
+### Write the spec into the working tree
 
-4. **Write the spec into the working tree.** Never mark it unfinished in the file — the
-   file only ever holds normative text. The plan tracks what is not yet backed by a
-   passing test.
+Never marked unfinished — the file holds only normative text. The plan tracks what lacks
+a passing test.
 
-5. **Gate 2 — the implementation plan.** Stages, file-level steps, a table mapping each new
-   requirement ID to the test that will pin it, and a **Verification** section naming how
-   the change will be exercised (unit tests alone; a loopback TCP integration test; a
-   virtual serial pair; interop against an external Modbus master/slave). State expected
-   commits and expected coverage impact. **Stop for approval.**
+### Gate 2 — implementation plan. Stop for approval.
 
-6. **Implement, stage by stage — test first**, per the four-step order above. A stage is a
-   **green checkpoint**: it compiles, `cargo test` passes, `cargo clippy --all-targets --
-   -D warnings` passes, coverage is ≥ 80%. **Commit every green stage** — that is what
-   makes the plan resumable after an interrupted session. Stage commits are branch-local
-   scaffolding squashed away on merge, so keep their messages cheap; the squash message is
-   the one that carries the requirement IDs and the why. The spec is the first stage and so
-   the first commit — legal on a branch, never on `main`.
+Stages; file-level steps; a table mapping each new requirement ID to the test that pins
+it; a **Verification** section naming the method (unit tests alone / loopback TCP
+integration / virtual serial pair / interop against an external master or slave); expected
+commits; expected coverage impact.
 
-   Every new or changed requirement ships with at least one test citing its ID in a doc
-   comment (`/// CL-R-021 — …`). Existing tests are held to the same terms: every test that
-   pins observable behavior cites the requirement it verifies. A test of a pure internal or
-   helper detail that no requirement governs may stay untagged. A test that verifies real
-   behavior no requirement states means the requirement is missing — add it (gate 1) rather
-   than attach a loose ID.
+### Implement, stage by stage
 
-   The citing doc comment goes **directly below** the `#[test]`/`#[tokio::test]` attribute,
-   immediately above the `fn`. An ID appears **at most once per test** — a test verifying
-   several requirements lists each once.
+- TDD order above. A stage is a green checkpoint: compiles, `cargo test`, `cargo clippy
+  --all-targets -- -D warnings`, coverage ≥ 80%. Commit every green stage — that is what
+  makes the plan resumable.
+- Stage messages stay cheap; they are squashed. The squash message carries the requirement
+  IDs and the why. The spec is the first stage and the first commit.
+- Every new or changed requirement ships ≥ 1 test citing its ID.
+- Every existing test that pins observable behavior cites its requirement. Tests of pure
+  internal or helper detail may stay untagged. Behavior no requirement states means the
+  requirement is missing — add it (gate 1), never attach a loose ID.
+- The citation goes directly below `#[test]`/`#[tokio::test]`, immediately above the `fn`.
+  Each ID appears at most once per test.
+- Not done until the Verification method has been run and its outcome reported. Waiving it
+  requires asking.
 
-   The task is not done until the plan's Verification method has actually been run and its
-   outcome reported. Waiving it requires asking.
+### Reconcile the spec
 
-7. **Reconcile the spec.** If implementation forced the behavior to differ from what gate 1
-   approved, the "shall" text changes — **normative**, so it **re-opens gate 1**: show the
-   diff, say what forced it, get approval before committing. A wrong cross-reference or
-   clumsy wording is **editorial** and needs no approval. **Always report the final spec
-   diff** when you finish, so the difference is visible without diffing by hand.
+Behavior differing from what gate 1 approved is normative and **re-opens gate 1**: show
+the diff, state what forced it, get approval before committing. A wrong cross-reference or
+clumsy wording is editorial — no approval needed. Always report the final spec diff.
 
-8. **Gate 3 — the pull request.** With the work done and the Verification method run and
-   reported: **stop and ask whether to open a PR.** The user may want a manual test run of
-   their own first — that is the point of this gate, so do not pre-empt it. Once they
-   confirm, draft the PR title and body and **stop for approval** of that text. Same
-   human-friendly title style as the issue. The PR body is where the implementation lives:
-   the why, the requirement IDs, **how the issue was resolved** (the approach and structure
-   the issue deliberately omitted), the verification actually performed, the coverage
-   number, and `Closes #<issue>`. Only then push the branch and `gh pr create`.
+### Gate 3 — pull request. Stop for approval.
 
-Merge to `main` by **squash merge**, so the branch's stage commits — including the spec
-commit that briefly ran ahead of its code — never reach `main`.
+- Verification run and reported, then **ask whether to open a PR** — the user may want
+  their own manual run first; do not pre-empt it.
+- Then draft title and body, get approval of that text, then push and `gh pr create`.
+- Title style as the issue. Body is the implementation: the why, the requirement IDs, how
+  the issue was resolved (the approach and structure the issue omitted), the verification
+  actually performed, the coverage number, `Closes #<issue>`.
+
+### Merge
+
+Squash merge to `main`, so stage commits — including the spec commit that ran ahead of its
+code — never reach `main`.
 
 ## Where to look for task X
 
@@ -186,9 +147,6 @@ commit that briefly ran ahead of its code — never reach `main`.
 | Module graph, data flow, concurrency model | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | — |
 | Contribution workflow, conventions | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | — |
 
-Each area's `edge-cases.md` records its **known limitations** — behavior that is ugly but
-intentional. Check it before "fixing" something that looks wrong.
-
 ## Build / test / lint
 
 ```sh
@@ -199,7 +157,7 @@ cargo fmt --check
 cargo llvm-cov --all-features --fail-under-lines 80
 ```
 
-Narrow the loop while iterating — don't run the whole suite for one test:
+Narrow the loop while iterating:
 
 ```sh
 cargo test ut_crc                 # one test (unit tests are named ut_*)
@@ -207,58 +165,44 @@ cargo test --test tcp_loopback    # one integration test file (it_* functions)
 cargo llvm-cov --all-features --html   # browsable per-line coverage report
 ```
 
-Run these before considering work done. `lefthook` enforces `fmt --check` and `clippy -D
-warnings` pre-commit, and CI runs fmt, clippy, check, test and the coverage gate as
-separate steps on every push **and every pull request**, so a failure is caught either way.
+Run the full set before considering work done. `lefthook` enforces `fmt --check` and `clippy -D warnings` pre-commit; CI runs fmt,
+clippy, check, test and the coverage gate on every push and pull request.
 
 ## Conventions
 
-- Unit tests live in `#[cfg(test)] mod tests` at the bottom of the file under test, named
-  `ut_*`. Integration tests live in `tests/`, named `it_*`.
-- **Tests bind ephemeral ports only** — port 0, then read the assigned port back. A fixed
-  port fails whenever anything else on the machine holds it (a parallel checkout's tests, a
-  stray server). Deliberately *occupying* a port to test bind failure still binds the
-  occupier ephemerally first, then points the server at that port.
-- **RTU tests do not require real hardware.** Serial behavior runs over an in-memory or
-  virtual duplex pair; a test needing a physical `/dev/tty*` is ignored or feature-gated and
-  never runs in CI.
-- **Async runtime: Tokio.** The public async surface is runtime-agnostic where that is
-  cheap, but the implementation and all tests target Tokio. A second runtime abstraction is
-  a scope decision — ask.
-- Rust edition 2024, stable toolchain (`rust-toolchain.toml`). The MSRV is a non-functional
-  requirement — raising it is a normative change.
-- Bare `unwrap` is denied in non-test code; every fallible call documents why it cannot fail
-  via `expect("...")`. Tests are exempt.
-- **Never split a source file just because it is large.** A split must earn its keep —
-  separating genuinely distinct responsibilities, improving navigability, or cutting
-  coupling. A long file covering one cohesive concern, or flat generated data (a
-  function-code table), stays whole. A line count is a prompt to *review* a file, not a
-  mandate to divide it.
-- **Check crates.io before hand-rolling anything.** Each implementation stage starts by
-  listing what it needs (byte parsing, checksums, hex, serial I/O, async runtime, …) and
-  searching for a popular, maintained crate that already provides it. Report downloads, last
-  release date and maintenance state, and recommend — do not default to writing it yourself.
-  The dependency is still a scope boundary, so the finding goes to the user, not into
-  `Cargo.toml`.
-- **Errors are typed, never stringly.** Failures surface as variants of the crate's error
-  enum, not strings a caller matches on by substring. A new failure mode is a new variant,
-  and a new variant is public API — so it is spec (gate 1).
-- **Domain values are typed, never bare integers.** A unit identifier, a data address, a
-  quantity, a register value and a transaction identifier are different things that happen
-  to share a width; passing one where another is meant shall not compile. Wrap each in its
-  own transparent newtype where it enters the crate's API, keeping raw integers only for
-  genuinely opaque bytes. A new domain value is public API — so it is spec (gate 1).
-- **No panics on wire input.** Malformed, truncated or hostile bytes from a peer produce an
-  error, never a panic, a slice-index panic, or an unbounded allocation. Every decode path is
-  written to that standard and tested with truncated input.
+- Unit tests: `#[cfg(test)] mod tests` at the bottom of the file under test, named `ut_*`.
+  Integration tests: `tests/`, named `it_*`.
+- Bind port 0 and read the assigned port back; never a fixed port. To test bind failure,
+  bind the occupier ephemerally first and point the server at that port.
+- No real serial hardware — RTU behavior runs over an in-memory or virtual duplex pair. A
+  test needing `/dev/tty*` is ignored or feature-gated and never runs in CI.
+- Tokio. The public surface is runtime-agnostic where that is cheap; implementation and
+  tests target Tokio. A second runtime is a scope decision.
+- Edition 2024, stable toolchain (`rust-toolchain.toml`). MSRV is a non-functional
+  requirement — raising it is normative.
+- No bare `unwrap` outside tests; `expect("why this cannot fail")`.
+- Do not split a file for size alone. A split separates distinct responsibilities,
+  improves navigability, or cuts coupling. Cohesive files and flat generated data (a
+  function-code table) stay whole.
+- Start each implementation stage by listing the functionality it needs (byte parsing,
+  checksums, hex, serial I/O, async runtime, …) and searching crates.io. Report downloads,
+  last release, maintenance state, and recommend — do not default to hand-rolling. Adding
+  the dependency is a scope boundary, so the finding goes to the user, not to `Cargo.toml`.
+- Errors are typed, never stringly. A new failure mode is a new enum variant, which is
+  public API, which is spec (gate 1).
+- Domain values are typed: unit id, data address, quantity, register value and transaction
+  id are distinct transparent newtypes wrapped where they enter the API; mixing them must
+  not compile. Raw integers only for genuinely opaque bytes. A new domain value is public
+  API, which is spec (gate 1).
+- No panics on wire input. Malformed, truncated or hostile peer bytes produce a typed
+  error — never a panic, a slice-index panic, or an unbounded allocation. Test every
+  decode path with truncated input.
 
-## Scope boundaries — check with the user before
+## Scope boundaries — ask before
 
-- **Adding support for a function code** not already in `docs/specs/frame/api-contract.md`.
-  The supported set is a deliberate contract, not an open list.
-- **Adding a dependency.** A protocol library's dependency tree is part of its value — each
-  addition needs a reason that outweighs it.
-- **Changing the public API surface** (renaming a type, altering a signature, adding a trait
-  bound). Semver consequences are the user's call.
-- **Adding a second async runtime or a sync/blocking API.** The crate is async-first on
-  Tokio; a blocking facade is a product decision, not a mechanical addition.
+- Supporting a function code not in `docs/specs/frame/api-contract.md`. The supported set
+  is a deliberate contract.
+- Adding a dependency.
+- Changing the public API surface (renaming a type, altering a signature, adding a trait
+  bound) — semver consequences are the user's call.
+- Adding a second async runtime, or a sync/blocking API.
