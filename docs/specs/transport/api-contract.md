@@ -122,6 +122,12 @@ pub type SerialTransport<F> = FrameTransport<SerialStream, F>;
 
 #[cfg(feature = "rtu")]
 pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<SerialTransport<F>>;
+
+// TR-R-034. The stream type appears in the signatures above and in `RtuClient`
+// and `AsciiClient`, so the crate exports it rather than leaving a consumer to
+// declare the backend itself and keep the version in step.
+#[cfg(feature = "rtu")]
+pub use tokio_serial::SerialStream;
 ```
 
 The defaults are the Modbus serial-line defaults (TR-R-031). The enums are the
@@ -129,6 +135,11 @@ crate's own rather than re-exported from the serial backend, so the backend is
 not part of the public API and the types exist with the `rtu` feature off — the
 inter-frame interval of TR-R-011 is computed from them, which the ASCII and TCP
 paths never need but the pure calculation is testable without a serial port.
+
+The *stream* is the one exception, and a deliberate one: unlike the configuration
+enums it is not a value this crate could define for itself — it is the thing the
+backend hands back — and it is already in the public signatures, so declining to
+name it would not keep the backend out of the API, only out of reach (TR-R-034).
 
 `open_serial` is generic over the framing because a serial line carries RTU or
 ASCII framing at the operator's choice, over identical port settings.
