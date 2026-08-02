@@ -1,4 +1,4 @@
-# rust-modbus
+# Modbus Library in Rust
 
 Async Modbus **client** and **server** for Rust, over **Modbus TCP** and
 **Modbus RTU** serial.
