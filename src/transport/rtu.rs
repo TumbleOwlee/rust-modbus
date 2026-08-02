@@ -142,6 +142,76 @@ mod tests {
         );
     }
 
+    #[test]
+    /// TR-R-031 — every serial field is independently settable, which holds only
+    /// if each translates to the backend value of the same name. A swapped arm
+    /// here misconfigures a real bus silently: the port opens, and every frame
+    /// on the wire is wrong. Hardware cannot check this in CI, so the mapping is
+    /// pinned directly.
+    fn ut_serial_settings_translate_to_the_backend() {
+        use tokio_serial as backend;
+
+        assert_eq!(data_bits(DataBits::Five), backend::DataBits::Five);
+        assert_eq!(data_bits(DataBits::Six), backend::DataBits::Six);
+        assert_eq!(data_bits(DataBits::Seven), backend::DataBits::Seven);
+        assert_eq!(data_bits(DataBits::Eight), backend::DataBits::Eight);
+
+        assert_eq!(parity(Parity::None), backend::Parity::None);
+        assert_eq!(parity(Parity::Odd), backend::Parity::Odd);
+        assert_eq!(parity(Parity::Even), backend::Parity::Even);
+
+        assert_eq!(stop_bits(StopBits::One), backend::StopBits::One);
+        assert_eq!(stop_bits(StopBits::Two), backend::StopBits::Two);
+
+        assert_eq!(flow_control(FlowControl::None), backend::FlowControl::None);
+        assert_eq!(
+            flow_control(FlowControl::Software),
+            backend::FlowControl::Software
+        );
+        assert_eq!(
+            flow_control(FlowControl::Hardware),
+            backend::FlowControl::Hardware
+        );
+    }
+
+    #[test]
+    /// TR-R-040 — every backend failure kind surfaces as `Error::Io` carrying an
+    /// `std::io::ErrorKind`. Only the `NoDevice` arm is reachable by opening a
+    /// path that is not there; the rest are exercised by constructing the
+    /// backend error directly, since no test can provoke them from a device.
+    fn ut_backend_error_kinds_map_to_io_kinds() {
+        use std::io::ErrorKind as Io;
+        use tokio_serial::{Error as BackendError, ErrorKind as BackendKind};
+
+        let convert_kind = |kind: BackendKind| {
+            convert(BackendError {
+                kind,
+                description: String::new(),
+            })
+        };
+
+        assert_eq!(
+            convert_kind(BackendKind::NoDevice),
+            Error::Io { kind: Io::NotFound }
+        );
+        assert_eq!(
+            convert_kind(BackendKind::InvalidInput),
+            Error::Io {
+                kind: Io::InvalidInput
+            }
+        );
+        assert_eq!(
+            convert_kind(BackendKind::Io(Io::BrokenPipe)),
+            Error::Io {
+                kind: Io::BrokenPipe
+            }
+        );
+        assert_eq!(
+            convert_kind(BackendKind::Unknown),
+            Error::Io { kind: Io::Other }
+        );
+    }
+
     #[cfg(feature = "rs485")]
     #[test]
     /// TR-R-053 — `open_serial` issues `TIOCSRS485` after the port is opened
