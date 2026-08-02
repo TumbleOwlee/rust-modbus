@@ -9,8 +9,17 @@
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Handle, Runtime};
 
-use crate::client::{Client, ClientConfig, ClientFraming, ClientState};
+use alloc::vec::Vec;
+
+use crate::client::{
+    Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
+};
 use crate::error::{Error, Result};
+use crate::frame::{
+    Address, DiagnosticSubFunction, ExceptionStatus, FileRecordRead, FileRecordReadResponse,
+    FileRecordWrite, Mask, MeiRequest, MeiResponse, Quantity, RegisterValue, RequestPdu,
+    ResponsePdu, UnitId,
+};
 use crate::transport::{TcpConfig, connect_tcp_framed};
 
 /// A blocking Modbus client (CL-R-070).
@@ -139,11 +148,7 @@ where
     /// Fails with [`Error::BlockingInAsyncContext`] if called from a thread
     /// already driving a runtime (CL-R-075), and otherwise exactly as the async
     /// [`Client::call`] does (CL-R-072).
-    pub fn call(
-        &mut self,
-        unit: crate::frame::UnitId,
-        request: crate::frame::RequestPdu,
-    ) -> Result<Option<crate::frame::ResponsePdu>> {
+    pub fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>> {
         refuse_inside_a_runtime()?;
         // Destructured rather than `self.runtime.block_on(self.client.call(..))`,
         // which borrows `self` twice. Every request method below repeats these
@@ -151,6 +156,324 @@ where
         // borrows the client it came from.
         let Self { client, runtime } = self;
         runtime.block_on(client.call(unit, request))
+    }
+
+    /// Function code 1, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_coils`]
+    /// fails (CL-R-072).
+    pub fn read_coils(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<bool>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_coils(unit, address, quantity))
+    }
+
+    /// Function code 2, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_discrete_inputs`]
+    /// fails (CL-R-072).
+    pub fn read_discrete_inputs(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<bool>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_discrete_inputs(unit, address, quantity))
+    }
+
+    /// Function code 3, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_holding_registers`]
+    /// fails (CL-R-072).
+    pub fn read_holding_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<RegisterValue>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_holding_registers(unit, address, quantity))
+    }
+
+    /// Function code 4, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_input_registers`]
+    /// fails (CL-R-072).
+    pub fn read_input_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        quantity: Quantity,
+    ) -> Result<Vec<RegisterValue>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_input_registers(unit, address, quantity))
+    }
+
+    /// Function code 5, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::write_single_coil`]
+    /// fails (CL-R-072).
+    pub fn write_single_coil(&mut self, unit: UnitId, address: Address, value: bool) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.write_single_coil(unit, address, value))
+    }
+
+    /// Function code 6, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::write_single_register`]
+    /// fails (CL-R-072).
+    pub fn write_single_register(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        value: RegisterValue,
+    ) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.write_single_register(unit, address, value))
+    }
+
+    /// Function code 15, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::write_multiple_coils`]
+    /// fails (CL-R-072).
+    pub fn write_multiple_coils(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        coils: &[bool],
+    ) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.write_multiple_coils(unit, address, coils))
+    }
+
+    /// Function code 16, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::write_multiple_registers`]
+    /// fails (CL-R-072).
+    pub fn write_multiple_registers(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        registers: &[RegisterValue],
+    ) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.write_multiple_registers(unit, address, registers))
+    }
+
+    /// Function code 22, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::mask_write_register`]
+    /// fails (CL-R-072).
+    pub fn mask_write_register(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+        and_mask: Mask,
+        or_mask: Mask,
+    ) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.mask_write_register(unit, address, and_mask, or_mask))
+    }
+
+    /// Function code 23, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_write_multiple_registers`]
+    /// fails (CL-R-072).
+    pub fn read_write_multiple_registers(
+        &mut self,
+        unit: UnitId,
+        read_address: Address,
+        read_quantity: Quantity,
+        write_address: Address,
+        registers: &[RegisterValue],
+    ) -> Result<Vec<RegisterValue>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_write_multiple_registers(
+            unit,
+            read_address,
+            read_quantity,
+            write_address,
+            registers,
+        ))
+    }
+
+    /// Function code 7, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_exception_status`]
+    /// fails (CL-R-072).
+    pub fn read_exception_status(&mut self, unit: UnitId) -> Result<ExceptionStatus> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_exception_status(unit))
+    }
+
+    /// Function code 8, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::diagnostics`]
+    /// fails (CL-R-072).
+    pub fn diagnostics(
+        &mut self,
+        unit: UnitId,
+        sub_function: DiagnosticSubFunction,
+        data: &[u16],
+    ) -> Result<Vec<u16>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.diagnostics(unit, sub_function, data))
+    }
+
+    /// Function code 11, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::get_comm_event_counter`]
+    /// fails (CL-R-072).
+    pub fn get_comm_event_counter(&mut self, unit: UnitId) -> Result<CommEventCounter> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.get_comm_event_counter(unit))
+    }
+
+    /// Function code 12, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::get_comm_event_log`]
+    /// fails (CL-R-072).
+    pub fn get_comm_event_log(&mut self, unit: UnitId) -> Result<CommEventLog> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.get_comm_event_log(unit))
+    }
+
+    /// Function code 17, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::report_server_id`]
+    /// fails (CL-R-072).
+    pub fn report_server_id(&mut self, unit: UnitId) -> Result<Vec<u8>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.report_server_id(unit))
+    }
+
+    /// Function code 20, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_file_record`]
+    /// fails (CL-R-072).
+    pub fn read_file_record(
+        &mut self,
+        unit: UnitId,
+        records: &[FileRecordRead],
+    ) -> Result<Vec<FileRecordReadResponse>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_file_record(unit, records))
+    }
+
+    /// Function code 21, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::write_file_record`]
+    /// fails (CL-R-072).
+    pub fn write_file_record(&mut self, unit: UnitId, records: &[FileRecordWrite]) -> Result<()> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.write_file_record(unit, records))
+    }
+
+    /// Function code 24, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::read_fifo_queue`]
+    /// fails (CL-R-072).
+    pub fn read_fifo_queue(
+        &mut self,
+        unit: UnitId,
+        address: Address,
+    ) -> Result<Vec<RegisterValue>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.read_fifo_queue(unit, address))
+    }
+
+    /// Function code 43, blocking (CL-R-071).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BlockingInAsyncContext`] if called from a thread already
+    /// driving a runtime (CL-R-075); otherwise exactly as [`Client::encapsulated_interface_transport`]
+    /// fails (CL-R-072).
+    pub fn encapsulated_interface_transport(
+        &mut self,
+        unit: UnitId,
+        request: MeiRequest,
+    ) -> Result<MeiResponse> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.encapsulated_interface_transport(unit, request))
     }
 
     /// Whether this client will refuse every further request (CL-R-034).
