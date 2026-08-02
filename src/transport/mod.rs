@@ -28,7 +28,7 @@ pub use tcp::{
 };
 
 #[cfg(feature = "rtu")]
-pub use rtu::{SerialTransport, open_serial};
+pub use rtu::{SerialStream, SerialTransport, open_serial};
 
 /// What boundary detection needs that the framing itself cannot supply
 /// (TR-R-011).

@@ -3,7 +3,16 @@
 //! Behind the off-by-default `rtu` feature: a TCP-only consumer should not
 //! acquire a serial backend.
 
-use tokio_serial::{SerialPortBuilderExt, SerialStream};
+use tokio_serial::SerialPortBuilderExt;
+/// The stream a serial port is read and written through (TR-R-034).
+///
+/// Re-exported rather than hidden: it already appears in [`SerialTransport`],
+/// `RtuClient` and `AsciiClient`, so a consumer naming any of those in its own
+/// signature needs to name this too. Unlike [`SerialConfig`]'s enums, this is
+/// not a value the crate could define for itself — it is what the backend hands
+/// back — so declining to export it would not keep the backend out of the
+/// public API, only out of reach.
+pub use tokio_serial::SerialStream;
 
 use crate::error::{Error, Result};
 use crate::frame::Framing;

@@ -103,6 +103,12 @@ until it ships.
   accepted exactly as direct construction accepts it — the configuration error
   fires on first use, not at deserialize time.
 
+- `SerialStream`, re-exported under the `rtu` feature (TR-R-034). It is the
+  stream type already standing in the signatures of `SerialTransport`,
+  `RtuClient` and `AsciiClient`, so naming any of those in a consumer's own
+  signature no longer requires declaring the serial backend as a direct
+  dependency and keeping its version in step with this crate's.
+
 ### Changed
 
 - `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a
