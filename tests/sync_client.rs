@@ -14,11 +14,13 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use rust_modbus::{
-    Address, ClientConfig, DiagnosticSubFunction, Error, ExceptionStatus, FileNumber,
-    FileRecordRead, FileRecordReadResponse, FileRecordWrite, Mask, MeiRequest, MeiResponse,
-    Quantity, RecordLength, RecordNumber, RegisterValue, RequestPdu, ResponsePdu, SyncClient,
+    Address, ClientConfig, DiagnosticSubFunction, Error, ExceptionCode, ExceptionResponse,
+    ExceptionStatus, FileNumber, FileRecordRead, FileRecordReadResponse, FileRecordWrite,
+    FunctionCode, Mask, MeiRequest, MeiResponse, Quantity, RecordLength, RecordNumber,
+    RegisterValue, RequestPdu, ResponsePdu, RtuOverTcp, SyncClient, SyncRtuOverTcpClient,
     SyncTcpClient, TcpConfig, TcpListener, UnitId,
 };
 
@@ -395,6 +397,209 @@ fn it_sync_state_is_reported_without_entering_the_runtime() {
 
     drop(client);
     responder.join().expect("the responder finishes");
+}
+
+/// Accept one connection and then never answer, holding the socket open.
+///
+/// A closed socket would produce `ConnectionClosed`; the point here is silence,
+/// which is what the response timeout exists to bound.
+fn serve_silence() -> (SocketAddr, mpsc::Sender<()>, thread::JoinHandle<()>) {
+    let (address_tx, address_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().expect("the responder's runtime");
+        runtime.block_on(async move {
+            let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("binds");
+            address_tx
+                .send(listener.local_addr().expect("reports its address"))
+                .expect("the test thread is waiting");
+            let _connection = listener.accept().await.expect("accepts");
+            // Hold the connection open, answering nothing, until released.
+            let _ = tokio::task::spawn_blocking(move || done_rx.recv()).await;
+        });
+    });
+    (
+        address_rx
+            .recv()
+            .expect("the responder reports its address"),
+        done_tx,
+        handle,
+    )
+}
+
+#[test]
+/// CL-R-072, CL-R-073 — the response timeout of CL-R-030 fires on a blocking
+/// call exactly as on an async one, and the client is desynchronized afterwards
+/// (CL-R-031) so the next call is refused without writing (CL-R-032).
+///
+/// This is also what pins CL-R-073: the timeout is a Tokio timer, so a runtime
+/// built without the timer driver would panic here rather than return.
+fn it_sync_timeout_fires_and_desynchronizes() {
+    let (address, release, responder) = serve_silence();
+    let config = ClientConfig {
+        response_timeout: Duration::from_millis(50),
+    };
+    let mut client =
+        SyncTcpClient::connect(address, TcpConfig::default(), config).expect("connects");
+
+    assert_eq!(
+        client.read_holding_registers(UnitId(1), Address(0), Quantity(1)),
+        Err(Error::Timeout { what: "response" })
+    );
+    assert!(client.is_desynchronized(), "CL-R-031 marks it unusable");
+    assert_eq!(
+        client.read_holding_registers(UnitId(1), Address(0), Quantity(1)),
+        Err(Error::Desynchronized),
+        "CL-R-032 refuses every later request"
+    );
+
+    drop(release);
+    responder.join().expect("the responder finishes");
+}
+
+#[test]
+/// CL-R-072 — an exception response reaches a blocking typed method as
+/// `Error::Exception`, and leaves the client usable (CL-R-042), exactly as it
+/// does on the async client.
+fn it_sync_exception_surfaces_and_leaves_the_client_usable() {
+    let (address, responder) = serve_on_a_thread(2, |request| match request {
+        RequestPdu::ReadHoldingRegisters { .. } => ResponsePdu::Exception(ExceptionResponse {
+            function: FunctionCode::ReadHoldingRegisters,
+            exception: ExceptionCode::IllegalDataAddress,
+        }),
+        _ => ResponsePdu::ReadCoils { coils: vec![true] },
+    });
+    let mut client = SyncTcpClient::connect(address, TcpConfig::default(), ClientConfig::default())
+        .expect("connects");
+
+    assert_eq!(
+        client.read_holding_registers(UnitId(1), Address(0), Quantity(1)),
+        Err(Error::Exception {
+            function: FunctionCode::ReadHoldingRegisters,
+            exception: ExceptionCode::IllegalDataAddress,
+        })
+    );
+    assert!(
+        !client.is_desynchronized(),
+        "CL-R-042 — the server answered, it merely refused"
+    );
+    assert_eq!(
+        client.read_coils(UnitId(1), Address(0), Quantity(1)),
+        Ok(vec![true]),
+        "the next request proceeds normally"
+    );
+
+    responder.join().expect("the responder finishes");
+}
+
+#[test]
+/// CL-R-072 — the broadcast rules hold identically: a write to unit 0 returns
+/// without awaiting a reply (CL-R-051) and a read to unit 0 fails before
+/// anything is written (CL-R-052).
+///
+/// Run over RTU-over-TCP, since no identifier broadcasts on Modbus TCP
+/// (CL-R-050) — the rule is the framing's, and the blocking client inherits
+/// whichever framing it was built with.
+fn it_sync_broadcast_rules_match_the_async_client() {
+    let (address_tx, address_rx) = mpsc::channel();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let responder = thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().expect("the responder's runtime");
+        runtime.block_on(async move {
+            let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("binds");
+            address_tx
+                .send(listener.local_addr().expect("reports its address"))
+                .expect("the test thread is waiting");
+            let (mut transport, _peer) = listener
+                .accept_framed::<RtuOverTcp>()
+                .await
+                .expect("accepts");
+            let (_header, request) = transport.recv_request().await.expect("receives");
+            seen_tx.send(request).expect("the test thread is waiting");
+            // Deliberately no response: CL-R-051 must not be waiting for one.
+        });
+    });
+    let address = address_rx
+        .recv()
+        .expect("the responder reports its address");
+
+    let mut client =
+        SyncRtuOverTcpClient::connect(address, TcpConfig::default(), ClientConfig::default())
+            .expect("connects");
+
+    assert_eq!(
+        client.write_single_register(UnitId(0), Address(1), RegisterValue(7)),
+        Ok(()),
+        "CL-R-051 — a broadcast write completes without a reply"
+    );
+    assert_eq!(
+        client.read_holding_registers(UnitId(0), Address(0), Quantity(1)),
+        Err(Error::IllegalValue {
+            field: "broadcast read",
+            value: 0,
+        }),
+        "CL-R-052 — a broadcast read is refused"
+    );
+
+    assert_eq!(
+        seen_rx.recv().expect("the broadcast reached the wire"),
+        RequestPdu::WriteSingleRegister {
+            address: Address(1),
+            value: RegisterValue(7),
+        }
+    );
+    responder.join().expect("the responder finishes");
+}
+
+#[test]
+/// CL-R-075 — a *request* method called from inside a runtime is refused, not
+/// just a constructor. The client is built outside the runtime, so the refusal
+/// comes from the method rather than from construction.
+fn it_sync_request_inside_a_runtime_is_refused() {
+    let (address, responder) = serve_on_a_thread(0, |_| unreachable!("no request is sent"));
+    let mut client = SyncTcpClient::connect(address, TcpConfig::default(), ClientConfig::default())
+        .expect("connects");
+
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    let refused = runtime
+        .block_on(async { client.read_holding_registers(UnitId(1), Address(0), Quantity(1)) });
+
+    assert_eq!(refused, Err(Error::BlockingInAsyncContext));
+    assert!(
+        !client.is_desynchronized(),
+        "the refusal touched no transport, so the client is untouched"
+    );
+
+    drop(client);
+    responder.join().expect("the responder finishes");
+}
+
+#[test]
+/// CL-R-074 — every blocking type and every argument and return type is
+/// nameable through `rust_modbus` alone. This binding compiles only if no
+/// runtime type is required to spell the surface; were `SyncClient::connect` to
+/// take a `tokio::runtime::Handle`, or a method to return one, this would not.
+///
+/// A compile-time assertion: the bindings are what is checked, not the run.
+fn it_blocking_surface_names_no_runtime_type() {
+    let _connect: fn(SocketAddr, TcpConfig, ClientConfig) -> rust_modbus::Result<SyncTcpClient> =
+        SyncTcpClient::connect;
+    let _read: fn(
+        &mut SyncTcpClient,
+        UnitId,
+        Address,
+        Quantity,
+    ) -> rust_modbus::Result<Vec<RegisterValue>> = SyncTcpClient::read_holding_registers;
+    let _call: fn(
+        &mut SyncTcpClient,
+        UnitId,
+        RequestPdu,
+    ) -> rust_modbus::Result<Option<ResponsePdu>> = SyncTcpClient::call;
+    let _state: fn(&SyncTcpClient) -> rust_modbus::ClientState = SyncTcpClient::state;
 }
 
 #[test]

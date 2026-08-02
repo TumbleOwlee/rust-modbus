@@ -51,6 +51,7 @@ cargo add rust-modbus --features rtu
 | --- | --- | --- |
 | `std` | **on** | Everything above the frame layer: `Client`, `Server`, `FrameTransport`, TCP. Pulls in Tokio. |
 | `rtu` | off | Opening a real serial port: `open_serial`, `SerialTransport`, `RtuClient`, `AsciiClient`. Implies `std`. |
+| `sync` | off | The blocking client: `SyncClient` and its aliases. Implies `std`. |
 
 `rtu` is off by default so a TCP-only consumer acquires no serial dependency. It
 gates *only opening a port* — RTU and ASCII **framing** are always available, so
@@ -105,6 +106,34 @@ and the exception code.
 `Client::call` is the escape hatch: it hands back the response exactly as
 received, exception responses and echoes included, and is how a function code
 outside the named set is issued.
+
+### Without async
+
+Enable the `sync` feature. `SyncClient` owns a runtime and mirrors every request
+method of `Client` with `async` removed — same arguments, same return types, same
+timeout, exception and desynchronization behavior, because it delegates rather
+than reimplements.
+
+```rust
+use rust_modbus::{Address, ClientConfig, Quantity, SyncTcpClient, TcpConfig, UnitId};
+
+fn main() -> rust_modbus::Result<()> {
+    let mut client = SyncTcpClient::connect(
+        "127.0.0.1:502".parse().expect("a literal address"),
+        TcpConfig::default(),
+        ClientConfig::default(),
+    )?;
+
+    let registers = client.read_holding_registers(UnitId(1), Address(0), Quantity(2))?;
+    println!("{registers:?}");
+    Ok(())
+}
+```
+
+Call it from a thread that has no runtime. Calling it from inside one would
+deadlock, so it returns `Error::BlockingInAsyncContext` instead of trying — if
+you have a runtime, you want `Client`. There is no `into_inner` and no blocking
+server; see [Deliberate omissions](#deliberate-omissions).
 
 ## Server quickstart
 
