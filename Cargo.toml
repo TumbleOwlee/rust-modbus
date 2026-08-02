@@ -29,6 +29,11 @@ rtu = ["std", "dep:tokio-serial"]
 # `target_os = "linux"`, so the `libc` dependency below is scoped there and
 # never enters a non-Linux dependency tree.
 rs485 = ["rtu", "dep:libc"]
+# NF-R-026, CL-R-070. Off by default; gates the blocking client. Implies `std`
+# because it owns a Tokio runtime, so it can never appear in the bare-metal
+# build of NF-R-003. Purely additive (NF-R-018): enabling it changes nothing
+# about the async client. No new dependency — `tokio/rt` is already enabled.
+sync = ["std"]
 # NF-R-025. Off by default; gates Serialize/Deserialize on the domain value
 # types and the configuration types. `default-features = false` with only
 # `derive` and `alloc` so enabling it never pulls in `std` on a `no_std` build

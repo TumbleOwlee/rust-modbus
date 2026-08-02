@@ -289,8 +289,13 @@ Honest about what this crate does not do, and why. Full reasoning in
   and it belongs with the register map, not the protocol. Byte order *within* a
   register is protocol and is implemented (big-endian on the wire); order
   *across* registers is yours.
-- **No blocking / sync API.** Async-first on Tokio. A blocking facade is a
-  separate product decision, not a mechanical addition.
+- **No blocking *server*.** A blocking *client* ships behind the off-by-default
+  `sync` feature: `SyncClient` owns a runtime and mirrors every request method of
+  the async client, with identical timeout, desynchronization and broadcast
+  behavior. A server is driven by inbound connections rather than by
+  caller-issued calls, so the thread structure that would serve it is yours to
+  choose. The blocking client also has no `into_inner`, since the transport it
+  would hand back needs a runtime the caller does not have.
 - **No transport beyond TCP and RTU serial.** No UDP. RTU-over-TCP *is*
   supported (see [Transparent gateways](#transparent-gateways)), but a bad frame
   there costs the link rather than the frame — the boundary comes out of each

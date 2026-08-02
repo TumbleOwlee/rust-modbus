@@ -214,3 +214,53 @@ detect via CL-R-061; the client shall not fail a request over it.
 `response_timeout` shall keep `Duration`'s own serde representation rather than a count in any
 single unit, so that every value `Duration` can hold survives a round trip exactly — including
 one whose nanosecond count would not fit an integer field.
+
+---
+
+## 8. The blocking client
+
+**CL-R-070** — The crate shall provide a blocking client, gated behind an
+off-by-default `sync` feature that implies `std`.
+
+**CL-R-071** — The blocking client shall expose one method for every request
+method of the async client: each typed method of CL-R-060 and the raw method of
+CL-R-061. No request issuable through the async client shall be unreachable from
+the blocking one, and no request method shall exist on one surface and not the
+other.
+
+**CL-R-072** — Every guarantee the async client makes shall hold identically in
+the blocking one: the response timeout of CL-R-030, the desynchronization rules
+of CL-R-031 through CL-R-033, the broadcast rules of CL-R-050 through CL-R-053,
+and the exception surfacing of CL-R-040 through CL-R-042. The blocking client
+shall obtain them by delegating to the async client, not by reimplementing any of
+them.
+
+**CL-R-073** — The blocking client shall own the runtime it drives, and shall
+build it with every driver the code beneath it uses, so that no configured
+timeout can fail for want of one. Constructing a blocking client shall not
+require the caller to possess a runtime.
+
+**CL-R-074** — No type belonging to the async runtime shall appear in an argument
+or return position of any blocking method, and every blocking client type shall
+be nameable through this crate alone (as TR-R-034 requires of the serial stream).
+
+**CL-R-075** — A blocking method called from a thread that is already driving a
+runtime shall return a distinct error before touching the transport, rather than
+panicking or deadlocking.
+
+**CL-R-076** — The blocking client shall provide its own constructors, taking a
+socket address or a device path together with the transport and client
+configuration, since a caller with no runtime cannot construct a transport to
+hand in (CL-R-002 binds the async client only).
+
+**CL-R-077** — Sequential blocking calls shall be correct with no delay between
+them. When a blocking call returns, the exchange shall be fully settled and the
+next call shall proceed without a sleep, a drain, or a reset by the caller.
+
+**CL-R-078** — The blocking client shall report the state of CL-R-034 and
+CL-R-035 without entering its runtime, since CL-R-038 forbids reporting that
+blocks.
+
+**CL-R-079** — No blocking server shall be provided. A server is driven by
+inbound connections rather than by caller-issued calls, so the thread structure
+that would serve it is the caller's choice and not this crate's.

@@ -181,3 +181,8 @@ TR-R-059. The `serde` dependency shall be declared `default-features = false` wi
 has excluded it (NF-R-001, NF-R-002) and never enables any serde data format as a transitive
 dependency. CI shall build the bare-metal target of NF-R-003 with `serde` enabled and `std`
 excluded, in addition to the existing no-feature build.
+
+**NF-R-026** — The crate shall expose an off-by-default `sync` feature gating the blocking
+client of CL-R-070. It shall imply `std` and shall therefore never be present in the
+bare-metal build of NF-R-003. Per NF-R-018 it shall be purely additive: enabling it shall
+change nothing about the async client. CI shall build and test with it enabled.
