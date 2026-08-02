@@ -207,6 +207,10 @@ pub use client::{
     Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
     RtuOverTcpClient, TcpClient, UnusableReason,
 };
+#[cfg(all(feature = "sync", feature = "rtu"))]
+pub use client::{SyncAsciiClient, SyncRtuClient};
+#[cfg(feature = "sync")]
+pub use client::{SyncClient, SyncRtuOverTcpClient, SyncTcpClient};
 pub use error::{Error, Result};
 pub use frame::{
     Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, Direction, ExceptionCode,

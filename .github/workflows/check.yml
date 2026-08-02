@@ -36,7 +36,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo check --all-features
 
-  # TR-R-032, TR-R-051, NF-R-025. The `rtu`, `rs485`, and `serde` features are
+  # TR-R-032, TR-R-051, NF-R-025, NF-R-026. The `rtu`, `rs485`, `serde`, and `sync` features are
   # each off by default, so the default build must keep compiling without any
   # of them, `rtu` alone must keep compiling without `rs485`, and `rs485` and
   # `serde` must each compile on their own (proving `rs485` correctly implies
@@ -52,6 +52,7 @@ jobs:
       - run: cargo check --features rtu
       - run: cargo check --features rs485
       - run: cargo check --features serde
+      - run: cargo check --features sync
 
   # NF-R-014, NF-R-023, NF-R-024. The default test run includes the property-based
   # robustness suite that pins NF-R-012, and needs no serial hardware, no device

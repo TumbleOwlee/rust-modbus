@@ -207,6 +207,14 @@ pub enum Error {
     #[error("the exchange is desynchronized; a new connection is required")]
     Desynchronized,
 
+    /// A blocking method was called from a thread that already drives an async
+    /// runtime (CL-R-075). Blocking on a runtime from inside one deadlocks or
+    /// panics, so the blocking client refuses before touching the transport. Use
+    /// the async `Client` here instead.
+    #[cfg(feature = "sync")]
+    #[error("a blocking call was made from inside an async runtime")]
+    BlockingInAsyncContext,
+
     /// The kernel's RS-485 direction-control mode could not be applied: the
     /// target is not Linux, or the driver's `TIOCSRS485` ioctl reported the
     /// mode is not implemented (TR-R-054).
