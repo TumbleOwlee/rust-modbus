@@ -132,6 +132,12 @@ off. It opens no serial port and derives no character time, so gating it behind
 the serial backend would deny a TCP-only consumer a purely TCP capability
 (TR-R-032).
 
+**TR-R-034** — Every type appearing in the signature of a public serial item shall
+be nameable through this crate. In particular the serial stream type underlying
+`SerialTransport`, `RtuClient` and `AsciiClient` shall be re-exported under the
+`rtu` feature, so a consumer can name it without declaring the serial backend as a
+dependency of its own.
+
 ---
 
 ## 5. Errors

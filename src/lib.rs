@@ -22,7 +22,7 @@
 //! | Feature | Default | What it gates |
 //! |---|---|---|
 //! | `std` | **on** | Everything but the frame layer — `Client`, `Server`, `FrameTransport`. Pulls in Tokio. |
-//! | `rtu` | off | Opening a real serial port (`open_serial`, `SerialTransport`, `RtuClient`, `AsciiClient`). Implies `std`. |
+//! | `rtu` | off | Opening a real serial port (`open_serial`, `SerialTransport`, [`SerialStream`], `RtuClient`, `AsciiClient`). Implies `std`. |
 //!
 //! Turning `std` off leaves a `no_std` + `alloc` crate that still encodes and
 //! decodes every function code over every framing. Turning `rtu` on is only
@@ -228,4 +228,4 @@ pub use transport::{
 #[cfg(feature = "rs485")]
 pub use transport::{Rs485Config, RtsPolarity};
 #[cfg(feature = "rtu")]
-pub use transport::{SerialTransport, open_serial};
+pub use transport::{SerialStream, SerialTransport, open_serial};
