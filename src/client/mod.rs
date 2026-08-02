@@ -1,6 +1,8 @@
 //! Async Modbus client (initiator). See `docs/specs/client/`.
 
 mod framing;
+#[cfg(feature = "sync")]
+mod sync;
 
 use core::time::Duration;
 
@@ -18,6 +20,10 @@ use crate::frame::{
 use crate::transport::FrameTransport;
 
 pub use framing::ClientFraming;
+#[cfg(all(feature = "sync", feature = "rtu"))]
+pub use sync::{SyncAsciiClient, SyncRtuClient};
+#[cfg(feature = "sync")]
+pub use sync::{SyncClient, SyncRtuOverTcpClient, SyncTcpClient};
 
 /// How a client waits (CL-R-030).
 ///

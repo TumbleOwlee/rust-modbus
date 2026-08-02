@@ -139,6 +139,7 @@ area (TR-R-011).
 |---|---|---|
 | `std` | on | the whole client area (CL-R-004) |
 | `rtu` | off | `RtuClient` and `AsciiClient` only |
+| `sync` | off | the blocking client of §7 (CL-R-070) |
 
 The client is generic over the stream, so `Client<S, Rtu>` over an in-memory
 duplex pair works with the `rtu` feature off; only the alias naming a serial
@@ -153,6 +154,7 @@ Added by this area, all gated on `std`:
 | `Exception` | `function: FunctionCode, exception: ExceptionCode` | CL-R-040, CL-R-041 |
 | `UnexpectedFunction` | `expected: FunctionCode, actual: FunctionCode` | CL-R-022 |
 | `Desynchronized` | — | CL-R-031, CL-R-032 |
+| `BlockingInAsyncContext` | — | CL-R-075 |
 
 A broadcast read (CL-R-052) is refused with the frame area's existing
 `IllegalValue { field: "broadcast read", value: 0 }` rather than a variant of its
@@ -208,3 +210,56 @@ until something is written, so `Answered` is a statement about the past and
 probe (CL-R-039). A caller that needs proof a server still answers issues a
 request with `call` and reads the result — that is supervision policy, and it
 stays with the caller.
+
+## 7. The blocking client
+
+Gated on `sync` (CL-R-070). Mirrors §2 method for method (CL-R-071); every method
+takes `&mut self` and returns the same type the async method resolves to.
+
+```rust
+pub struct SyncClient<S, F> { /* Client<S, F>, owned runtime */ }
+
+pub type SyncTcpClient = SyncClient<TcpStream, Tcp>;
+pub type SyncRtuOverTcpClient = SyncClient<TcpStream, RtuOverTcp>;
+
+#[cfg(feature = "rtu")]
+pub type SyncRtuClient = SyncClient<SerialStream, Rtu>;
+#[cfg(feature = "rtu")]
+pub type SyncAsciiClient = SyncClient<SerialStream, Ascii>;
+```
+
+Constructors (CL-R-076), since a caller with no runtime cannot build a transport:
+
+```rust
+impl<F: ClientFraming> SyncClient<TcpStream, F> {
+    pub fn connect(addr: SocketAddr, tcp: TcpConfig, client: ClientConfig) -> Result<Self>;
+}
+
+#[cfg(feature = "rtu")]
+impl<F: ClientFraming> SyncClient<SerialStream, F> {
+    pub fn open(path: &str, serial: SerialConfig, client: ClientConfig) -> Result<Self>;
+}
+```
+
+Request methods, all twenty of §2, with `async` removed:
+
+```rust
+pub fn read_coils(&mut self, unit: UnitId, address: Address, quantity: Quantity)
+    -> Result<Vec<bool>>;
+// … the remaining eighteen typed methods, signatures identical to §2 …
+pub fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>>;
+```
+
+And the state projection of CL-R-078:
+
+```rust
+pub fn is_desynchronized(&self) -> bool;
+pub fn state(&self) -> ClientState;
+```
+
+There is no `into_inner`: the transport it would yield is
+`FrameTransport<TcpStream, F>`, whose stream is a runtime type, and handing one
+back to a caller who has no runtime to drive it serves nobody (CL-R-074). A
+caller that wants the transport uses the async client.
+
+No blocking server exists (CL-R-079).

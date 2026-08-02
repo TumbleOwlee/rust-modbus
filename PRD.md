@@ -46,8 +46,11 @@ The four combinations are all first-class and none is an afterthought:
 ## Non-goals
 
 - **No TUI, CLI, or GUI.** Presentation belongs to consumers.
-- **No blocking/sync API** in the initial scope. Async-first; a blocking facade
-  would be a separate product decision.
+- **No blocking *server*.** Async-first remains the primary surface, but a
+  blocking *client* ships behind the off-by-default `sync` feature: it owns its
+  runtime and delegates to the async client, so the two cannot diverge. A
+  blocking server is out of scope — the thread structure serving inbound
+  connections is the consumer's choice.
 - **No ASCII *transport*.** ASCII framing exists at the frame layer for test
   fixtures and interoperability checking; operating a serial port in ASCII mode
   is not in scope unless later specified.

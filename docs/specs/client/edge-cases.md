@@ -97,3 +97,24 @@ called on a client that has never been used and between requests without cost.
   fifth reason is a breaking change. The four are coarse on purpose; finer
   classification would either need `#[non_exhaustive]` — which this crate does
   not use — or a minor bump every time the platform surprises us.
+
+---
+
+## 5. The blocking client
+
+| Condition | Behavior |
+|---|---|
+| A blocking method called from inside a runtime | `BlockingInAsyncContext`, before anything is written (CL-R-075) |
+| Two blocking calls back to back with no sleep | Both succeed; the runtime is driven to completion inside each call (CL-R-077) |
+| Response timeout on a blocking call | Identical to async: `Timeout { what: "response" }`, client desynchronized (CL-R-030, CL-R-031) |
+| A blocking call on a desynchronized client | Refused immediately, nothing written (CL-R-032) |
+| Broadcast write / broadcast read, blocking | Identical to async (CL-R-051, CL-R-052) |
+
+### Known limitations
+
+- **No `into_inner`.** See `api-contract.md` §7 — the transport is only useful to
+  a caller that has a runtime, and such a caller should use `Client`.
+- **One runtime per client.** Two blocking clients own two runtimes and two
+  threads' worth of drivers. A caller creating many should use the async client
+  on one runtime instead.
+- **No blocking server** (CL-R-079).
