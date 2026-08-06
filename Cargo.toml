@@ -46,7 +46,6 @@ tls = [
     "std",
     "dep:rustls",
     "dep:tokio-rustls",
-    "dep:rustls-pemfile",
     "dep:rustls-pki-types",
     "dep:rustls-native-certs",
 ]
@@ -81,10 +80,10 @@ serde = { version = "1", optional = true, default-features = false, features = [
 # consumer's own rustls usage cannot collide.
 rustls = { version = "0.23.43", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
 tokio-rustls = { version = "0.26.4", optional = true, default-features = false, features = ["ring"] }
-# `std` (its only non-default feature) is required for `certs()`/`private_key()`
-# to exist at all; harmless since `tls` already implies `std` unconditionally.
-rustls-pemfile = { version = "2.2.0", optional = true, default-features = false, features = ["std"] }
-rustls-pki-types = { version = "1.15.1", optional = true, default-features = false }
+# PEM parsing via `PemObject` (its `alloc`-gated `from_pem_slice`/`pem_slice_iter`):
+# rustls-pemfile is unmaintained (RUSTSEC-2025-0134) and is itself a thin
+# wrapper around this same code, per the advisory's own migration guidance.
+rustls-pki-types = { version = "1.15.1", optional = true, default-features = false, features = ["alloc"] }
 rustls-native-certs = { version = "0.8.4", optional = true, default-features = false }
 
 # TR-R-050, TR-R-055. The `TIOCSRS485` ioctl is declared by neither `libc` nor

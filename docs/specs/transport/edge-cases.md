@@ -101,3 +101,28 @@ owns the desynchronization that TR-R-041 describes.
   which a partial frame is abandoned. TR-R-012 terminates an ASCII frame on CR LF
   and on the ADU maximum only, so a stalled sender holds the receive pending
   until the caller's own timeout fires rather than being abandoned at one second.
+
+## 6. TLS
+
+- **A server cert rejected by `Verify`** (untrusted issuer, expired, wrong name)
+  fails the handshake as `Error::TlsHandshake`; no connection is ever
+  established (TR-R-065, TR-R-067).
+- **A client cert rejected under `ClientCertPolicy::Require`** fails on the
+  server side as `Error::TlsHandshake`. No `Connection` identity was ever
+  assigned, so the attempt reaches neither `Service::on_connect` nor
+  `on_error` — it reaches `Service::on_tls_handshake_failed(peer, &error)`
+  instead, the notification dedicated to a handshake that fails before any
+  `Connection` exists (SV-R-055, SV-R-056, TR-R-066).
+- **The connect timeout bounds the whole `connect_tls` call.** `TcpConfig`'s
+  `connect_timeout` (TR-R-021) covers the TCP connect and the TLS handshake
+  together — there is no second, TLS-specific timeout knob. Expiry is always
+  `Error::Timeout{what:"connect"}`, never `Error::TlsHandshake`, even when the
+  TCP connect itself succeeded and only the handshake stalled.
+- **`no_std`/`tls` interaction is structurally unreachable, not separately
+  tested.** `tls` implies `std` (TR-R-060), same as `rtu`/`rs485`; the
+  `no-std` CI job builds with no features at all, so there is nothing to
+  exercise here.
+- **`RootStore::native()`/`Default` fail closed.** Loading the platform's
+  trust store is best-effort: an individual unreadable native cert is
+  skipped, and a platform with no discoverable store at all yields an empty
+  `RootStore`, which fails every `Verify` rather than trusting nothing.

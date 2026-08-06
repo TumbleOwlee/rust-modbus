@@ -43,6 +43,10 @@ allow = [
     # dual-licensed Apache-2.0/ISC-family; ISC is the piece not already
     # allowed above. Reachable only through the non-default `tls` feature.
     "ISC",
+    # `subtle` (constant-time comparisons, pulled in by `rustls`) is
+    # BSD-3-Clause, permissive. Reachable only through the non-default `tls`
+    # feature.
+    "BSD-3-Clause",
 ]
 
 [bans]

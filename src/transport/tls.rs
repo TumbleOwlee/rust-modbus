@@ -115,7 +115,9 @@ pub struct TlsClientConfig {
 ///
 /// Fails if the document cannot be read as PEM.
 pub fn load_pem_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
-    rustls_pemfile::certs(&mut &*pem)
+    use rustls::pki_types::pem::PemObject;
+
+    CertificateDer::pem_slice_iter(pem)
         .collect::<core::result::Result<Vec<_>, _>>()
         .map_err(|_error| Error::Configuration { field: "pem" })
 }
@@ -126,9 +128,9 @@ pub fn load_pem_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
 ///
 /// Fails if the document cannot be read as PEM, or carries no private key.
 pub fn load_pem_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
-    rustls_pemfile::private_key(&mut &*pem)
-        .map_err(|_error| Error::Configuration { field: "pem" })?
-        .ok_or(Error::Configuration { field: "pem" })
+    use rustls::pki_types::pem::PemObject;
+
+    PrivateKeyDer::from_pem_slice(pem).map_err(|_error| Error::Configuration { field: "pem" })
 }
 
 /// The crypto provider every `ClientConfig`/`ServerConfig` in this module is

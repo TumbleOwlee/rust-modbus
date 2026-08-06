@@ -189,6 +189,6 @@ change nothing about the async client. CI shall build and test with it enabled.
 
 **NF-R-027** — The crate shall expose an off-by-default `tls` feature gating TR-R-060–TR-R-068
 and `Connection::peer_cert` (SV-R-055). Implies `std`, absent from bare-metal build (NF-R-003).
-Depends on `rustls`, `tokio-rustls`, a cert-loading helper (`rustls-pemfile`/
-`rustls-pki-types`), and `rustls-native-certs` (populates `ServerCertVerification::Verify`'s
+Depends on `rustls`, `tokio-rustls`, `rustls-pki-types` (also PEM parsing, via its
+`PemObject` trait), and `rustls-native-certs` (populates `ServerCertVerification::Verify`'s
 default platform-native root store, TR-R-065), each `default-features = false`.
