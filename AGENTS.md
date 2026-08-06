@@ -2,77 +2,58 @@
 
 Router for AI coding agents. Read first.
 
+**Concise, compact, facts only.**
+
 ## Repo
 
-`rust-modbus` — async Modbus client and server over RTU and TCP. One library crate, no
-binary. Product framing: [`PRD.md`](./PRD.md). Structure: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+`rust-modbus` — async Modbus client and server over RTU and TCP. Single library crate, no binary. Product: [`PRD.md`](./PRD.md). Structure: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+<!-- CORE:BEGIN spec-driven -->
 ## Spec-driven
 
-- `docs/specs/` is authoritative. Code conforms to the spec, not the reverse.
-- Read the area's `requirements.md` **and** `edge-cases.md` before editing that area.
-  `edge-cases.md` records deliberate ugliness — check it before "fixing" something.
-- A behavior change with no spec change is incomplete.
-- `main` never holds an unfinished spec: a requirement on `main` describes code that
-  exists and is tested. A branch may hold a spec commit ahead of its code; the squash
-  merge keeps that off `main`.
-- Pre-existing spec/code disagreement that is not the task you were given: stop, raise it
-  separately. Folding it in widens already-approved work and skips its own review.
+- `docs/specs/` authoritative. Code conforms to spec, never reverse.
+- Read area's `requirements.md` + `edge-cases.md` before editing that area. `edge-cases.md` = deliberate ugliness; check before "fixing."
+- Behavior change with no spec change = incomplete.
+- `main` never holds unfinished spec: a requirement on `main` describes code that exists and is tested. A branch may hold a spec commit ahead of its code; squash merge keeps that off `main`.
+- Pre-existing spec/code disagreement outside your task: stop, raise separately. Folding it in widens approved work, skips its own review.
 - Specs carry no `file:line`. Locate code with search tools.
-- Requirement IDs are stable and append-only. Cite them in commits and PRs.
+- Requirement IDs stable, append-only. Cite in commits and PRs.
+- One requirement, one physical line, never wrapped — find any by `grep -rn <ID or keyword> docs/specs/`. Read one section of a large spec file instead of the whole thing: `sh .claude/scripts/extract-section.sh '## <heading>' path/to/file.md`.
+<!-- CORE:END spec-driven -->
 
-## TDD — fixed order within every stage
+## TDD — fixed order, every stage
 
-1. Write the test. Its doc comment cites the requirement ID (`/// FR-R-012 — …`).
-2. Run it, watch it fail for the right reason, report the failure. A wrong assertion, a
-   test-side compile error, or a pass before the code exists proves nothing.
+1. Write the test. Doc comment cites requirement ID (`/// FR-R-012 — …`).
+2. Run it, watch it fail for the right reason, report the failure. Wrong assertion / test-side compile error / premature pass proves nothing.
 3. Minimum implementation that passes.
 4. Refactor green.
 
-- Implementation without a preceding failing test: not done. Test written afterwards to
-  fit the code: not done.
-- Derive expected wire bytes from the Modbus standard, never from a debug print of your
-  own encoder.
-- Coverage floor 80% of lines, CI-gated on every push and PR. A floor, not a target —
-  never inflate it with tests that execute code without asserting.
+- Implementation without a preceding failing test: not done. Test written after the fact to fit code: not done.
+- Expected values from the authoritative source (Modbus standard) — never a debug print of your own implementation. Coverage floor 80% of lines, CI-gated on every push and PR — never inflate it with tests that execute code without asserting.
 
 ## Workflow
 
-Triggers on **behavior change, any size**: a new function code, a changed default, a new
-error variant, any observable API semantics. Not a behavior change: refactor, rename,
-perf work with identical semantics, tests, docs — no gates, just do it. Size sets the
-number of stages, never whether the gates exist.
+Triggers on **behavior change, any size**: new public function, changed default, new error variant, any observable semantics. Not a behavior change: refactor, rename, perf-with-identical-semantics, tests, docs — no gates, just do it. Size sets stage count, never gate existence.
 
-- Replaces any generic workflow skill (`/workflow`); do not run one. `docs/specs/` is
-  already the PRD and the design record.
+- Replaces any generic workflow skill (`/workflow`) — don't run one. `docs/specs/` is already the PRD and design record.
 - Branch off `main`, never commit to `main`. `<type>/<slug>`, type ∈ {`feat`, `fix`, `docs`}.
-- Delegate gates to agents. **All agents run Sonnet or better**, planning and
-  implementation alike. Weaker models stop mid-plan and call the rest future work, commit
-  a stub as a "green" checkpoint, and report a hanging test as verified.
-- **One git worktree per issue, per agent**, at `.claude/worktrees/<slug>` — inside the
-  project directory so an agent confined to the project root can reach it, and gitignored
-  so it never shows up as untracked content. Two agents in one checkout interleave commits
-  and stage each other's work — a branch is not a working tree. Create before the agent
-  starts, remove after its branch merges.
-- The plan is a contract. An implementer who finds it wrong stops and reports; it does not
-  improvise a different design.
+- **Gate 1 = orchestrator's own conversation with the user, not an agent's.** Abstract: existing spec + current goal, nothing about current code. No worktree/branch until gate 2 approved.
+- Gate 2 onward delegates to agents. **All agents Sonnet or better** — weaker models stop mid-plan, commit stubs as "green," report hanging tests as verified.
+- **Issue and PR belong to the orchestrator alone.** Neither planning nor implementing agent is ever told an issue number exists; orchestrator updates the issue itself if planning surfaces a spec change.
+- **One git worktree per issue per agent**, `.claude/worktrees/<slug>` — inside project dir (agent-reachable), gitignored. Two agents in one checkout interleave commits — a branch is not a working tree. Created only once gate 2 is approved (first thing to touch disk); removed after merge.
+- Plan is a contract. Wrong plan → implementer stops and reports, never improvises a different design.
+- **Sequential gate-2 choice → planning agent continues as implementer**, same running agent resumed (not respawned) — exploration behind the plan never re-derived. Parallel → fresh implementer per stage (concurrent, separate worktrees, can't share a running context).
 - **An agent's report of its own verification is not verification.** Re-run the tools.
-- **Every state change moves a card on the task board** below. A run whose state lives only
-  in the conversation is lost when the session is.
+- **Every state change moves a task-board card.** State living only in conversation is lost when the session is.
+- **An area whose `requirements.md`/`edge-cases.md` has grown large enough that reading it costs real context: propose splitting it**, at gate 1, before drafting. Split along a real sub-capability boundary already present in the area (e.g. `client` → `client-transport` + `client-retry`), never an arbitrary line-count cut — a split that isn't along a genuine seam just adds a second file covering the same thing. New prefix for the new sub-area; **moved requirements keep their original ID unchanged** (old prefix and number, just relocated to the new file) — IDs are cited in tests, re-IDing them breaks every citation for no reason. Only requirements added after the split take the new prefix. Routing table updated, same as adding any area. User approves; this doesn't fire silently.
 
 Verify before every approval request:
-
-- **A plan** — quoted requirement text matches the file, appended IDs are genuinely
-  unused, nothing contradicts an existing requirement, and it proposes what was asked.
-- **An implementation** — re-run the full build/test/lint/coverage gauntlet yourself in
-  the agent's worktree, read the code the report describes, check ID citations sit
-  directly below their test attributes, mutation-check any test written after its
-  implementation, diff the spec against what was approved.
+- **Plan** — quoted requirement text matches file, appended IDs genuinely unused, nothing contradicts an existing requirement, proposes what was asked.
+- **Implementation** — re-run full build/test/lint/coverage gauntlet yourself in the agent's worktree, read the code described, check ID citations sit beside test declarations, mutation-check any after-the-fact-looking test, diff spec against approved. Keep only the relevant excerpt of any command output in context — failure text, summary line — never a full verbose log.
 
 ### Task board
 
-Every gated run keeps its state on disk, so an interrupted session resumes instead of
-restarting. The directory a card sits in **is** its state:
+State on disk so an interrupted session resumes, not restarts. Directory a card sits in **is** its state:
 
 ```
 .claude/tasks/
@@ -83,11 +64,7 @@ restarting. The directory a card sits in **is** its state:
     review.md      review findings, keyed by stage id
 ```
 
-The directories are tracked; the cards inside are gitignored local state. Cards live in
-the **main checkout only** — an agent in a worktree is handed the absolute path of its own
-card and writes that one file. Never a copy of the board per worktree.
-
-Three kinds of card, all short, all written for agents rather than for reading:
+Directories tracked; cards gitignored local state. Cards live in **main checkout only** — a worktree agent gets its own card's absolute path, writes only that file. Never a per-worktree board copy.
 
 | Card | File | Owner |
 |---|---|---|
@@ -95,8 +72,7 @@ Three kinds of card, all short, all written for agents rather than for reading:
 | stage | `<slug>.s<n>.md` | the implementer working that stage |
 | wave gate | `<slug>.w<n>.md` | orchestrator — one per parallel wave |
 
-A card is YAML frontmatter plus an append-only log. Agents **append**; they never rewrite
-a log line, so a crash mid-write costs one truncated line instead of the file.
+Cards are agent-only artifacts, never written for human reading: YAML frontmatter + append-only log, terse field=value tokens, no prose. Agents **append**, never rewrite a log line — crash mid-write costs one truncated line, not the file.
 
 ```
 ---
@@ -113,212 +89,143 @@ worktree: .claude/worktrees/<slug>-3
 2026-01-02T14:12 gauntlet=pass
 ```
 
-Parent frontmatter carries `issue`, `branch`, `mode: sequential | parallel(N)`, the `gate1`
-and `gate2` approval dates, the current `wave`, and `artifacts`. It never copies the goal
-or the normative text — the issue holds the goal, `artifacts/` holds the spec.
-
-What each state means:
+Parent frontmatter: `issue`, `branch`, `mode: sequential|parallel(N)`, `gate1`/`gate2` approval dates, current `wave`, `artifacts`. Never the goal or normative text — issue holds the goal, `artifacts/` holds the spec.
 
 | Card | `open` | `inprogress` | `inreview` | `done` |
 |---|---|---|---|---|
-| stage | created from the approved plan | an agent has taken it | agent claims green | merged into the feature branch and verified by the orchestrator |
-| wave gate | wave not started | its stages are running | all its stages done; reviewing the wave's accumulated diff | review clean — the next wave unblocks |
-| parent | gate 1 pending | implementing | gate 3 and gate 4 | PR squash-merged |
+| stage | created from plan | agent took it | agent claims green | merged + orchestrator-verified |
+| wave gate | not started | stages running | all done; reviewing wave diff | clean — next wave unblocks |
+| parent | gate 1 pending | implementing | gate 3/4 | PR squash-merged |
 
 Rules:
+- **No agent writes its own `done`.** Implementer stops at `inreview`. Orchestrator merges, re-runs gauntlet, only then moves to `done` — same self-report rule as everywhere else.
+- **Runnable** = every `blocked-by` id in `done/`. Stage `done` = merged into the feature branch ("the code I depend on is on the branch I branch from").
+- No `blocked/` directory — blocking derives from `blocked-by`, stated once.
+- Card is evidence of intent, never fact. Git is fact. See *Resume*.
 
-- **No agent writes its own `done`.** An implementer moves its card only as far as
-  `inreview`. The orchestrator merges the branch, re-runs the gauntlet, and only then moves
-  it to `done`. The board obeys the same rule as everything else here: a self-report is not
-  verification.
-- **Runnable** means every id in `blocked-by` is in `done/`. Stage `done` means merged into
-  the feature branch, which is exactly "the code I depend on is on the branch I branch
-  from".
-- There is no `blocked/` directory. Blocking is derived from `blocked-by`, so it is stated
-  once.
-- A card is evidence of intent, never of fact. Git is the fact. See *Resume an interrupted
-  run*.
+### Gate 1 — spec diff. Orchestrator runs this itself. Stop for approval.
 
-### Gate 1 — spec diff. Stop for approval.
+Not delegated — direct interactive conversation, orchestrator + user, about existing spec + current goal.
 
-- Propose the normative text itself: the "shall" statements with appended IDs, plus
-  `edge-cases.md` entries. Ready to land, not prose about intent.
-- Observable design is spec: public type and function signatures, the error enum, feature
-  gating.
-- Bug fix where the spec is right and the code is wrong: no diff — state the violated
-  requirement and continue.
-- **Board:** create `open/<slug>.md` and `artifacts/<slug>/` before drafting. On approval,
-  write the approved text to `artifacts/<slug>/spec-diff.md` and record `gate1` on the
-  parent card. Approved text that exists only in the conversation is the thing this board
-  is for.
+- **No implementation detail.** No code reading, no code-vs-spec check here — the dialog outcome decides that. Spec-already-correct → dialog ends with no diff: state the violated requirement, continue to gate 2.
+- Surface every silent decision (scope, defaults, naming, in/out) one at a time, with a recommendation. Reading area `requirements.md`/`edge-cases.md` is spec-reading, expected.
+- Propose the normative text itself: "shall" statements + appended IDs, plus `edge-cases.md` entries. Ready to land, not prose about intent.
+- Observable design is spec: public signatures, error enum, feature gating, config keys.
+- **Board:** create `open/<slug>.md` + `artifacts/<slug>/` before the dialog — no worktree yet, nothing to put in one. On approval: write `artifacts/<slug>/spec-diff.md`, record `gate1` on parent card.
+- **`spec-diff.md` shape:** one `## <ID>` heading per new or changed requirement (its full normative text under it, old → new if changed), then one `## Other spec changes` heading for `edge-cases.md`/`api-contract.md`/`data-contract.md` entries that carry no single ID. Same reason `plan.md` is headed per stage: `.claude/scripts/extract-section.sh '## <ID>' artifacts/<slug>/spec-diff.md` lets a wave-scoped reviewer pull only the IDs its stages touch, never the whole file.
 
-### Gate 1b — tracking issue. Stop for approval.
+### Gate 1b — tracking issue. Orchestrator runs this itself. Stop for approval.
 
-- Search `gh issue list` and closed issues for the same goal. Reuse what exists and
-  reference its number; never open a second. Otherwise draft, get approval, `gh issue create`.
-- Title: plain language a maintainer can scan. Not a slug, an ID, or a commit subject.
-- Self-contained — the spec is not pushed yet, so quote the full normative text beside
-  each new ID, each changed requirement as old → new, plus `api-contract.md` and
-  `edge-cases.md` entries. An ID with no text is useless.
-- Goal and normative changes only. No implementation detail (structure, files, functions,
-  approach) — that belongs to gate 2 and the PR.
-- `##` sections, not prose: `## Background`/`## Why`, `## Scope`, `## Goal`, more as
-  warranted. Compact enumerations, grouped ID ranges. Same shape for PR bodies.
+- Search `gh issue list` + closed issues for same goal. Reuse + reference its number; never open a second. Else draft, get approval, `gh issue create`.
+- Title: plain language a maintainer can scan. Not a slug, ID, or commit subject.
+- Self-contained (spec not pushed yet): quote full normative text beside each new ID, each changed requirement as old → new, plus `api-contract.md`/`edge-cases.md` entries. ID with no text is useless.
+- Goal + normative changes only. No implementation detail (structure/files/functions/approach) — belongs to gate 2 and PR.
+- `##` sections, not prose: `## Background`/`## Why`, `## Scope`, `## Goal`, more as warranted. Compact enumerations, grouped ID ranges. Same shape for PR bodies.
 
-### Write the spec into the working tree
-
-Never marked unfinished — the file holds only normative text. The plan tracks what lacks
-a passing test.
+Neither planning nor implementing agent is ever told this issue exists. Orchestrator is sole owner, including later updates from gate 2 findings.
 
 ### Gate 2 — implementation plan. Stop for approval.
 
-Stages, each broken into numbered file-level steps; a table mapping each new requirement
-ID to the test that pins it; a **Verification** section naming the method (unit tests
-alone / loopback TCP integration / virtual serial pair / interop against an external
-master or slave); expected commits; expected coverage impact.
+Spawn the planning agent with a brief: approved spec text, affected area(s), anything user volunteered at gate 1. Nothing else — gate 1 did no code research; agent explores the repo itself. Never mention the issue.
 
-Plus a **dependency tree**: for every stage, the stages it depends on and the files it
-touches. Stages with no path between them and disjoint file sets can run in parallel;
-everything else is ordered. Read it as waves — a stage becomes runnable once all its
-dependencies are merged. Overlapping file sets are a dependency, not a race to resolve
-later. A plan whose stages are all sequential says so explicitly; that is a normal
-outcome, not a failure to decompose.
+Returns `plan.md` as flat markdown sections, headed for `.claude/scripts/extract-section.sh` — `## Shared` first (dependency tree, verification approach, any code reference cited by 2+ stages), then one `## Stage s<n>: <name>` per stage: numbered file-level steps, tests added, `files` touched, `blocked-by`, ID→test table, **Verification** naming the method (unit tests alone / loopback TCP integration / virtual serial pair / interop against an external master or slave), expected coverage impact. Any later reader — implementer, reviewer, resumed session — pulls exactly one section with `sh .claude/scripts/extract-section.sh '## Stage s<n>: <name>' artifacts/<slug>/plan.md`, never the whole file.
 
-The approval also settles **how it will be implemented**, and the plan is not approved
-until it is answered:
+Existing-code references are inline at the step, complete enough that the implementer never re-opens the codebase to understand one — not just `(file:line)`, the exact signature/pattern it must match. A parallel implementer is a fresh spawn with zero exploration of its own; an under-specified reference is an incomplete step, caught here at approval, not after a stage stalls on it.
 
-- **Sequential** — one implementer agent walks every stage in order.
-- **Parallel** — the user gives a maximum number of agents running at once. Waves are
-  capped at that number; stages beyond the cap wait for a slot.
+May pause with one concise plan-scoped question — answer, it continues. If it reports a **spec gap** instead (approved text doesn't cover something the plan needs): stays running, paused; orchestrator reopens gate 1 with the user, scoped to the gap, then resumes the *same* agent (never respawns) with settled text, updates issue if it changed.
 
-Default to sequential when the user expresses no preference. Never infer a concurrency
-level from the plan's shape — a dependency tree that permits five parallel stages does
-not authorize five agents.
+`## Shared`'s **Dependency tree**: per stage, dependencies + files touched. No path between + disjoint files → parallel-capable; else ordered. Read as waves — a stage is runnable once its dependencies merge. Overlapping files = a dependency, not a race to resolve later. Fully-sequential plan states so explicitly — normal outcome, not a decomposition failure.
 
-**Board:** on approval write `artifacts/<slug>/plan.md`, record `gate2` and `mode` on the
-parent card, move the parent to `inprogress/`, and create one `open/<slug>.s<n>.md` per
-stage with its `files` and `blocked-by` copied from the dependency tree. Parallel runs also
-get one `open/<slug>.w<n>.md` per wave; sequential runs get a single wave-gate card for the
-whole run instead. Stage cards are generated from the plan, so stage ids in the plan and on
-the board are the same ids.
+Approval also settles **how it's implemented** — unanswered = not approved:
+- **Sequential** — same planning agent continues as implementer, resumed not respawned, keeps its exploration context.
+- **Parallel** — user gives max concurrent agents; fresh implementer per stage. Waves capped at that number.
+
+Default sequential on no preference. Never infer concurrency from plan shape — five parallel-capable stages doesn't authorize five agents.
+
+**On approval, in order:**
+1. Create the worktree — first thing to touch disk in the run: `git worktree add .claude/worktrees/<slug> -b <type>/<slug> main`.
+2. Write `artifacts/<slug>/plan.md`, record `gate2`+`mode` on parent card, move parent → `inprogress/`.
+3. Create `open/<slug>.s<n>.md` per stage, `files`/`blocked-by` copied from the tree. Parallel: also `open/<slug>.w<n>.md` per wave. Sequential: one wave-gate card for the whole run. Stage ids match plan ids.
+4. Land approved spec text in the new worktree — normative only, nothing unfinished. First stage, first commit.
 
 ### Implement, stage by stage
 
-Sequential: one agent, one worktree, on the feature branch, the stages in plan order. It
-moves each stage card `open` → `inprogress` when it starts and → `inreview` when the stage
-is green and committed; the orchestrator verifies and moves it to `done`. There is nothing
-to merge, so `done` here means committed and verified.
+Sequential: same planning agent, resumed with worktree path + stage cards — no re-reading `AGENTS.md`, no re-exploring. It reads the implementer rules itself, follows them per stage in plan order. Moves stage card `open`→`inprogress` on start, →`inreview` on green+committed. Orchestrator verifies, moves to `done` — nothing to merge, so `done` = committed+verified.
 
-Parallel: one worktree and one branch per agent, `.claude/worktrees/<slug>-<n>` on
-`<type>/<slug>-<n>`, branched from the feature branch as it stands when the wave starts.
-Never two agents in one worktree. Each wave runs the same cycle:
+Parallel: one worktree+branch per agent, branched off the feature branch at wave start — `git worktree add .claude/worktrees/<slug>-<n> -b <type>/<slug>-<n> <type>/<slug>` — **fresh** implementer, not a continuation (concurrent agents can't share a running context). Plan's inline refs must be self-sufficient because of this — these agents hold none of the planner's exploration and must never re-derive it by exploring the codebase themselves; an incomplete reference is a stop-and-report against the plan, not something to go dig up. Never two agents, one worktree. Each wave:
 
-1. Take the runnable stage cards — `blocked-by` all in `done/` — up to the approved agent
-   count. Move the wave-gate card to `inprogress/`.
-2. Spawn one implementer per stage, each given its worktree path, its stage only, and the
-   absolute path of its own card.
-3. Wait for the whole wave. Each agent leaves its card in `inreview/`.
-4. Per card: merge the branch into the feature branch, re-run the gauntlet on the merged
-   result, then move the card to `done/` and remove the worktree.
-5. All stages `done` → wave gate to `inreview/`: an independent reviewer reads the wave's
-   accumulated diff on the feature branch. Clean → wave gate to `done/`, which unblocks the
-   next wave. Any finding → stop, report, and move the implicated stage cards back to
-   `inprogress/` with the finding appended.
+1. Runnable stage cards (`blocked-by` all in `done/`) up to approved count. Wave-gate card → `inprogress/`.
+2. One implementer per stage: its worktree path, its own card's absolute path, and its `## Stage s<n>` section pulled with `sh .claude/scripts/extract-section.sh` — never the whole `plan.md`.
+3. Wait for the whole wave; each card lands in `inreview/`.
+4. Per card: merge into feature branch, re-run gauntlet on merged result, card → `done/`, remove worktree.
+5. All `done` → wave gate → `inreview/`: independent reviewer reads the wave's accumulated diff, given the wave's stage ids as its scope (so it pulls only those `plan.md` sections, not the whole file). Clean → wave gate `done/`, next wave unblocks, no approval prompt. Finding → stop, report, implicated stage cards → `inprogress/` with finding appended.
 
-A clean wave gate is not an approval stop — gate 2 already approved these stages. A finding,
-a red gauntlet or a merge conflict always is.
+Clean wave gate is not an approval stop — gate 2 already approved these stages. A finding, red gauntlet, or merge conflict always is.
 
-A merge conflict between two stages of one wave means the dependency tree was wrong — report
-it, fix the tree, do not hand-resolve it and continue. An agent that stops mid-wave stops
-its wave: the finished branches still merge, the rest is re-planned.
+Merge conflict between two stages in a wave = dependency tree was wrong — report, fix the tree, never hand-resolve and continue. Mid-wave stop stops that wave only: finished branches still merge, the rest re-plans.
 
-The gates do not change under parallelism. Verification, review and the spec reconcile all
-happen once, on the merged feature branch, never per agent.
+Gates unchanged under parallelism — verification, review, spec reconcile all happen once, on the merged feature branch, never per agent.
 
-- TDD order above. A stage is a green checkpoint: compiles, `cargo test`, `cargo clippy
-  --all-targets -- -D warnings`, coverage ≥ 80%. Commit every green stage — that is what
-  makes the plan resumable.
-- Stage messages stay cheap; they are squashed. The squash message carries the requirement
-  IDs and the why. The spec is the first stage and the first commit.
-- **Never add `Co-Authored-By`, "Generated with", or any other tool attribution trailer**
-  to a commit message, PR body, issue or comment. It carries no information about the
-  change and it is noise in `git log` forever. This holds for every agent and every gate,
-  including the squash message and the gate 4 PR body.
-- Every new or changed requirement ships ≥ 1 test citing its ID.
-- Every existing test that pins observable behavior cites its requirement. Tests of pure
-  internal or helper detail may stay untagged. Behavior no requirement states means the
-  requirement is missing — add it (gate 1), never attach a loose ID.
-- The citation goes directly below `#[test]`/`#[tokio::test]`, immediately above the `fn`.
-  Each ID appears at most once per test.
-- Not done until the Verification method has been run and its outcome reported. Waiving it
-  requires asking.
+- TDD order above. Stage = green checkpoint: builds, tests pass, lint clean, coverage ≥ 80%. Commit every green stage — makes the plan resumable.
+- Stage messages cheap, squashed later. Squash message carries requirement IDs + why. Spec = first stage, first commit.
+- **Never add `Co-Authored-By`, "Generated with," or any tool attribution trailer** to a commit, PR body, issue, or comment — no information, pure `git log` noise, forever. Applies to every agent, every gate, including the squash message and the gate 4 PR body.
+- Every new/changed requirement ships ≥1 ID-citing test.
+- Every existing test pinning observable behavior cites its requirement. Pure internal/helper-detail tests may stay untagged. Behavior no requirement states = requirement missing — add it (gate 1), never attach a loose ID.
+- Citation directly beside the test declaration, above the function body. ≤1 ID per test.
+- Not done until the Verification method has run and its outcome is reported. Waiving it requires asking.
 
 ### Reconcile the spec
 
-Behavior differing from what gate 1 approved is normative and **re-opens gate 1**: show
-the diff, state what forced it, get approval before committing. A wrong cross-reference or
-clumsy wording is editorial — no approval needed. Always report the final spec diff.
+Behavior differing from gate 1 approval is normative, **reopens gate 1**: show the diff, state what forced it, get approval before committing. Wrong cross-reference / clumsy wording = editorial, no approval needed. Always report the final spec diff.
 
 ### Gate 3 — review. Stop for approval.
 
-Before proposing a PR, run an independent review of the branch in a **separate agent**
-that did not write the code — a reviewer sharing the implementer's context reproduces its
-blind spots. Give it the diff, the approved spec text, and this file. It reports on:
+Before proposing a PR: independent review in a **separate agent** that didn't write the code (a reviewer sharing the implementer's context reproduces its blind spots). Give it the diff, approved spec text, the artifact dir, the worktree path, and the stage ids in scope (all of them, at gate 3) — never the issue number, same as every agent in this workflow. It reads this file itself. Reports:
 
-- **Spec fidelity** — every approved requirement implemented, nothing implemented that was
-  not approved (scope creep), no requirement pinned by a test that does not actually
-  exercise it.
-- **Standards** — the conventions below, test naming and ID citation, error handling.
-- **TDD honesty** — tests that could pass against an empty implementation, assertions on
-  the implementation's own output, coverage padded by tests that execute without asserting.
+- **Spec fidelity** — every approved requirement implemented, nothing unapproved implemented (scope creep is a finding even if the code is good), no ID pinned by a test that doesn't actually exercise it.
+- **Standards** — conventions below, test naming, ID citation, error handling.
+- **TDD honesty** — tests passing against an empty implementation, assertions on the implementation's own output, coverage padded by non-asserting tests.
 
-Re-run the verification yourself, then report the findings and the fixes. Findings the
-user should decide on are raised, not silently fixed.
+Re-run the verification yourself, report findings + fixes. User-decision findings are raised, not silently fixed.
 
-**Board:** the reviewer appends to `artifacts/<slug>/review.md`, keying each finding to a
-stage id so the right cards go back to `inprogress/`. Move the parent card to `inreview/`
-when the review starts.
+**Board:** reviewer appends to `artifacts/<slug>/review.md`, keyed to stage id so the right cards return to `inprogress/`. Parent card → `inreview/` when review starts.
 
 ### Gate 4 — pull request. Stop for approval.
 
-- Verification run and reported, then **ask whether to open a PR** — the user may want
-  their own manual run first; do not pre-empt it.
-- Then draft title and body, get approval of that text, then push and `gh pr create`.
-- Title style as the issue. Body is the implementation: the why, the requirement IDs, how
-  the issue was resolved (the approach and structure the issue omitted), the verification
-  actually performed, the coverage number, `Closes #<issue>`.
+- Verification run + reported, then **ask whether to open a PR** — user may want a manual run first; don't pre-empt it.
+- Draft title + body, get approval of that text, push. Then `gh pr create`.
+- Title plain language, issue's style. Body = the implementation: why, requirement IDs, how the issue was resolved (approach/structure the issue omitted), verification actually performed, the coverage number, `Closes #<issue>`.
 
 ### Merge
 
-Squash merge to `main`, so stage commits — including the spec commit that ran ahead of its
-code — never reach `main`. Remove the worktree after the merge, and move the parent card to
-`done/`. Nothing should remain under `.claude/worktrees/`, and no card for this run should
-remain outside `done/`.
+Squash merge to `main` — stage commits, including the ahead-of-code spec commit, never reach `main`. Then:
+
+```sh
+git worktree remove .claude/worktrees/<slug>
+git worktree list   # nothing under .claude/worktrees/ should remain
+```
+
+Per-wave worktrees are already removed at wave end; this sweep catches stragglers from a stopped agent. Parent card → `done/` — no card for this run stays outside `done/`.
 
 ### Resume an interrupted run
 
-Cards outside `open/` and `done/` when no agent is running mean a session died mid-run.
-Resuming is triggered — by the user, or by `/spec-feature` — never automatic.
+Cards outside `open/`+`done/`, no agent running = session died mid-run. Resume triggered by the user or `/spec-feature`, never automatic.
 
-**Reconcile before acting.** The card states what an agent intended; git states what
-happened, and the agent may have died between the two:
+No worktree recorded on the card → died during gate 1 dialog or gate 2 planning, nothing on disk to reconcile — resume the conversation from `spec-diff.md`/`plan.md`'s last state. Past gate 2 → table below either way. **Any resumed implementation spawns a fresh agent** — the sequential continuation only lives inside a live orchestrator session, doesn't survive a crash. This is why plan refs must be lossless: a fresh implementer resuming mid-plan gets nothing but what the plan wrote down.
 
-| The card claims | Check | A disagreement means |
+**Reconcile before acting.** Card = intent, git = fact:
+
+| Card claims | Check | Disagreement means |
 |---|---|---|
-| a worktree | `git worktree list` | the card is stale |
-| a branch | `git rev-parse` | the stage never started |
-| `commit=<sha>` | the sha exists and is on that branch | the commit never landed |
-| `gauntlet=pass` | re-run it at that sha | the card overstated its state |
-| stage `done` | `git branch --contains` against the feature branch | it was never merged, and every stage planned on top of it is planned on a lie |
+| worktree | `git worktree list` | card stale |
+| branch | `git rev-parse` | stage never started |
+| `commit=<sha>` | sha exists, on that branch | commit never landed |
+| `gauntlet=pass` | re-run at that sha | card overstated state |
+| stage `done` | `git branch --contains` vs feature branch | never merged; downstream plans a lie |
 
-Report the card-versus-git differences before touching anything. Where they agree, resume.
-Where they do not, stop and report: a card lagging behind git is a forgotten move and may
-be corrected, but a card claiming work git cannot show is never talked into being true.
+Report differences first. Agree → resume. Disagree → stop and report: card behind git is a forgotten move, correctable; card claiming what git can't show is never trusted into being true.
 
-After a clean reconcile, resume only what needs no approval — respawn implementers for
-already-approved stages, merge finished branches, run wave gates — and halt at the first
-gate that needs the user. Recorded `gate1` and `gate2` approvals stay valid; do not re-ask
-them.
+Clean reconcile → resume only no-approval work (respawn implementers for approved stages, merge finished branches, run wave gates); halt at the first gate needing the user. Recorded `gate1`/`gate2` approvals stay valid, no re-ask.
 
 ## Where to look for task X
 
@@ -328,66 +235,55 @@ them.
 | Async client API, request issuing, response matching, timeouts, retry/reconnect | [`docs/specs/client/`](./docs/specs/client/) | `CL-R-*` |
 | Async server, request dispatch, the data store, exception generation | [`docs/specs/server/`](./docs/specs/server/) | `SV-R-*` |
 | TCP sockets, RTU serial ports, framing boundaries, connection lifecycle | [`docs/specs/transport/`](./docs/specs/transport/) | `TR-R-*` |
-| Platforms, MSRV, performance posture, security, versioning, testing conventions | [`docs/specs/non-functional-requirements.md`](./docs/specs/non-functional-requirements.md) | `NF-R-*` |
+| Platforms, toolchain, performance posture, security, versioning, testing conventions | [`docs/specs/non-functional-requirements.md`](./docs/specs/non-functional-requirements.md) | `NF-R-*` |
 | Module graph, data flow, concurrency model | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | — |
 | Contribution workflow, conventions | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | — |
 
+<!-- CORE:BEGIN build -->
 ## Build / test / lint
 
 ```sh
+cargo fmt --check
+cargo clippy --all-features --all-targets -- -D warnings
 cargo check --all-features
 cargo test --all-features
-cargo clippy --all-features --all-targets -- -D warnings
-cargo fmt --check
 cargo llvm-cov --all-features --fail-under-lines 80
 ```
 
 Narrow the loop while iterating:
 
 ```sh
-cargo test ut_crc                 # one test (unit tests are named ut_*)
-cargo test --test tcp_loopback    # one integration test file (it_* functions)
-cargo llvm-cov --all-features --html   # browsable per-line coverage report
+cargo test ut_crc                 # one unit test
+cargo test --test tcp_loopback    # one integration test file
+cargo llvm-cov --all-features --html   # browsable per-line coverage
 ```
 
-Run the full set before considering work done. `lefthook` enforces `fmt --check` and `clippy -D warnings` pre-commit; CI runs fmt,
-clippy, check, test and the coverage gate on every push and pull request.
+Full set before done. `lefthook` enforces fast checks pre-commit; CI runs the full set on every push and PR.
+<!-- CORE:END build -->
 
+<!-- CORE:BEGIN conventions -->
 ## Conventions
 
-- Unit tests: `#[cfg(test)] mod tests` at the bottom of the file under test, named `ut_*`.
-  Integration tests: `tests/`, named `it_*`.
-- Bind port 0 and read the assigned port back; never a fixed port. To test bind failure,
-  bind the occupier ephemerally first and point the server at that port.
-- No real serial hardware — RTU behavior runs over an in-memory or virtual duplex pair. A
-  test needing `/dev/tty*` is ignored or feature-gated and never runs in CI.
-- Tokio. The public surface is runtime-agnostic where that is cheap; implementation and
-  tests target Tokio. A second runtime is a scope decision.
-- Edition 2024, stable toolchain (`rust-toolchain.toml`). MSRV is a non-functional
-  requirement — raising it is normative.
+- Unit tests: `#[cfg(test)] mod tests` at bottom of file under test, functions named `ut_*`.
+- Integration tests: `tests/`, functions named `it_*`.
+- Bind port 0, read the assigned port back — never a fixed port. To test bind failure, bind the occupier ephemerally first, point the server at that port.
+- No real serial hardware — RTU behavior runs over an in-memory or virtual duplex pair. A test needing `/dev/tty*` is ignored or feature-gated and never runs in CI.
+- Don't split a file for size alone. Split for distinct responsibilities, navigability, or coupling. Cohesive files and flat generated data stay whole.
+- Start each stage by listing needed functionality and searching crates.io. Report downloads, last release, maintenance state, recommend — don't default to hand-rolling. Adding a dependency is a scope boundary: the finding goes to the user, not the manifest.
+- Errors typed, never stringly. New failure mode = new error variant = public API = spec (gate 1).
+- Domain values typed: unit id, data address, quantity, register value, and transaction id are distinct transparent newtypes wrapped at API entry; mixing them must not compile. Raw integers only for genuinely opaque bytes. New domain type = public API = spec (gate 1).
+- No panics on wire input. Malformed, truncated, or hostile peer bytes produce a typed error — never a panic, a slice-index panic, or an unbounded allocation. Test every decode path with truncated input.
+- Edition 2024, stable toolchain (`rust-toolchain.toml`); MSRV bump is normative (non-functional requirement).
 - No bare `unwrap` outside tests; `expect("why this cannot fail")`.
-- Do not split a file for size alone. A split separates distinct responsibilities,
-  improves navigability, or cuts coupling. Cohesive files and flat generated data (a
-  function-code table) stay whole.
-- Start each implementation stage by listing the functionality it needs (byte parsing,
-  checksums, hex, serial I/O, async runtime, …) and searching crates.io. Report downloads,
-  last release, maintenance state, and recommend — do not default to hand-rolling. Adding
-  the dependency is a scope boundary, so the finding goes to the user, not to `Cargo.toml`.
-- Errors are typed, never stringly. A new failure mode is a new enum variant, which is
-  public API, which is spec (gate 1).
-- Domain values are typed: unit id, data address, quantity, register value and transaction
-  id are distinct transparent newtypes wrapped where they enter the API; mixing them must
-  not compile. Raw integers only for genuinely opaque bytes. A new domain value is public
-  API, which is spec (gate 1).
-- No panics on wire input. Malformed, truncated or hostile peer bytes produce a typed
-  error — never a panic, a slice-index panic, or an unbounded allocation. Test every
-  decode path with truncated input.
+- Specs and AI-facing files (skills, agents, `AGENTS.md`/`CLAUDE.md` itself) stay concise and compact: facts only, no prose, no filler, zero information loss. Every word an agent must re-read on every load; padding is recurring cost, not one-time.
+- **Every agent's output stays concise and compact** — chat responses, stage/final reports, commit messages, PR and issue bodies, review findings: say the same thing in fewer words whenever fewer words say it. No restating what a diff, file, or prior message already shows. Extra words for the same fact are a defect, not thoroughness — applies to every agent in this workflow, not just the files they write.
+<!-- CORE:END conventions -->
 
+<!-- CORE:BEGIN scope -->
 ## Scope boundaries — ask before
 
-- Supporting a function code not in `docs/specs/frame/api-contract.md`. The supported set
-  is a deliberate contract.
+- Supporting a function code not in `docs/specs/frame/api-contract.md`. The supported set is a deliberate contract.
 - Adding a dependency.
-- Changing the public API surface (renaming a type, altering a signature, adding a trait
-  bound) — semver consequences are the user's call.
+- Changing the public API surface (renaming a type, altering a signature, adding a trait bound) — semver consequences are the user's call.
 - Adding a second async runtime, or a sync/blocking API.
+<!-- CORE:END scope -->

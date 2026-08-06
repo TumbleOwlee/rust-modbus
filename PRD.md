@@ -95,3 +95,16 @@ The four combinations are all first-class and none is an afterthought:
 - Line coverage stays at or above 80%, enforced in CI.
 - Every requirement in `docs/specs/` is pinned by a test citing its ID, except
   those explicitly listed as intentionally untested.
+
+## Capability areas
+
+The specification is split by area; each owns its behavior end to end.
+
+| Area | Covers | ID prefix |
+|---|---|---|
+| [`frame/`](./docs/specs/frame/) | PDU and ADU encode/decode, function codes, exception responses, CRC-16 (RTU), MBAP header (TCP) | `FR-R-nnn` |
+| [`client/`](./docs/specs/client/) | Async client API, request issuing, response matching, timeouts, retry and reconnect | `CL-R-nnn` |
+| [`server/`](./docs/specs/server/) | Async server, connection handling, request dispatch, data store, exception generation | `SV-R-nnn` |
+| [`transport/`](./docs/specs/transport/) | TCP sockets and RTU serial ports, framing boundaries, connection lifecycle | `TR-R-nnn` |
+
+Cross-cutting concerns live in [`docs/specs/non-functional-requirements.md`](./docs/specs/non-functional-requirements.md).
