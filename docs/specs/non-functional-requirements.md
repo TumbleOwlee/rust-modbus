@@ -186,3 +186,9 @@ excluded, in addition to the existing no-feature build.
 client of CL-R-070. It shall imply `std` and shall therefore never be present in the
 bare-metal build of NF-R-003. Per NF-R-018 it shall be purely additive: enabling it shall
 change nothing about the async client. CI shall build and test with it enabled.
+
+**NF-R-027** — The crate shall expose an off-by-default `tls` feature gating TR-R-060–TR-R-068
+and `Connection::peer_cert` (SV-R-055). Implies `std`, absent from bare-metal build (NF-R-003).
+Depends on `rustls`, `tokio-rustls`, a cert-loading helper (`rustls-pemfile`/
+`rustls-pki-types`), and `rustls-native-certs` (populates `ServerCertVerification::Verify`'s
+default platform-native root store, TR-R-065), each `default-features = false`.

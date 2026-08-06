@@ -218,3 +218,42 @@ first time the value is used, not at deserialize time.
 the same terms as TR-R-058, both delays included. The truncation TR-R-056 applies belongs to
 the ioctl boundary, not to the configuration: a delay survives a round trip exactly as it was
 configured, and only the kernel sees whole milliseconds.
+
+---
+
+## 7. TLS
+
+**TR-R-060** — TLS transport shall be available over TCP only, gated behind an off-by-default
+`tls` feature; `tls` shall imply `std` and be absent from a `no_std` build.
+
+**TR-R-061** — TLS shall be implemented with `rustls` via `tokio-rustls`; the crate shall
+depend on no other TLS implementation.
+
+**TR-R-062** — The crate shall provide a TLS connector taking a socket address, `TcpConfig`,
+and `TlsClientConfig`, performing a TCP connect then a TLS handshake, returning a
+`FrameTransport` over the resulting stream. Handshake failure shall surface as an error
+distinct from a TCP connect failure.
+
+**TR-R-063** — The crate shall provide a TLS listener wrapping a bound TCP listener,
+performing the TLS handshake per accepted connection before yielding a `FrameTransport`, with
+the same per-connection independence as the plain listener (SV-R-030).
+
+**TR-R-064** — The handshake shall occur entirely inside the TLS connector/listener, before
+`FrameTransport` construction; `FrameTransport` and the plain-TCP connector/listener require no
+change, since `tokio_rustls::TlsStream` already satisfies TR-R-001's bound.
+
+**TR-R-065** — `TlsClientConfig` shall carry a `ServerCertVerification` policy —
+`Verify(RootStore)` (defaultable to platform-native roots) or the explicitly-named
+`DangerousDisableVerification` — plus an optional client cert/key for client auth. No
+boolean/`Option` spelling shall reach "skip verification" silently.
+
+**TR-R-066** — `TlsServerConfig` shall carry the server's cert/key and a `ClientCertPolicy`:
+`Require(RootStore)` or `None` (encryption-only, no client cert requested). No policy shall
+accept an unverified client cert as authenticated.
+
+**TR-R-067** — TLS handshake failure shall surface as a distinct `Error::TlsHandshake`
+variant, separate from `Io` and `Timeout`.
+
+**TR-R-068** — The crate shall export `MODBUS_TLS_PORT: u16 = 802` (documentation constant
+only); no API applies it implicitly — `connect_tls`/the TLS listener each take an explicit
+`SocketAddr`, same as their plain-TCP counterparts.
