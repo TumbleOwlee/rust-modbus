@@ -1,11 +1,7 @@
 # CLAUDE.md
 
-The agent instructions for this repo live in [`AGENTS.md`](./AGENTS.md) — read it
-first. It is the router into the spec-driven layout: product framing in
-[`PRD.md`](./PRD.md), structure in [`ARCHITECTURE.md`](./ARCHITECTURE.md), and the
-authoritative per-capability specs under [`docs/specs/`](./docs/specs/).
+Router only — full instructions: [`AGENTS.md`](./AGENTS.md). Product: [`PRD.md`](./PRD.md). Structure: [`ARCHITECTURE.md`](./ARCHITECTURE.md). Specs: [`docs/specs/`](./docs/specs/).
 
-This file exists only so tools that look for `CLAUDE.md` by name find their way in;
-it is intentionally not a second copy of `AGENTS.md`.
+Exists so CLAUDE.md-name-lookup tools find their way in. Not a duplicate of AGENTS.md.
 
 @./AGENTS.md

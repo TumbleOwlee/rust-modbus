@@ -39,6 +39,14 @@ allow = [
     # through the non-default `rtu` feature, so a TCP-only consumer never
     # acquires it.
     "MPL-2.0",
+    # `ring` (the crypto provider behind `rustls`/`tokio-rustls`, TR-R-061) is
+    # dual-licensed Apache-2.0/ISC-family; ISC is the piece not already
+    # allowed above. Reachable only through the non-default `tls` feature.
+    "ISC",
+    # `subtle` (constant-time comparisons, pulled in by `rustls`) is
+    # BSD-3-Clause, permissive. Reachable only through the non-default `tls`
+    # feature.
+    "BSD-3-Clause",
 ]
 
 [bans]
@@ -49,6 +57,16 @@ allow = [
 # other people's release schedules.
 multiple-versions = "warn"
 wildcards = "deny"
+# TR-R-061: rustls/tokio-rustls is the only TLS implementation this crate
+# depends on. Explicit, not merely incidental — a transitive pull of any of
+# these fails the build rather than silently coexisting with rustls.
+deny = [
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "boring" },
+    { name = "boring-sys" },
+]
 
 [sources]
 # NF-R-015. Everything comes from crates.io; a git or vendored dependency

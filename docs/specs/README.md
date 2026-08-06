@@ -102,6 +102,8 @@ point per `NF-R-021`:
 | `NF-R-022` | The `coverage` CI job |
 | `NF-R-025` | The `serde` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` and `no-std` CI jobs |
 | `CL-R-039` | Design posture: an API that does not exist. Enforced by the absence of a probe method in `client/api-contract.md` and by review |
+| `TR-R-061` | `deny.toml`'s `[bans]` `deny` list (`native-tls`, `openssl`, `openssl-sys`, `boring`, `boring-sys`) and the `deny` CI job |
+| `TR-R-064` | Structural claim about *when* the TLS handshake runs relative to `FrameTransport` construction; verified by code inspection at review, not a runtime assertion |
 
 **Kind 2 — cross-cutting restatements asserted under the owning area:**
 

@@ -25,12 +25,21 @@ impl<S: Service> Server<S> {
     pub async fn serve(self, listener: TcpListener) -> Result<()>;
     pub async fn serve_framed<F: ServerFraming>(self, listener: TcpListener) -> Result<()>;
 
+    #[cfg(feature = "tls")]
+    pub async fn serve_tls<F: ServerFraming>(self, listener: TlsListener) -> Result<()>;
+
     pub async fn serve_link<T, F>(self, transport: FrameTransport<T, F>) -> Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send,
         F: ServerFraming;
 }
 ```
+
+`serve_tls` (TR-R-063) accepts the raw TCP connection first, then runs the TLS
+handshake inside a per-connection task (TR-R-064) — a stalled or hostile
+`ClientHello` blocks only that task, not the shared accept loop (SV-R-030). A
+handshake failure never reaches `Service::on_connect`/`on_error`: it is
+reported through `Service::on_tls_handshake_failed` (SV-R-056) instead.
 
 `ServerFraming` is the seam of SV-R-001 — the mirror of the client's
 `ClientFraming`, since a responder reads a header rather than building one:
@@ -89,8 +98,17 @@ pub trait Service: Send + Sync + 'static {
 
     fn on_error(&self, conn: &Connection, error: &Error)
         -> impl Future<Output = ()> + Send { async {} }
+
+    #[cfg(feature = "tls")]
+    fn on_tls_handshake_failed(&self, peer: SocketAddr, error: &Error)
+        -> impl Future<Output = ()> + Send { async {} }
 }
 ```
+
+`on_tls_handshake_failed` (SV-R-056) fires instead of `on_connect`/`on_error`
+when a TLS handshake fails before any `Connection` exists — no
+`ConnectionId` was ever assigned, so a peer address is all there is to name
+the attempt with. Default no-op, like the other notifications.
 
 `&self`, not `&mut self`: that is how SV-R-003 is enforced in the type system —
 concurrent connections hold the same service, so mutable state lives behind the
@@ -118,11 +136,16 @@ the call site as in the signature, where `false` would have to be remembered. `o
 per-request failures do not end the connection (SV-R-034).
 
 ```rust
-pub struct Connection { /* id, peer */ }
+pub struct Connection { /* id, peer, peer_cert (tls only) */ } // Clone, not Copy — see below
 
 impl Connection {
     pub fn id(&self) -> ConnectionId;
     pub fn peer(&self) -> Option<SocketAddr>;   // None on a serial link
+
+    #[cfg(feature = "tls")]
+    pub fn peer_cert(&self) -> Option<&CertificateDer<'static>>;
+    // Some under ClientCertPolicy::Require with a verified cert; None on plain
+    // TCP, RTU/ASCII, or a TLS connection under ClientCertPolicy::None (SV-R-055).
 }
 
 pub struct ConnectionId(pub u64);   // a domain value type, per FR-R-007
@@ -142,6 +165,11 @@ pub enum Disconnect {
 
 `ConnectionId` is a `u64` and not the peer address: an address is reused as soon
 as a socket closes, and a serial link has none (SV-R-031).
+
+`Connection` derives `Clone`, never `Copy`, in every feature combination
+including with `tls` off: behind `tls` it carries an owned
+`CertificateDer<'static>`, which is not `Copy`, and the derive list does not
+change shape between builds.
 
 ## 3. What this area does not expose
 
@@ -180,6 +208,7 @@ requests (SV-R-021).
 |---|---|---|
 | `std` | on | the whole server area (SV-R-006) |
 | `rtu` | off | nothing in this area |
+| `tls` | off | `Server::serve_tls`, `Connection::peer_cert`, `Service::on_tls_handshake_failed` (SV-R-055, SV-R-056) |
 
 `serve_link` is generic over the stream, so a server over an in-memory duplex
 pair or over `Rtu` framing needs no feature beyond `std`; only opening a real

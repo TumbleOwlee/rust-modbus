@@ -221,6 +221,12 @@ pub enum Error {
     #[cfg(feature = "rs485")]
     #[error("RS-485 kernel mode is not supported on this platform or by this driver")]
     Rs485Unsupported,
+
+    /// A TLS handshake failed, distinct from a TCP connect failure (`Io`) or
+    /// an expired timeout (`Timeout`) (TR-R-062, TR-R-067).
+    #[cfg(feature = "tls")]
+    #[error("TLS handshake failed")]
+    TlsHandshake,
 }
 
 #[cfg(feature = "std")]
@@ -287,6 +293,20 @@ mod tests {
             .ends_stream()
         );
         assert!(!Error::InvalidFunctionCode(0x99).ends_stream());
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    /// TR-R-067 — TLS handshake failure is a distinct variant, separate from
+    /// `Io` and `Timeout`.
+    fn ut_tls_handshake_is_distinct_from_io_and_timeout() {
+        assert_ne!(
+            Error::TlsHandshake,
+            Error::Io {
+                kind: std::io::ErrorKind::Other
+            }
+        );
+        assert_ne!(Error::TlsHandshake, Error::Timeout { what: "connect" });
     }
 
     #[test]

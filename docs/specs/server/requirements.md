@@ -140,6 +140,17 @@ connection nor stop the server accepting new ones.
 **SV-R-036** — Every notification concerning a connection shall carry that
 connection's identity, so that a service may key its own state by connection.
 
+**SV-R-055** — `Connection` shall expose the verified client certificate presented during a
+TLS handshake: `Some` on a TLS connection under `ClientCertPolicy::Require` that accepted one,
+`None` on plain TCP, RTU/ASCII, or a TLS connection under `ClientCertPolicy::None`.
+
+**SV-R-056** — Behind the `tls` feature, `Service` shall provide `on_tls_handshake_failed`,
+notified when a TLS handshake fails before any `Connection` is established, taking the peer's
+socket address and the error that failed the handshake. It shall have default behavior of
+ignoring the notification, so an existing implementor is unaffected. No `Connection`/
+`ConnectionId` is ever assigned to a connection whose handshake failed, since the peer was
+never accepted as a connection (SV-R-031).
+
 ---
 
 ## 5. Shutdown

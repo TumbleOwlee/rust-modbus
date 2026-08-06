@@ -11,12 +11,22 @@ use crate::frame::{ExceptionCode, RequestPdu, ResponsePdu, UnitId};
 ///
 /// The identifier, not the address, is the identity: an address is reused the
 /// moment a socket closes, and a serial link has none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Clone` only, not `Copy`, in every feature combination (including with
+/// `tls` off): behind `tls` this carries an owned
+/// [`CertificateDer`](rustls_pki_types::CertificateDer), which is not `Copy`,
+/// and the derive list does not change shape between builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
     /// Unique for the lifetime of the server that issued it.
     id: ConnectionId,
     /// The peer, where the transport has one.
     peer: Option<SocketAddr>,
+    /// The verified client certificate presented during a TLS handshake
+    /// (SV-R-055). `None` on plain TCP, RTU/ASCII, or a TLS connection under
+    /// `ClientCertPolicy::None`.
+    #[cfg(feature = "tls")]
+    peer_cert: Option<rustls_pki_types::CertificateDer<'static>>,
 }
 
 impl Connection {
@@ -25,7 +35,12 @@ impl Connection {
     // Only the tests call this until the serving loop exists.
     #[allow(dead_code)]
     pub(crate) fn new(id: ConnectionId, peer: Option<SocketAddr>) -> Self {
-        Self { id, peer }
+        Self {
+            id,
+            peer,
+            #[cfg(feature = "tls")]
+            peer_cert: None,
+        }
     }
 
     /// This connection's identifier.
@@ -39,6 +54,26 @@ impl Connection {
     #[must_use]
     pub fn peer(&self) -> Option<SocketAddr> {
         self.peer
+    }
+
+    /// Attach the client certificate a TLS handshake verified (SV-R-055).
+    #[cfg(feature = "tls")]
+    pub(crate) fn with_peer_cert(
+        mut self,
+        cert: Option<rustls_pki_types::CertificateDer<'static>>,
+    ) -> Self {
+        self.peer_cert = cert;
+        self
+    }
+
+    /// The verified client certificate presented during a TLS handshake
+    /// (SV-R-055): `Some` on a TLS connection under `ClientCertPolicy::Require`
+    /// that accepted one, `None` on plain TCP, RTU/ASCII, or a TLS connection
+    /// under `ClientCertPolicy::None`.
+    #[cfg(feature = "tls")]
+    #[must_use]
+    pub fn peer_cert(&self) -> Option<&rustls_pki_types::CertificateDer<'static>> {
+        self.peer_cert.as_ref()
     }
 }
 
@@ -142,6 +177,20 @@ pub trait Service: Send + Sync + 'static {
         let _ = (conn, error);
         async {}
     }
+
+    /// A TLS handshake failed before any connection was established (SV-R-056).
+    ///
+    /// No [`Connection`]/[`ConnectionId`] names the peer here: it was never
+    /// accepted (SV-R-031). The default ignores it.
+    #[cfg(feature = "tls")]
+    fn on_tls_handshake_failed(
+        &self,
+        peer: SocketAddr,
+        error: &Error,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (peer, error);
+        async {}
+    }
 }
 
 #[cfg(test)]
@@ -221,5 +270,42 @@ mod tests {
     /// SV-R-031 — a link with no address, such as a serial port, has no peer.
     fn ut_serial_connection_has_no_peer() {
         assert_eq!(connection().peer(), None);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    /// SV-R-055 — a plain TCP connection carries no client certificate.
+    fn ut_peer_cert_is_none_on_plain_tcp() {
+        let peer = "127.0.0.1:502".parse().expect("a literal address parses");
+        assert_eq!(
+            Connection::new(ConnectionId(1), Some(peer)).peer_cert(),
+            None
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    /// SV-R-055 — a serial (RTU/ASCII) connection, which has no peer address
+    /// either, also carries no client certificate.
+    fn ut_peer_cert_is_none_on_rtu_ascii() {
+        assert_eq!(connection().peer_cert(), None);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    /// SV-R-055 — `with_peer_cert` attaches the certificate a TLS handshake
+    /// under `ClientCertPolicy::Require` verified.
+    fn ut_peer_cert_is_some_under_require() {
+        let cert = rustls_pki_types::CertificateDer::from(alloc::vec![1, 2, 3]);
+        let conn = connection().with_peer_cert(Some(cert.clone()));
+        assert_eq!(conn.peer_cert(), Some(&cert));
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    /// SV-R-055 — under `ClientCertPolicy::None` no client certificate is
+    /// requested, so `with_peer_cert` is never given one.
+    fn ut_peer_cert_is_none_under_client_cert_policy_none() {
+        assert_eq!(connection().with_peer_cert(None).peer_cert(), None);
     }
 }

@@ -182,6 +182,7 @@ new `Error` variant below are both breaking changes.
 | `std` | on | everything outside the frame area (NF-R-002) |
 | `rtu` | **off** | `open_serial` and the serial backend (TR-R-032) |
 | `rs485` | **off** | The `TIOCSRS485` ioctl, `Rs485Config`, `RtsPolarity`, `SerialConfig.rs485`, `Error::Rs485Unsupported`; implies `rtu`; the crate's only unsafe code, `target_os = "linux"` only (TR-R-050, TR-R-051, TR-R-055) |
+| `tls` | **off** | Everything in §7, `Error::TlsHandshake`; implies `std` (TR-R-060) |
 
 `rtu` implies `std`. `rs485` implies `rtu`. The frame area's RTU *framing* is not
 gated: encoding an RTU ADU is pure computation and stays available on `no_std`.
@@ -198,8 +199,90 @@ Added by this area, all gated on `std`:
 | `ConnectionClosed` | — | TR-R-014 |
 | `Configuration` | `field: &'static str` | TR-R-031 |
 | `Rs485Unsupported` | — (`#[cfg(feature = "rs485")]`) | TR-R-054 |
+| `TlsHandshake` | — (`#[cfg(feature = "tls")]`) | TR-R-067 |
 
 `Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error`
 derives `PartialEq`, which `io::Error` does not implement; the kind is the part a
 caller matches on, and preserving the OS message would cost every existing
 equality assertion in the crate.
+
+## 7. TLS
+
+Behind the `tls` feature. Client and server each build a `rustls` config
+per-call via `builder_with_provider` with the `ring` crypto provider — never
+`CryptoProvider::install_default`, so embedding this crate alongside a
+consumer's own rustls usage cannot collide (TR-R-061).
+
+```rust
+pub const MODBUS_TLS_PORT: u16 = 802; // TR-R-068, documentation only
+
+pub struct RootStore(/* private */);
+impl RootStore {
+    pub fn empty() -> Self;
+    pub fn native() -> Self;                       // best-effort; empty on failure (fails closed)
+    pub fn add_pem(&mut self, pem: &[u8]) -> Result<()>;
+}
+impl Default for RootStore { fn default() -> Self; } // == native()
+
+pub enum ServerCertVerification {
+    Verify(RootStore),
+    DangerousDisableVerification,
+}
+impl Default for ServerCertVerification { fn default() -> Self; } // == Verify(RootStore::default())
+
+pub struct ClientIdentity {                          // not Clone: PrivateKeyDer zeroizes on drop
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    pub key: PrivateKeyDer<'static>,
+}
+
+pub struct TlsClientConfig {                          // Debug, Default
+    pub server_cert: ServerCertVerification,
+    pub client_identity: Option<ClientIdentity>,
+}
+
+pub enum ClientCertPolicy {
+    Require(RootStore),
+    None,
+}
+
+pub struct TlsServerConfig {                          // Debug
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    pub key: PrivateKeyDer<'static>,
+    pub client_certs: ClientCertPolicy,
+}
+
+pub fn load_pem_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>>;
+pub fn load_pem_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>>;
+
+pub type TlsClientTransport = FrameTransport<tokio_rustls::client::TlsStream<TcpStream>, Tcp>;
+
+pub async fn connect_tls(
+    addr: SocketAddr, tcp: TcpConfig, tls: TlsClientConfig,
+) -> Result<TlsClientTransport>;                      // TR-R-062; connect_timeout bounds TCP connect + handshake as one (TR-R-021)
+
+pub async fn connect_tls_framed<F: Framing>(
+    addr: SocketAddr, tcp: TcpConfig, tls: TlsClientConfig,
+) -> Result<FrameTransport<tokio_rustls::client::TlsStream<TcpStream>, F>>;
+
+pub struct TlsListener { /* private; no Debug — TlsAcceptor does not implement it */ }
+impl TlsListener {
+    pub async fn bind(addr: SocketAddr, config: TlsServerConfig) -> Result<Self>; // TR-R-063
+    pub fn local_addr(&self) -> Result<SocketAddr>;
+    pub async fn accept(&self) -> Result<(
+        FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, Tcp>,
+        SocketAddr,
+        Option<CertificateDer<'static>>,               // Some under ClientCertPolicy::Require
+    )>;
+    pub async fn accept_framed<F: Framing>(&self) -> Result<(
+        FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
+        SocketAddr,
+        Option<CertificateDer<'static>>,
+    )>;
+}
+```
+
+`connect_tls`/`connect_tls_framed` and `TlsListener::accept`/`accept_framed`
+follow this crate's existing `Tcp`-fixed-convenience-plus-`_framed`-generic
+pairing (TR-R-024). The handshake runs entirely inside the connector/listener,
+before `FrameTransport` construction; `FrameTransport` itself needs no change,
+since `tokio_rustls::TlsStream` already satisfies TR-R-001's bound (TR-R-064).

@@ -116,8 +116,19 @@ impl TcpListener {
     pub async fn accept_framed<F: Framing>(
         &self,
     ) -> Result<(FrameTransport<TcpStream, F>, SocketAddr)> {
-        let (stream, peer) = self.inner.accept().await?;
+        let (stream, peer) = self.accept_tcp_only().await?;
         Ok((FrameTransport::new(stream), peer))
+    }
+
+    /// Accept one TCP connection with no framing applied (TR-R-063).
+    ///
+    /// Used by the TLS listener (`transport::tls`), which needs the raw
+    /// stream to run the TLS handshake on before any `FrameTransport` exists
+    /// (TR-R-064) -- the same `self.inner.accept()` call `accept_framed`
+    /// makes, factored out so the TLS listener wraps this `TcpListener`
+    /// rather than a raw `tokio::net::TcpListener` of its own.
+    pub(crate) async fn accept_tcp_only(&self) -> Result<(TcpStream, SocketAddr)> {
+        Ok(self.inner.accept().await?)
     }
 }
 

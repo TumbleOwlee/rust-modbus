@@ -53,6 +53,7 @@ jobs:
       - run: cargo check --features rs485
       - run: cargo check --features serde
       - run: cargo check --features sync
+      - run: cargo check --features tls
 
   # NF-R-014, NF-R-023, NF-R-024. The default test run includes the property-based
   # robustness suite that pins NF-R-012, and needs no serial hardware, no device
