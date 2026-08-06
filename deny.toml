@@ -57,6 +57,16 @@ allow = [
 # other people's release schedules.
 multiple-versions = "warn"
 wildcards = "deny"
+# TR-R-061: rustls/tokio-rustls is the only TLS implementation this crate
+# depends on. Explicit, not merely incidental — a transitive pull of any of
+# these fails the build rather than silently coexisting with rustls.
+deny = [
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "boring" },
+    { name = "boring-sys" },
+]
 
 [sources]
 # NF-R-015. Everything comes from crates.io; a git or vendored dependency

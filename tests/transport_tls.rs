@@ -71,7 +71,7 @@ fn trusting_ca() -> TlsClientConfig {
 }
 
 #[tokio::test]
-/// TR-R-062, TR-R-064 — `connect_tls` performs a TCP connect then a TLS
+/// TR-R-062 — `connect_tls` performs a TCP connect then a TLS
 /// handshake and yields a `FrameTransport` that exchanges an ADU.
 async fn it_connect_tls_handshakes_then_yields_a_frame_transport() {
     let listener = tokio::net::TcpListener::bind(ephemeral())
@@ -107,7 +107,7 @@ async fn it_connect_tls_handshakes_then_yields_a_frame_transport() {
 }
 
 #[tokio::test]
-/// TR-R-062, TR-R-067 -- a refused TCP connection surfaces as `Error::Io`,
+/// TR-R-062 -- a refused TCP connection surfaces as `Error::Io`,
 /// distinct from a handshake failure.
 async fn it_connect_tls_tcp_refused_is_distinct_from_handshake_failure() {
     let listener = tokio::net::TcpListener::bind(ephemeral())
@@ -127,7 +127,7 @@ async fn it_connect_tls_tcp_refused_is_distinct_from_handshake_failure() {
 }
 
 #[tokio::test(start_paused = true)]
-/// TR-R-021, TR-R-067 -- a connect timeout bounds the TCP connect and the TLS
+/// TR-R-021 -- a connect timeout bounds the TCP connect and the TLS
 /// handshake as one operation: a peer that completes the TCP accept but never
 /// sends its `ServerHello` still times out as `Error::Timeout`, not
 /// `Error::TlsHandshake`.

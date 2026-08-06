@@ -118,7 +118,7 @@ impl Service for Recorder {
 }
 
 #[tokio::test]
-/// TR-R-062, TR-R-063 -- this crate's own TLS client against this crate's own
+/// TR-R-063 -- this crate's own TLS client against this crate's own
 /// TLS server, full stack.
 async fn it_tls_client_against_tls_server_read_holding_registers() {
     let listener = TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::None))
@@ -195,7 +195,7 @@ async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established()
 }
 
 #[tokio::test]
-/// TR-R-063, SV-R-030 -- one connection stalled before sending its
+/// TR-R-063 -- one connection stalled before sending its
 /// `ClientHello` does not delay a second connection's handshake and exchange.
 async fn it_tls_handshakes_do_not_serialize_across_connections() {
     let listener = TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::None))

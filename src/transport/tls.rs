@@ -470,8 +470,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-065, TR-R-067 — `Verify` rejects a server certificate issued by a
-    /// CA the root store does not trust.
+    /// TR-R-067 — `Verify` rejects a server certificate issued by a CA the
+    /// root store does not trust, surfacing `Error::TlsHandshake` distinctly
+    /// (not merely `is_err()`).
     async fn ut_verify_rejects_a_cert_from_an_untrusted_issuer() {
         let (server_end, client_end) = duplex(4096);
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(no_client_auth_server_config()));
@@ -518,8 +519,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-065, SV-R-055 — a client identity is presented and reaches the
-    /// server's verified peer certificates.
+    /// TR-R-065 — a client identity is presented and reaches the server's
+    /// verified peer certificates.
     async fn ut_client_identity_is_presented() {
         let (server_end, client_end) = duplex(4096);
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(

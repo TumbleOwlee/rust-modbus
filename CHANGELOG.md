@@ -109,7 +109,28 @@ until it ships.
   signature no longer requires declaring the serial backend as a direct
   dependency and keeping its version in step with this crate's.
 
+- An off-by-default `tls` feature (NF-R-027, implies `std`, absent from
+  `no_std`/bare-metal builds): TLS transport over TCP only, via `rustls` +
+  `tokio-rustls` (TR-R-060, TR-R-061). New public items: `TlsClientConfig`,
+  `ServerCertVerification` (`Verify(RootStore)` / `DangerousDisableVerification`,
+  no boolean spelling for "skip verification"), `RootStore`, `ClientIdentity`,
+  `connect_tls`/`connect_tls_framed` (TR-R-062), `TlsServerConfig`,
+  `ClientCertPolicy` (`Require(RootStore)` / `None`), `TlsListener` and
+  `Server::serve_tls` (TR-R-063), `MODBUS_TLS_PORT: u16 = 802` (documentation
+  constant only, never applied implicitly, TR-R-068), `Error::TlsHandshake`
+  (distinct from `Io`/`Timeout`, TR-R-067), `Connection::peer_cert` (`Some` on
+  a TLS connection under `ClientCertPolicy::Require` that accepted a client
+  cert, `None` otherwise, SV-R-055), `Service::on_tls_handshake_failed`
+  (default no-op, notified when a handshake fails before any `Connection`
+  exists, SV-R-056), and the PEM-loading helpers `load_pem_cert_chain`/
+  `load_pem_private_key`.
+
 ### Changed
+
+- `Connection` drops `Copy` (`Clone` only) unconditionally, in every feature
+  combination, not only under `tls` — needed so it can carry an optional,
+  non-`Copy` client certificate (SV-R-055). Breaking per NF-R-017; affects
+  builds without the `tls` feature too.
 
 - `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a
   `match` on it outside this crate must handle the new variant (NF-R-017).
