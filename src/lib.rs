@@ -224,6 +224,11 @@ pub use server::{
     Acceptance, Connection, ConnectionId, Disconnect, Server, ServerConfig, ServerFraming,
     ServerHandle, Service,
 };
+#[cfg(feature = "tls")]
+pub use transport::{
+    ClientIdentity, MODBUS_TLS_PORT, RootStore, ServerCertVerification, TlsClientConfig,
+    TlsClientTransport, connect_tls, connect_tls_framed, load_pem_cert_chain, load_pem_private_key,
+};
 #[cfg(feature = "std")]
 pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
@@ -233,5 +238,3 @@ pub use transport::{
 pub use transport::{Rs485Config, RtsPolarity};
 #[cfg(feature = "rtu")]
 pub use transport::{SerialStream, SerialTransport, open_serial};
-#[cfg(feature = "tls")]
-pub use transport::MODBUS_TLS_PORT;

@@ -33,7 +33,10 @@ pub use tcp::{
 pub use rtu::{SerialStream, SerialTransport, open_serial};
 
 #[cfg(feature = "tls")]
-pub use tls::MODBUS_TLS_PORT;
+pub use tls::{
+    ClientIdentity, MODBUS_TLS_PORT, RootStore, ServerCertVerification, TlsClientConfig,
+    TlsClientTransport, connect_tls, connect_tls_framed, load_pem_cert_chain, load_pem_private_key,
+};
 
 /// What boundary detection needs that the framing itself cannot supply
 /// (TR-R-011).
