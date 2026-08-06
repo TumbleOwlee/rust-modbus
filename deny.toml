@@ -39,6 +39,10 @@ allow = [
     # through the non-default `rtu` feature, so a TCP-only consumer never
     # acquires it.
     "MPL-2.0",
+    # `ring` (the crypto provider behind `rustls`/`tokio-rustls`, TR-R-061) is
+    # dual-licensed Apache-2.0/ISC-family; ISC is the piece not already
+    # allowed above. Reachable only through the non-default `tls` feature.
+    "ISC",
 ]
 
 [bans]

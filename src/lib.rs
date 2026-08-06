@@ -233,3 +233,5 @@ pub use transport::{
 pub use transport::{Rs485Config, RtsPolarity};
 #[cfg(feature = "rtu")]
 pub use transport::{SerialStream, SerialTransport, open_serial};
+#[cfg(feature = "tls")]
+pub use transport::MODBUS_TLS_PORT;

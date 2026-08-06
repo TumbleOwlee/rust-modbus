@@ -10,6 +10,8 @@ mod rs485;
 mod rtu;
 mod serial;
 mod tcp;
+#[cfg(feature = "tls")]
+mod tls;
 
 use core::marker::PhantomData;
 use core::time::Duration;
@@ -29,6 +31,9 @@ pub use tcp::{
 
 #[cfg(feature = "rtu")]
 pub use rtu::{SerialStream, SerialTransport, open_serial};
+
+#[cfg(feature = "tls")]
+pub use tls::MODBUS_TLS_PORT;
 
 /// What boundary detection needs that the framing itself cannot supply
 /// (TR-R-011).
