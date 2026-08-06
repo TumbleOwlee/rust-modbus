@@ -226,8 +226,9 @@ pub use server::{
 };
 #[cfg(feature = "tls")]
 pub use transport::{
-    ClientIdentity, MODBUS_TLS_PORT, RootStore, ServerCertVerification, TlsClientConfig,
-    TlsClientTransport, connect_tls, connect_tls_framed, load_pem_cert_chain, load_pem_private_key,
+    ClientCertPolicy, ClientIdentity, MODBUS_TLS_PORT, RootStore, ServerCertVerification,
+    TlsClientConfig, TlsClientTransport, TlsListener, TlsServerConfig, connect_tls,
+    connect_tls_framed, load_pem_cert_chain, load_pem_private_key,
 };
 #[cfg(feature = "std")]
 pub use transport::{

@@ -179,6 +179,75 @@ where
         }
     }
 
+    /// Serve a TLS listener, handling every connection it accepts
+    /// concurrently, for any framing (SV-R-007, SV-R-030, TR-R-063).
+    ///
+    /// The TCP accept and the TLS handshake are split (TR-R-064): each
+    /// accepted connection is handed to its own task before the handshake
+    /// runs, so a stalled or hostile `ClientHello` blocks only that
+    /// connection's task, never the next accept (SV-R-030). A handshake
+    /// failure never establishes a `Connection`/`ConnectionId` (SV-R-031), so
+    /// it is reported through [`Service::on_tls_handshake_failed`] (SV-R-056)
+    /// rather than [`Service::on_connect`]/[`Service::on_error`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the listener does. Connections already running are finished
+    /// before the failure is returned.
+    #[cfg(feature = "tls")]
+    pub async fn serve_tls<F>(self, listener: crate::transport::TlsListener) -> Result<()>
+    where
+        F: ServerFraming + Send + 'static,
+        F::Header: Send + Sync,
+    {
+        let listener = Arc::new(listener);
+        let mut connections: JoinSet<()> = JoinSet::new();
+        let mut signal = self.shutdown.subscribe();
+        loop {
+            let accepted = tokio::select! {
+                biased;
+                () = shutdown_requested(&mut signal) => {
+                    while connections.join_next().await.is_some() {}
+                    return Ok(());
+                }
+                accepted = listener.accept_tcp_only() => accepted,
+            };
+            match accepted {
+                Ok((stream, peer)) => {
+                    let listener = Arc::clone(&listener);
+                    let service = Arc::clone(&self.service);
+                    let config = self.config;
+                    let id = self.next_id();
+                    let mut signal = self.shutdown.subscribe();
+                    connections.spawn(async move {
+                        match listener.handshake_framed::<F>(stream).await {
+                            Ok((mut transport, cert)) => {
+                                let conn = Connection::new(id, Some(peer)).with_peer_cert(cert);
+                                serve_connection(
+                                    service.as_ref(),
+                                    &config,
+                                    &conn,
+                                    &mut transport,
+                                    &mut signal,
+                                )
+                                .await;
+                            }
+                            Err(error) => {
+                                service.on_tls_handshake_failed(peer, &error).await;
+                            }
+                        }
+                    });
+                }
+                Err(error) => {
+                    // The listener is gone, but the connections it accepted
+                    // are still owed their end (SV-R-033).
+                    while connections.join_next().await.is_some() {}
+                    return Err(error);
+                }
+            }
+        }
+    }
+
     /// Allocate the next connection identifier (SV-R-031).
     fn next_id(&self) -> ConnectionId {
         ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))

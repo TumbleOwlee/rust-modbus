@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rust_modbus::{
-    Address, Error, MbapHeader, Quantity, RegisterValue, RequestPdu, ResponsePdu, RootStore,
-    ServerCertVerification, TcpConfig, TlsClientConfig, TransactionId, UnitId, connect_tls,
-    load_pem_cert_chain, load_pem_private_key,
+    Address, ClientCertPolicy, Error, MbapHeader, Quantity, RegisterValue, RequestPdu, ResponsePdu,
+    RootStore, ServerCertVerification, TcpConfig, TlsClientConfig, TlsServerConfig, TransactionId,
+    UnitId, connect_tls, load_pem_cert_chain, load_pem_private_key,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -153,4 +153,48 @@ async fn it_connect_tls_timeout_covers_the_whole_handshake() {
         Some(Error::Timeout { what: "connect" })
     );
     stalling.abort();
+}
+
+fn server_config() -> TlsServerConfig {
+    TlsServerConfig {
+        cert_chain: load_pem_cert_chain(&fixture("server.crt")).expect("parses"),
+        key: load_pem_private_key(&fixture("server.key")).expect("parses"),
+        client_certs: ClientCertPolicy::None,
+    }
+}
+
+#[tokio::test]
+/// TR-R-063 — `TlsListener` accepts a connection and yields a
+/// `FrameTransport` that exchanges an ADU.
+async fn it_tls_listener_accepts_and_yields_a_frame_transport() {
+    let listener = rust_modbus::TlsListener::bind(ephemeral(), server_config())
+        .await
+        .expect("binds");
+    let addr = listener.local_addr().expect("reports its address");
+
+    let serving = tokio::spawn(async move {
+        let (mut transport, _peer, cert) = listener.accept().await.expect("accepts");
+        assert_eq!(cert, None, "ClientCertPolicy::None requests no client cert");
+        let (received_header, received_request) =
+            transport.recv_request().await.expect("reads a request");
+        transport
+            .send_response(&received_header, &response())
+            .await
+            .expect("writes a response");
+        (received_header, received_request)
+    });
+
+    let mut client = connect_tls(addr, TcpConfig::default(), trusting_ca())
+        .await
+        .expect("connects and handshakes");
+    client
+        .send_request(&header(), &request())
+        .await
+        .expect("writes a request");
+    assert_eq!(client.recv_response().await, Ok((header(), response())));
+
+    assert_eq!(
+        serving.await.expect("the server task finishes"),
+        (header(), request())
+    );
 }

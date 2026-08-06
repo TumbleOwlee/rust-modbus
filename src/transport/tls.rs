@@ -278,6 +278,147 @@ pub async fn connect_tls_framed<F: Framing>(
     }
 }
 
+/// Whether a TLS server requests a client certificate (TR-R-066).
+#[derive(Debug, Clone)]
+pub enum ClientCertPolicy {
+    /// Require a client certificate, verified against a trusted root store.
+    /// A handshake presenting none, or one the store does not trust, fails.
+    Require(RootStore),
+    /// Encryption only; no client certificate is requested.
+    None,
+}
+
+/// How a TLS server accepts connections (TR-R-063, TR-R-066).
+#[derive(Debug)]
+pub struct TlsServerConfig {
+    /// The server's certificate chain, leaf first.
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    /// The private key matching the leaf certificate.
+    pub key: PrivateKeyDer<'static>,
+    /// Whether a client certificate is requested, and how it is verified.
+    pub client_certs: ClientCertPolicy,
+}
+
+fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::ServerConfig, Error> {
+    let builder = rustls::ServerConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .map_err(|_error| Error::TlsHandshake)?;
+    let builder = match config.client_certs {
+        ClientCertPolicy::Require(store) => {
+            let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+                Arc::new(store.0),
+                provider(),
+            )
+            .build()
+            .map_err(|_error| Error::TlsHandshake)?;
+            builder.with_client_cert_verifier(verifier)
+        }
+        ClientCertPolicy::None => builder.with_no_client_auth(),
+    };
+    builder
+        .with_single_cert(config.cert_chain, config.key)
+        .map_err(|_error| Error::TlsHandshake)
+}
+
+/// A TLS listener over TCP, wrapping a bound [`TcpListener`](crate::transport::TcpListener)
+/// (TR-R-063).
+pub struct TlsListener {
+    inner: crate::transport::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+}
+
+impl TlsListener {
+    /// Bind a listening socket and load the TLS identity it will present
+    /// (TR-R-063).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the address cannot be bound, or if the certificate/key/root
+    /// store do not build into a valid server configuration.
+    pub async fn bind(addr: SocketAddr, config: TlsServerConfig) -> Result<Self> {
+        let config = server_config(config)?;
+        Ok(Self {
+            inner: crate::transport::TcpListener::bind(addr).await?,
+            acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
+        })
+    }
+
+    /// The address actually bound.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the socket cannot report its address.
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Accept one connection (TR-R-063).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the accept or the TLS handshake does.
+    pub async fn accept(
+        &self,
+    ) -> Result<(
+        FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, Tcp>,
+        SocketAddr,
+        Option<CertificateDer<'static>>,
+    )> {
+        self.accept_framed::<Tcp>().await
+    }
+
+    /// Accept one connection, for any framing (TR-R-024, TR-R-063).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the accept or the TLS handshake does.
+    pub async fn accept_framed<F: Framing>(
+        &self,
+    ) -> Result<(
+        FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
+        SocketAddr,
+        Option<CertificateDer<'static>>,
+    )> {
+        let (stream, peer) = self.inner.accept_tcp_only().await?;
+        let (transport, cert) = self.handshake_framed::<F>(stream).await?;
+        Ok((transport, peer, cert))
+    }
+
+    /// Accept a TCP connection with no TLS handshake performed yet (SV-R-030,
+    /// via `Server::serve_tls`, which needs to accept before spawning the
+    /// per-connection task the handshake itself runs in -- a stalled or
+    /// hostile `ClientHello` then blocks only that task, not the next accept).
+    pub(crate) async fn accept_tcp_only(&self) -> Result<(TcpStream, SocketAddr)> {
+        self.inner.accept_tcp_only().await
+    }
+
+    /// Run the TLS handshake on an already-accepted TCP stream (TR-R-064): the
+    /// handshake happens entirely here, before `FrameTransport` construction.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the handshake does.
+    pub(crate) async fn handshake_framed<F: Framing>(
+        &self,
+        stream: TcpStream,
+    ) -> Result<(
+        FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
+        Option<CertificateDer<'static>>,
+    )> {
+        let tls_stream = self
+            .acceptor
+            .accept(stream)
+            .await
+            .map_err(|_error| Error::TlsHandshake)?;
+        let cert = tls_stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(|certs| certs.first().cloned());
+        Ok((FrameTransport::new(tls_stream), cert))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,30 +443,22 @@ mod tests {
         ServerName::from(std::net::IpAddr::from([127, 0, 0, 1]))
     }
 
-    /// A `rustls::ServerConfig` presenting `server.crt`/`server.key`, with the
-    /// given client-cert policy.
-    fn server_config(
-        client_verifier: Arc<dyn rustls::server::danger::ClientCertVerifier>,
-    ) -> rustls::ServerConfig {
+    /// This module's own `server_config` (TR-R-066), presenting
+    /// `server.crt`/`server.key` under the given client-cert policy — tests
+    /// dogfood the same builder `TlsListener::bind` uses.
+    fn tls_server_config(client_certs: ClientCertPolicy) -> rustls::ServerConfig {
         let cert_chain = load_pem_cert_chain(&fixture("server.crt")).expect("parses");
         let key = load_pem_private_key(&fixture("server.key")).expect("parses");
-        rustls::ServerConfig::builder_with_provider(provider())
-            .with_safe_default_protocol_versions()
-            .expect("ring supports TLS 1.2/1.3")
-            .with_client_cert_verifier(client_verifier)
-            .with_single_cert(cert_chain, key)
-            .expect("a valid cert/key pair")
+        server_config(TlsServerConfig {
+            cert_chain,
+            key,
+            client_certs,
+        })
+        .expect("a valid cert/key/policy combination")
     }
 
     fn no_client_auth_server_config() -> rustls::ServerConfig {
-        let cert_chain = load_pem_cert_chain(&fixture("server.crt")).expect("parses");
-        let key = load_pem_private_key(&fixture("server.key")).expect("parses");
-        rustls::ServerConfig::builder_with_provider(provider())
-            .with_safe_default_protocol_versions()
-            .expect("ring supports TLS 1.2/1.3")
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, key)
-            .expect("a valid cert/key pair")
+        tls_server_config(ClientCertPolicy::None)
     }
 
     fn roots(pem_fixture: &str) -> RootStore {
@@ -387,11 +520,9 @@ mod tests {
     /// server's verified peer certificates.
     async fn ut_client_identity_is_presented() {
         let (server_end, client_end) = duplex(4096);
-        let client_verifier =
-            rustls::server::WebPkiClientVerifier::builder(Arc::new(roots("ca.crt").0))
-                .build()
-                .expect("builds");
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config(client_verifier)));
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(
+            ClientCertPolicy::Require(roots("ca.crt")),
+        )));
         let serving = tokio::spawn(async move { acceptor.accept(server_end).await });
 
         let cert_chain = load_pem_cert_chain(&fixture("client.crt")).expect("parses");
@@ -422,5 +553,60 @@ mod tests {
                 .expect("parses")
                 .first()
         );
+    }
+
+    #[tokio::test]
+    /// TR-R-066 — `Require` rejects a client certificate issued by a CA the
+    /// root store does not trust.
+    async fn ut_require_rejects_an_untrusted_client_cert() {
+        let (server_end, client_end) = duplex(4096);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(
+            ClientCertPolicy::Require(roots("ca.crt")),
+        )));
+        let serving = tokio::spawn(async move { acceptor.accept(server_end).await });
+
+        let cert_chain = load_pem_cert_chain(&fixture("unrelated-client.crt")).expect("parses");
+        let key = load_pem_private_key(&fixture("unrelated-client.key")).expect("parses");
+        let config = client_config(TlsClientConfig {
+            server_cert: ServerCertVerification::Verify(roots("ca.crt")),
+            client_identity: Some(ClientIdentity { cert_chain, key }),
+        })
+        .expect("builds");
+        let connector = TlsConnector::from(Arc::new(config));
+        let client_result = connector.connect(server_name(), client_end).await;
+        let server_result = serving.await.expect("the server task finishes");
+
+        assert!(
+            client_result.is_err() || server_result.is_err(),
+            "an untrusted client cert must fail the handshake on one side or the other"
+        );
+    }
+
+    #[tokio::test]
+    /// TR-R-066 — `Require` accepts a client certificate issued by a trusted
+    /// CA.
+    async fn ut_require_accepts_a_trusted_client_cert() {
+        let (server_end, client_end) = duplex(4096);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(
+            ClientCertPolicy::Require(roots("ca.crt")),
+        )));
+        let serving = tokio::spawn(async move { acceptor.accept(server_end).await });
+
+        let cert_chain = load_pem_cert_chain(&fixture("client.crt")).expect("parses");
+        let key = load_pem_private_key(&fixture("client.key")).expect("parses");
+        let config = client_config(TlsClientConfig {
+            server_cert: ServerCertVerification::Verify(roots("ca.crt")),
+            client_identity: Some(ClientIdentity { cert_chain, key }),
+        })
+        .expect("builds");
+        let connector = TlsConnector::from(Arc::new(config));
+        let _client_stream = connector
+            .connect(server_name(), client_end)
+            .await
+            .expect("handshakes");
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("the server accepts a trusted client cert");
     }
 }
