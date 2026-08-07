@@ -13,10 +13,12 @@ Single-session, no resume: skip gate 1's **Board** bullet entirely — no `open/
 
 ## Where each step lives
 
-| Step | `AGENTS.md` section |
+Pull one `AGENTS.md` section at a time, never the whole file: `sh .claude/scripts/extract-section.sh '<heading>' AGENTS.md`.
+
+| Step | Heading |
 |---|---|
-| Gate 1 — spec diff, dialogue only, no board | `### Gate 1` |
-| Gate 1b — tracking issue | `### Gate 1b` |
+| Gate 1 — spec diff, dialogue only, no board | `### Gate 1 — spec diff. Orchestrator runs this itself. Stop for approval.` |
+| Gate 1b — tracking issue | `### Gate 1b — tracking issue. Orchestrator runs this itself. Stop for approval.` |
 
 ## Stop condition
 

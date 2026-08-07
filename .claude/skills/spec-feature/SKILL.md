@@ -15,15 +15,17 @@ Check `.claude/tasks/`. Cards outside `open/`+`done/` = a run was interrupted �
 
 ## Where each step lives
 
-| Step | `AGENTS.md` section |
+Pull one `AGENTS.md` section at a time, never the whole file: `sh .claude/scripts/extract-section.sh '<heading>' AGENTS.md`.
+
+| Step | Heading |
 |---|---|
-| Parent card | `## Workflow` → Gate 1 board bullet |
-| Gate 1 — spec diff | `### Gate 1` |
-| Gate 1b — tracking issue | `### Gate 1b` |
-| Gate 2 — implementation plan | `### Gate 2` |
+| Parent card | `## Workflow` → Gate 1 board bullet (prose within the section, not its own heading — pull `## Workflow` for it) |
+| Gate 1 — spec diff | `### Gate 1 — spec diff. Orchestrator runs this itself. Stop for approval.` |
+| Gate 1b — tracking issue | `### Gate 1b — tracking issue. Orchestrator runs this itself. Stop for approval.` |
+| Gate 2 — implementation plan | `### Gate 2 — implementation plan. Stop for approval.` |
 | Implement, stage by stage | `### Implement, stage by stage` |
 | Reconcile the spec | `### Reconcile the spec` |
-| Gate 3 — independent review | `### Gate 3` |
-| Gate 4 — pull request | `### Gate 4` |
+| Gate 3 — independent review | `### Gate 3 — review. Stop for approval.` |
+| Gate 4 — pull request | `### Gate 4 — pull request. Stop for approval.` |
 | Merge and clean up | `### Merge` |
 | Resume a dead run | `### Resume an interrupted run` |
