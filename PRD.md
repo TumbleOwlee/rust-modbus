@@ -102,7 +102,9 @@ The specification is split by area; each owns its behavior end to end.
 
 | Area | Covers | ID prefix |
 |---|---|---|
-| [`frame/`](./docs/specs/frame/) | PDU and ADU encode/decode, function codes, exception responses, CRC-16 (RTU), MBAP header (TCP) | `FR-R-nnn` |
+| [`frame/`](./docs/specs/frame/) | PDU structure, function code taxonomy, exception responses, robustness, buffer reuse, serde/Display | `FR-R-nnn` |
+| [`frame-data-access/`](./docs/specs/frame-data-access/) | Bit/register access, file record access, serial-line diagnostics, MEI | `FR-R-nnn` / `FR-DA-R-nnn` |
+| [`frame-adu/`](./docs/specs/frame-adu/) | RTU/TCP/ASCII ADU, RTU over byte stream, CRC-16, MBAP header, framing abstraction | `FR-R-nnn` / `FR-ADU-R-nnn` |
 | [`client/`](./docs/specs/client/) | Async client API, request issuing, response matching, timeouts, retry and reconnect | `CL-R-nnn` |
 | [`server/`](./docs/specs/server/) | Async server, connection handling, request dispatch, data store, exception generation | `SV-R-nnn` |
 | [`transport/`](./docs/specs/transport/) | TCP sockets and RTU serial ports, framing boundaries, connection lifecycle | `TR-R-nnn` |

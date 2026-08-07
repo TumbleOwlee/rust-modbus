@@ -232,7 +232,9 @@ Clean reconcile → resume only no-approval work (respawn implementers for appro
 
 | Task touches | Read | ID prefix |
 |---|---|---|
-| PDU/ADU encoding, function codes, exception responses, CRC-16, MBAP header | [`docs/specs/frame/`](./docs/specs/frame/) | `FR-R-*` |
+| PDU structure, function code taxonomy, exception responses, robustness, buffer reuse, serde/Display | [`docs/specs/frame/`](./docs/specs/frame/) | `FR-R-*` |
+| Bit/register access, file record access, serial-line diagnostics, MEI | [`docs/specs/frame-data-access/`](./docs/specs/frame-data-access/) | `FR-R-*` (new: `FR-DA-R-*`) |
+| RTU/TCP/ASCII ADU, RTU over byte stream, CRC-16, MBAP header, framing abstraction | [`docs/specs/frame-adu/`](./docs/specs/frame-adu/) | `FR-R-*` (new: `FR-ADU-R-*`) |
 | Async client API, request issuing, response matching, timeouts, retry/reconnect | [`docs/specs/client/`](./docs/specs/client/) | `CL-R-*` |
 | Async server, request dispatch, the data store, exception generation | [`docs/specs/server/`](./docs/specs/server/) | `SV-R-*` |
 | TCP sockets, RTU serial ports, framing boundaries, connection lifecycle | [`docs/specs/transport/`](./docs/specs/transport/) | `TR-R-*` |

@@ -11,6 +11,11 @@ documents what the encoder happens to do is worthless as a check on it.
 All multi-byte numeric fields are big-endian (FR-R-003). "qty" abbreviates
 quantity. Widths are in bytes unless stated.
 
+Shared by [`./`](.) (core, `FR-R-*`), [`../frame-data-access/`](../frame-data-access/)
+(`FR-DA-R-*`), and [`../frame-adu/`](../frame-adu/) (`FR-ADU-R-*`) — the frame
+area's wire formats are one contract regardless of which sub-area's
+requirements a change touches.
+
 The layouts below are stated in wire widths. In the API each of these fields is
 a domain value type (FR-R-007) transparently wrapping that width: a 2-byte
 address field is an `Address`, a qty an `Quantity`, a register a

@@ -19,7 +19,7 @@ Pull one `AGENTS.md` section at a time, never the whole file: `sh .claude/script
 
 | Step | Heading |
 |---|---|
-| Parent card | `## Workflow` → Gate 1 board bullet (prose within the section, not its own heading — pull `## Workflow` for it) |
+| Parent card | `### Task board` → parent-card row of the state table |
 | Gate 1 — spec diff | `### Gate 1 — spec diff. Orchestrator runs this itself. Stop for approval.` |
 | Gate 1b — tracking issue | `### Gate 1b — tracking issue. Orchestrator runs this itself. Stop for approval.` |
 | Gate 2 — implementation plan | `### Gate 2 — implementation plan. Stop for approval.` |

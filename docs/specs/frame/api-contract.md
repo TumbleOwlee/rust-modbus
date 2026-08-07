@@ -8,6 +8,11 @@ The set of *named* function codes is a **deliberate contract, not an open list**
 adding a name is a normative change (gate 1). Codes outside it are not rejected;
 they are carried as `Custom(u8)` with an opaque body (FR-R-011, FR-R-012).
 
+Shared by [`./`](.) (core, `FR-R-*`), [`../frame-data-access/`](../frame-data-access/)
+(`FR-DA-R-*`), and [`../frame-adu/`](../frame-adu/) (`FR-ADU-R-*`) — the frame
+area's public surface is one contract regardless of which sub-area's
+requirements a change touches.
+
 ---
 
 ## 1. Function codes

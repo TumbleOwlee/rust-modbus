@@ -10,7 +10,9 @@ resolve it, don't paper over it.
 
 | Area | Covers | ID prefix |
 |---|---|---|
-| [`frame/`](./frame/) | PDU and ADU encode/decode, function codes, exception responses, CRC-16 (RTU), MBAP header (TCP) | `FR-R-nnn` |
+| [`frame/`](./frame/) | PDU structure, function code taxonomy, exception responses, robustness, buffer reuse, serde/Display | `FR-R-nnn` |
+| [`frame-data-access/`](./frame-data-access/) | Bit/register access, file record access, serial-line diagnostics, MEI | `FR-R-nnn` / `FR-DA-R-nnn` |
+| [`frame-adu/`](./frame-adu/) | RTU/TCP/ASCII ADU, RTU over byte stream, CRC-16, MBAP header, framing abstraction | `FR-R-nnn` / `FR-ADU-R-nnn` |
 | [`client/`](./client/) | Async client API, request issuing, response matching, timeouts, retry and reconnect | `CL-R-nnn` |
 | [`server/`](./server/) | Async server, connection handling, request dispatch, data store, exception generation | `SV-R-nnn` |
 | [`transport/`](./transport/) | TCP sockets and RTU serial ports, framing boundaries, connection lifecycle | `TR-R-nnn` |
