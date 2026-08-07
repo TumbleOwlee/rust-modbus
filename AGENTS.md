@@ -119,7 +119,7 @@ Not delegated — direct interactive conversation, orchestrator + user, about ex
 
 ### Gate 1b — tracking issue. Orchestrator runs this itself. Stop for approval.
 
-- Search `gh issue list` + closed issues for same goal. Reuse + reference its number; never open a second. Else draft, get approval, `gh issue create`.
+- Search `gh issue list` + closed issues for same goal; read any candidate with `sh .claude/scripts/issue-view.sh <number>`, never raw `gh issue view`. Reuse + reference its number; never open a second. Else draft, get approval, `gh issue create`.
 - Title: plain language a maintainer can scan. Not a slug, ID, or commit subject.
 - Self-contained (spec not pushed yet): quote full normative text beside each new ID, each changed requirement as old → new, plus `api-contract.md`/`edge-cases.md` entries. ID with no text is useless.
 - Goal + normative changes only. No implementation detail (structure/files/functions/approach) — belongs to gate 2 and PR.
@@ -193,6 +193,7 @@ Re-run the verification yourself, report findings + fixes. User-decision finding
 
 - Verification run + reported, then **ask whether to open a PR** — user may want a manual run first; don't pre-empt it.
 - Draft title + body, get approval of that text, push. Then `gh pr create`.
+- CI fails on the pushed branch → `sh .claude/scripts/failed-workflow.sh <branch>`, never raw `gh run view`, to see the failure.
 - Title plain language, issue's style. Body = the implementation: why, requirement IDs, how the issue was resolved (approach/structure the issue omitted), verification actually performed, the coverage number, `Closes #<issue>`.
 
 ### Merge
