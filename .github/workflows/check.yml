@@ -95,6 +95,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add x86_64-pc-windows-gnu
+      # ring's build script needs a mingw-w64 gcc to cross-compile its C/asm for
+      # this target; not present on ubuntu-latest by default.
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - run: cargo check --all-features --target x86_64-pc-windows-gnu
 
   # NF-R-005. Builds and tests on exactly the declared MSRV, so `rust-version` in
