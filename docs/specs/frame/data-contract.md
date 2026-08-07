@@ -173,3 +173,27 @@ PDU, i.e. `PDU length + 1` (FR-R-103), giving a valid range of 2–254.
 | MBAP length field | 2–254 |
 | Serial address | 0 broadcast, 1–247 individual, 248–255 carried |
 | Address space per register table | 0–65535 |
+
+---
+
+## 6. RTU-over-stream extents (FR-R-147)
+
+PDU length yielded by the derivation, by function code and direction:
+
+| Direction | Function code(s) | PDU length |
+|---|---|---|
+| response, exception (MSB set) | any, including custom | 2 (FR-R-080, FR-R-086) |
+| request | 1, 2, 3, 4, 5, 6 | 5 |
+| request | 7, 11, 12, 17 | 1 |
+| request | 22 | 7 |
+| request | 24 | 3 |
+| request | 15, 16 | `6 + byte count` (byte count = 6th PDU byte) |
+| request | 20, 21 | `2 + byte count` (byte count = 2nd PDU byte) |
+| request | 23 | `10 + write byte count` (write byte count = 10th PDU byte) |
+| request | 43, MEI type 14 | 4 |
+| response | 5, 6, 15, 16, 11 | 5 |
+| response | 7 | 2 |
+| response | 22 | 7 |
+| response | 1, 2, 3, 4, 12, 17, 20, 21, 23 | `2 + byte count` (byte count = 2nd PDU byte) |
+| response | 24 | `3 + byte count` (byte count = 2-byte field, FR-R-041) |
+| response | 43, MEI type 14 | walk object list per FR-R-075, each object contributing `2 + object length` bytes |
