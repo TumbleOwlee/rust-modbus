@@ -166,6 +166,9 @@ pub enum Disconnect {
 `ConnectionId` is a `u64` and not the peer address: an address is reused as soon
 as a socket closes, and a serial link has none (SV-R-031).
 
+`Disconnect` derives `Eq` only when `tls` is off, following `Error` (TR-R-067):
+it embeds `Error` via `Failed`, and `Error` itself is `Eq` only without `tls`.
+
 `Connection` derives `Clone`, never `Copy`, in every feature combination
 including with `tls` off: behind `tls` it carries an owned
 `CertificateDer<'static>`, which is not `Copy`, and the derive list does not

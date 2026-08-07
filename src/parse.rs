@@ -26,7 +26,11 @@ pub(crate) type Input<'a> = Partial<&'a [u8]>;
 pub(crate) type ParseResult<T> = core::result::Result<T, ErrMode<ParseFailure>>;
 
 /// A parse failure, optionally carrying the domain error that caused it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// `Eq` dropped (not conditional): pure internal/test-helper equality is all
+/// this ever needed, and `Error`'s own `Eq` is conditional on `tls` (TR-R-067)
+/// -- following suit here would gain nothing no caller uses.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct ParseFailure(Option<Error>);
 
 impl ParseFailure {

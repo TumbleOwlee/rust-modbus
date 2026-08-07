@@ -7,7 +7,8 @@
 use thiserror::Error as ThisError;
 
 /// A Modbus encoding or decoding failure.
-#[derive(Debug, Clone, PartialEq, Eq, ThisError)]
+#[derive(Debug, Clone, PartialEq, ThisError)]
+#[cfg_attr(not(feature = "tls"), derive(Eq))]
 pub enum Error {
     /// Input ended before the layout was satisfied (FR-R-131).
     #[error("truncated input: expected {expected} byte(s), supplied {supplied}")]
@@ -223,10 +224,19 @@ pub enum Error {
     Rs485Unsupported,
 
     /// A TLS handshake failed, distinct from a TCP connect failure (`Io`) or
-    /// an expired timeout (`Timeout`) (TR-R-062, TR-R-067).
+    /// an expired timeout (`Timeout`) (TR-R-062, TR-R-067, TR-R-069).
     #[cfg(feature = "tls")]
     #[error("TLS handshake failed")]
-    TlsHandshake,
+    TlsHandshake {
+        /// The underlying `rustls` failure.
+        #[source]
+        source: rustls::Error,
+        /// The client certificate offered and rejected under
+        /// `ClientCertPolicy::Require`, server-side only; `None` when no
+        /// client cert was offered, the failure had another cause, or the
+        /// failure was client-side (TR-R-069).
+        peer_cert: Option<rustls::pki_types::CertificateDer<'static>>,
+    },
 }
 
 #[cfg(feature = "std")]
@@ -298,15 +308,28 @@ mod tests {
     #[cfg(feature = "tls")]
     #[test]
     /// TR-R-067 — TLS handshake failure is a distinct variant, separate from
-    /// `Io` and `Timeout`.
+    /// `Io` and `Timeout`, carrying the underlying `rustls` error.
     fn ut_tls_handshake_is_distinct_from_io_and_timeout() {
+        let handshake = Error::TlsHandshake {
+            source: rustls::Error::General("test".into()),
+            peer_cert: None,
+        };
         assert_ne!(
-            Error::TlsHandshake,
+            handshake,
             Error::Io {
                 kind: std::io::ErrorKind::Other
             }
         );
-        assert_ne!(Error::TlsHandshake, Error::Timeout { what: "connect" });
+        assert_ne!(handshake, Error::Timeout { what: "connect" });
+    }
+
+    #[cfg(not(feature = "tls"))]
+    #[test]
+    /// TR-R-067 — `Error` derives `Eq` when `tls` is off (no `rustls::Error`
+    /// field present to block it).
+    fn ut_error_derives_eq_without_tls() {
+        fn assert_eq_impl<T: Eq>() {}
+        assert_eq_impl::<Error>();
     }
 
     #[test]

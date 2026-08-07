@@ -108,8 +108,9 @@ owns the desynchronization that TR-R-041 describes.
   fails the handshake as `Error::TlsHandshake`; no connection is ever
   established (TR-R-065, TR-R-067).
 - **A client cert rejected under `ClientCertPolicy::Require`** fails on the
-  server side as `Error::TlsHandshake`. No `Connection` identity was ever
-  assigned, so the attempt reaches neither `Service::on_connect` nor
+  server side as `Error::TlsHandshake { source, peer_cert }`, `peer_cert`
+  `Some` with the offered certificate (TR-R-069). No `Connection` identity was
+  ever assigned, so the attempt reaches neither `Service::on_connect` nor
   `on_error` — it reaches `Service::on_tls_handshake_failed(peer, &error)`
   instead, the notification dedicated to a handshake that fails before any
   `Connection` exists (SV-R-055, SV-R-056, TR-R-066).

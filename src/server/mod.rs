@@ -398,7 +398,7 @@ mod tests {
     use core::time::Duration;
 
     /// What a test service was asked to do, in order (SV-R-036).
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     enum Event {
         Connect(ConnectionId, Option<SocketAddr>),
         Request(ConnectionId, UnitId, RequestPdu),

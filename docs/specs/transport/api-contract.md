@@ -199,7 +199,7 @@ Added by this area, all gated on `std`:
 | `ConnectionClosed` | — | TR-R-014 |
 | `Configuration` | `field: &'static str` | TR-R-031 |
 | `Rs485Unsupported` | — (`#[cfg(feature = "rs485")]`) | TR-R-054 |
-| `TlsHandshake` | — (`#[cfg(feature = "tls")]`) | TR-R-067 |
+| `TlsHandshake` | `source: rustls::Error, peer_cert: Option<CertificateDer<'static>>` (`#[cfg(feature = "tls")]`) | TR-R-067, TR-R-069 |
 
 `Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error`
 derives `PartialEq`, which `io::Error` does not implement; the kind is the part a

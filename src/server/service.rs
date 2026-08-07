@@ -106,7 +106,12 @@ pub enum Acceptance {
 }
 
 /// Why a connection ended (SV-R-033).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Eq` conditional on `tls` being off, following `Error` (TR-R-067): this
+/// enum embeds `Error` via `Failed`, and `Error` itself only derives `Eq`
+/// when `tls` is off.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(not(feature = "tls"), derive(Eq))]
 pub enum Disconnect {
     /// The peer closed the connection between two ADUs (SV-R-052).
     Closed,

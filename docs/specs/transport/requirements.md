@@ -133,6 +133,8 @@ behavior, stated limitations).
 
 **TR-R-066** — `TlsServerConfig` shall carry the server's cert/key and a `ClientCertPolicy`: `Require(RootStore)` or `None` (encryption-only, no client cert requested). No policy shall accept an unverified client cert as authenticated.
 
-**TR-R-067** — TLS handshake failure shall surface as a distinct `Error::TlsHandshake` variant, separate from `Io` and `Timeout`.
+**TR-R-067** — TLS handshake failure shall surface as a distinct `Error::TlsHandshake { source: rustls::Error, peer_cert: Option<CertificateDer<'static>> }` variant, separate from `Io` and `Timeout`. `source` carries the underlying `rustls` error. Because `rustls::Error` has no `Eq`, `Error` derives `Eq` only when the `tls` feature is disabled; `PartialEq`/`Clone`/`Debug` hold unconditionally.
 
 **TR-R-068** — The crate shall export `MODBUS_TLS_PORT: u16 = 802` (documentation constant only); no API applies it implicitly — `connect_tls`/the TLS listener each take an explicit `SocketAddr`, same as their plain-TCP counterparts.
+
+**TR-R-069** — On a server-side handshake rejecting a client certificate under `ClientCertPolicy::Require`, `Error::TlsHandshake.peer_cert` shall be `Some` with the offered certificate. `peer_cert` is `None` when no client cert was offered, when the failure has another cause, or on any client-side (`connect_tls`) handshake failure — capturing the rejected server cert there is out of scope.

@@ -106,7 +106,10 @@ explicitly for ASCII).
 
 Everything below is exported from the crate root. All types derive `Debug`,
 `Clone`, and `PartialEq`; the field-free ones are `Copy` and `Eq` as well. The
-crate is `no_std` + `alloc` (NF-R-001), so `Vec` is `alloc::vec::Vec`.
+crate is `no_std` + `alloc` (NF-R-001), so `Vec` is `alloc::vec::Vec`. `Error`
+is the exception under the `tls` feature: `TlsHandshake` carries a `source:
+rustls::Error`, which has no `Eq`, so `Error`'s `Eq` derive is conditional on
+`tls` being off (TR-R-067).
 
 | Item | Kind | Purpose |
 |---|---|---|

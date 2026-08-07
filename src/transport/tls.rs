@@ -2,12 +2,16 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::net::SocketAddr;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme,
+};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -21,6 +25,21 @@ use crate::transport::{FrameTransport, TcpConfig};
 /// [`connect_tls`]/the TLS listener each take an explicit `SocketAddr`, same
 /// as their plain-TCP counterparts.
 pub const MODBUS_TLS_PORT: u16 = 802;
+
+/// Recovers the `rustls::Error` a handshake failure's `io::Error` wraps —
+/// tokio-rustls maps every handshake failure through
+/// `io::Error::new(io::ErrorKind::InvalidData, rustls_error)`. A bare I/O
+/// failure carrying no such source (e.g. an EOF before any TLS byte is sent)
+/// falls back to `rustls::Error::General`, carrying the `io::Error`'s own
+/// message, so `source` is never fabricated as the wrong variant, only as a
+/// text fallback (TR-R-067).
+fn tls_error_source(io_error: std::io::Error) -> rustls::Error {
+    let message = io_error.to_string();
+    io_error
+        .into_inner()
+        .and_then(|inner| inner.downcast::<rustls::Error>().ok())
+        .map_or_else(|| rustls::Error::General(message), |boxed| *boxed)
+}
 
 /// The set of trusted root certificates a [`ServerCertVerification::Verify`]
 /// or [`ClientCertPolicy::Require`] checks against (TR-R-065, TR-R-066).
@@ -147,7 +166,10 @@ fn provider() -> Arc<CryptoProvider> {
 fn client_config(config: TlsClientConfig) -> core::result::Result<ClientConfig, Error> {
     let builder = ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
-        .map_err(|_error| Error::TlsHandshake)?;
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })?;
     let builder = match config.server_cert {
         ServerCertVerification::Verify(store) => builder.with_root_certificates(store.0),
         ServerCertVerification::DangerousDisableVerification => builder
@@ -157,7 +179,10 @@ fn client_config(config: TlsClientConfig) -> core::result::Result<ClientConfig, 
     match config.client_identity {
         Some(identity) => builder
             .with_client_auth_cert(identity.cert_chain, identity.key)
-            .map_err(|_error| Error::TlsHandshake),
+            .map_err(|error| Error::TlsHandshake {
+                source: error,
+                peer_cert: None,
+            }),
         None => Ok(builder.with_no_client_auth()),
     }
 }
@@ -271,7 +296,10 @@ pub async fn connect_tls_framed<F: Framing>(
         connector
             .connect(server_name, tcp_stream)
             .await
-            .map_err(|_error| Error::TlsHandshake)
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None, // TR-R-069: client-side handshake failure
+            })
     };
     match tokio::time::timeout(tcp.connect_timeout, attempt).await {
         Ok(result) => Ok(FrameTransport::new(result?)),
@@ -301,10 +329,90 @@ pub struct TlsServerConfig {
     pub client_certs: ClientCertPolicy,
 }
 
+tokio::task_local! {
+    /// The end-entity certificate `CapturingClientCertVerifier::verify_client_cert`
+    /// last saw during the current handshake (TR-R-069). Read back by
+    /// `TlsListener::handshake_framed` after a failed `accept`; stays
+    /// `None` when no client cert was offered, or under
+    /// `ClientCertPolicy::None` where the wrapper below is never
+    /// installed.
+    static REJECTED_CLIENT_CERT: RefCell<Option<CertificateDer<'static>>>;
+}
+
+/// Wraps a built `ClientCertVerifier`, cloning the offered end-entity
+/// certificate into `REJECTED_CLIENT_CERT` before delegating to `inner` —
+/// read back by `TlsListener::handshake_framed` after a failed handshake, to
+/// populate `Error::TlsHandshake.peer_cert` (TR-R-069). Built once, inside
+/// `server_config()` at `TlsListener::bind()`; never rebuilt per connection.
+#[derive(Debug)]
+struct CapturingClientCertVerifier {
+    inner: Arc<dyn ClientCertVerifier>,
+}
+
+impl ClientCertVerifier for CapturingClientCertVerifier {
+    fn offer_client_auth(&self) -> bool {
+        self.inner.offer_client_auth()
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        self.inner.client_auth_mandatory()
+    }
+
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        self.inner.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> core::result::Result<ClientCertVerified, rustls::Error> {
+        let result = self
+            .inner
+            .verify_client_cert(end_entity, intermediates, now);
+        if result.is_err() {
+            let _ = REJECTED_CLIENT_CERT.try_with(|cell| {
+                *cell.borrow_mut() = Some(end_entity.clone().into_owned());
+            });
+        }
+        result
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        self.inner.requires_raw_public_keys()
+    }
+}
+
 fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::ServerConfig, Error> {
     let builder = rustls::ServerConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
-        .map_err(|_error| Error::TlsHandshake)?;
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })?;
     let builder = match config.client_certs {
         ClientCertPolicy::Require(store) => {
             let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
@@ -312,14 +420,22 @@ fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::Server
                 provider(),
             )
             .build()
-            .map_err(|_error| Error::TlsHandshake)?;
-            builder.with_client_cert_verifier(verifier)
+            .map_err(|error| Error::TlsHandshake {
+                source: rustls::Error::General(error.to_string()),
+                peer_cert: None,
+            })?;
+            builder.with_client_cert_verifier(Arc::new(CapturingClientCertVerifier {
+                inner: verifier,
+            }))
         }
         ClientCertPolicy::None => builder.with_no_client_auth(),
     };
     builder
         .with_single_cert(config.cert_chain, config.key)
-        .map_err(|_error| Error::TlsHandshake)
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })
 }
 
 /// A TLS listener over TCP, wrapping a bound [`TcpListener`](crate::transport::TcpListener)
@@ -407,17 +523,27 @@ impl TlsListener {
         FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
         Option<CertificateDer<'static>>,
     )> {
-        let tls_stream = self
-            .acceptor
-            .accept(stream)
-            .await
-            .map_err(|_error| Error::TlsHandshake)?;
-        let cert = tls_stream
-            .get_ref()
-            .1
-            .peer_certificates()
-            .and_then(|certs| certs.first().cloned());
-        Ok((FrameTransport::new(tls_stream), cert))
+        let (result, rejected_cert) = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let result = self.acceptor.accept(stream).await;
+                let rejected_cert = REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take());
+                (result, rejected_cert)
+            })
+            .await;
+        match result {
+            Ok(tls_stream) => {
+                let cert = tls_stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .and_then(|certs| certs.first().cloned());
+                Ok((FrameTransport::new(tls_stream), cert))
+            }
+            Err(io_error) => Err(Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: rejected_cert,
+            }),
+        }
     }
 }
 
@@ -431,6 +557,27 @@ mod tests {
     /// TR-R-068 — the documented port for Modbus over TLS.
     fn ut_modbus_tls_port_is_802() {
         assert_eq!(MODBUS_TLS_PORT, 802);
+    }
+
+    #[test]
+    /// TR-R-067 — recovers the exact `rustls::Error` tokio-rustls boxed into
+    /// the `io::Error`.
+    fn ut_tls_error_source_recovers_the_boxed_rustls_error() {
+        let io_error =
+            std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
+        assert_eq!(tls_error_source(io_error), rustls::Error::DecryptError);
+    }
+
+    #[test]
+    /// TR-R-067 — a bare I/O failure with no boxed `rustls::Error` (e.g. an
+    /// EOF mid-handshake) falls back to `General`, not fabricated as some
+    /// other variant.
+    fn ut_tls_error_source_falls_back_to_general_when_no_source_is_boxed() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "tls handshake eof");
+        assert!(matches!(
+            tls_error_source(io_error),
+            rustls::Error::General(_)
+        ));
     }
 
     fn fixture(name: &str) -> Vec<u8> {
@@ -470,9 +617,10 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-067 — `Verify` rejects a server certificate issued by a CA the
-    /// root store does not trust, surfacing `Error::TlsHandshake` distinctly
-    /// (not merely `is_err()`).
+    /// TR-R-067, TR-R-069 — `Verify` rejects a server certificate issued by
+    /// a CA the root store does not trust, surfacing `Error::TlsHandshake`
+    /// distinctly (not merely `is_err()`), with `peer_cert: None` (a
+    /// client-side handshake failure).
     async fn ut_verify_rejects_a_cert_from_an_untrusted_issuer() {
         let (server_end, client_end) = duplex(4096);
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(no_client_auth_server_config()));
@@ -489,8 +637,17 @@ mod tests {
         let result = connector
             .connect(server_name(), client_end)
             .await
-            .map_err(|_error| Error::TlsHandshake);
-        assert_eq!(result.err(), Some(Error::TlsHandshake));
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None,
+            });
+        assert!(matches!(
+            result,
+            Err(Error::TlsHandshake {
+                peer_cert: None,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -510,7 +667,10 @@ mod tests {
         let result = connector
             .connect(server_name(), client_end)
             .await
-            .map_err(|_error| Error::TlsHandshake);
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None,
+            });
         assert!(result.is_ok());
         serving
             .await
@@ -611,5 +771,63 @@ mod tests {
             .await
             .expect("the server task finishes")
             .expect("the server accepts a trusted client cert");
+    }
+
+    #[tokio::test]
+    /// TR-R-069 — `CapturingClientCertVerifier::verify_client_cert` clones
+    /// the offered end-entity certificate into `REJECTED_CLIENT_CERT`,
+    /// readable inside the same task-local scope after the call.
+    async fn ut_capturing_client_cert_verifier_records_the_offered_cert() {
+        let real = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots("ca.crt").0),
+            provider(),
+        )
+        .build()
+        .expect("builds");
+        let wrapper = CapturingClientCertVerifier { inner: real };
+        let end_entity = load_pem_cert_chain(&fixture("unrelated-client.crt"))
+            .expect("parses")
+            .remove(0);
+
+        let captured = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let _ = wrapper.verify_client_cert(&end_entity, &[], UnixTime::now());
+                REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take())
+            })
+            .await;
+
+        assert_eq!(captured, Some(end_entity));
+    }
+
+    #[tokio::test]
+    /// TR-R-069 — a trusted client cert that verifies successfully is never
+    /// cached: `peer_cert` reports why a handshake failed, not merely that a
+    /// cert was offered, so a later unrelated failure must not surface an
+    /// accepted cert as if it had been rejected.
+    async fn ut_capturing_client_cert_verifier_does_not_record_an_accepted_cert() {
+        let real = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots("ca.crt").0),
+            provider(),
+        )
+        .build()
+        .expect("builds");
+        let wrapper = CapturingClientCertVerifier { inner: real };
+        let end_entity = load_pem_cert_chain(&fixture("client.crt"))
+            .expect("parses")
+            .remove(0);
+
+        let (result, captured) = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let result = wrapper.verify_client_cert(&end_entity, &[], UnixTime::now());
+                let captured = REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take());
+                (result, captured)
+            })
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "client.crt is signed by ca.crt, trusted here"
+        );
+        assert_eq!(captured, None);
     }
 }
