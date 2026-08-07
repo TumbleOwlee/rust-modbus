@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rust_modbus::{
-    Address, ClientCertPolicy, Connection, Error, MbapHeader, Quantity, RegisterValue, RequestPdu,
-    ResponsePdu, RootStore, Server, ServerCertVerification, Service, TcpConfig, TlsClientConfig,
-    TlsListener, TlsServerConfig, TransactionId, UnitId, connect_tls, load_pem_cert_chain,
-    load_pem_private_key,
+    Address, ClientCertPolicy, ClientIdentity, Connection, Error, MbapHeader, Quantity,
+    RegisterValue, RequestPdu, ResponsePdu, RootStore, Server, ServerCertVerification, Service,
+    TcpConfig, TlsClientConfig, TlsListener, TlsServerConfig, TransactionId, UnitId, connect_tls,
+    load_pem_cert_chain, load_pem_private_key,
 };
 
 fn ephemeral() -> SocketAddr {
@@ -196,6 +196,49 @@ async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established()
             .iter()
             .any(|event| matches!(event, Event::Connect(_))),
         "a failed handshake must never reach on_connect: {events:?}"
+    );
+
+    handle.shutdown().await;
+    let _ = serving.await.expect("the task finishes");
+}
+
+#[tokio::test]
+/// TR-R-069 -- a client certificate offered and rejected under
+/// `ClientCertPolicy::Require` (untrusted issuer) reaches
+/// `on_tls_handshake_failed` as `Error::TlsHandshake.peer_cert`, `Some`
+/// with the offered certificate.
+async fn it_on_tls_handshake_failed_carries_the_rejected_client_cert() {
+    let mut roots = RootStore::empty();
+    roots.add_pem(&fixture("ca.crt")).expect("parses");
+    let listener = TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::Require(roots)))
+        .await
+        .expect("binds");
+    let address = listener.local_addr().expect("reports its address");
+    let service = Recorder::default();
+    let server = Server::new(service.clone());
+    let handle = server.handle();
+    let serving = tokio::spawn(server.serve_tls::<rust_modbus::Tcp>(listener));
+
+    let cert_chain = load_pem_cert_chain(&fixture("unrelated-client.crt")).expect("parses");
+    let key = load_pem_private_key(&fixture("unrelated-client.key")).expect("parses");
+    let offered = cert_chain.first().cloned();
+    let mut config = trusting_ca();
+    config.client_identity = Some(ClientIdentity { cert_chain, key });
+    let _ = connect_tls(address, TcpConfig::default(), config).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while service.events().is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let events = service.events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::HandshakeFailed(_, Error::TlsHandshake { peer_cert, .. })
+                if *peer_cert == offered
+        )),
+        "peer_cert must carry the rejected client certificate: {events:?}"
     );
 
     handle.shutdown().await;
