@@ -22,6 +22,21 @@ use crate::transport::{FrameTransport, TcpConfig};
 /// as their plain-TCP counterparts.
 pub const MODBUS_TLS_PORT: u16 = 802;
 
+/// Recovers the `rustls::Error` a handshake failure's `io::Error` wraps —
+/// tokio-rustls maps every handshake failure through
+/// `io::Error::new(io::ErrorKind::InvalidData, rustls_error)`. A bare I/O
+/// failure carrying no such source (e.g. an EOF before any TLS byte is sent)
+/// falls back to `rustls::Error::General`, carrying the `io::Error`'s own
+/// message, so `source` is never fabricated as the wrong variant, only as a
+/// text fallback (TR-R-067).
+fn tls_error_source(io_error: std::io::Error) -> rustls::Error {
+    let message = io_error.to_string();
+    io_error
+        .into_inner()
+        .and_then(|inner| inner.downcast::<rustls::Error>().ok())
+        .map_or_else(|| rustls::Error::General(message), |boxed| *boxed)
+}
+
 /// The set of trusted root certificates a [`ServerCertVerification::Verify`]
 /// or [`ClientCertPolicy::Require`] checks against (TR-R-065, TR-R-066).
 #[derive(Debug, Clone)]
@@ -147,7 +162,10 @@ fn provider() -> Arc<CryptoProvider> {
 fn client_config(config: TlsClientConfig) -> core::result::Result<ClientConfig, Error> {
     let builder = ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
-        .map_err(|_error| Error::TlsHandshake)?;
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })?;
     let builder = match config.server_cert {
         ServerCertVerification::Verify(store) => builder.with_root_certificates(store.0),
         ServerCertVerification::DangerousDisableVerification => builder
@@ -157,7 +175,10 @@ fn client_config(config: TlsClientConfig) -> core::result::Result<ClientConfig, 
     match config.client_identity {
         Some(identity) => builder
             .with_client_auth_cert(identity.cert_chain, identity.key)
-            .map_err(|_error| Error::TlsHandshake),
+            .map_err(|error| Error::TlsHandshake {
+                source: error,
+                peer_cert: None,
+            }),
         None => Ok(builder.with_no_client_auth()),
     }
 }
@@ -271,7 +292,10 @@ pub async fn connect_tls_framed<F: Framing>(
         connector
             .connect(server_name, tcp_stream)
             .await
-            .map_err(|_error| Error::TlsHandshake)
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None, // TR-R-069: client-side handshake failure
+            })
     };
     match tokio::time::timeout(tcp.connect_timeout, attempt).await {
         Ok(result) => Ok(FrameTransport::new(result?)),
@@ -304,7 +328,10 @@ pub struct TlsServerConfig {
 fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::ServerConfig, Error> {
     let builder = rustls::ServerConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
-        .map_err(|_error| Error::TlsHandshake)?;
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })?;
     let builder = match config.client_certs {
         ClientCertPolicy::Require(store) => {
             let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
@@ -312,14 +339,20 @@ fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::Server
                 provider(),
             )
             .build()
-            .map_err(|_error| Error::TlsHandshake)?;
+            .map_err(|error| Error::TlsHandshake {
+                source: rustls::Error::General(error.to_string()),
+                peer_cert: None,
+            })?;
             builder.with_client_cert_verifier(verifier)
         }
         ClientCertPolicy::None => builder.with_no_client_auth(),
     };
     builder
         .with_single_cert(config.cert_chain, config.key)
-        .map_err(|_error| Error::TlsHandshake)
+        .map_err(|error| Error::TlsHandshake {
+            source: error,
+            peer_cert: None,
+        })
 }
 
 /// A TLS listener over TCP, wrapping a bound [`TcpListener`](crate::transport::TcpListener)
@@ -407,11 +440,12 @@ impl TlsListener {
         FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
         Option<CertificateDer<'static>>,
     )> {
-        let tls_stream = self
-            .acceptor
-            .accept(stream)
-            .await
-            .map_err(|_error| Error::TlsHandshake)?;
+        let tls_stream = self.acceptor.accept(stream).await.map_err(|io_error| {
+            Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None, // TR-R-069: wired to the offered cert in stage s2
+            }
+        })?;
         let cert = tls_stream
             .get_ref()
             .1
@@ -431,6 +465,27 @@ mod tests {
     /// TR-R-068 — the documented port for Modbus over TLS.
     fn ut_modbus_tls_port_is_802() {
         assert_eq!(MODBUS_TLS_PORT, 802);
+    }
+
+    #[test]
+    /// TR-R-067 — recovers the exact `rustls::Error` tokio-rustls boxed into
+    /// the `io::Error`.
+    fn ut_tls_error_source_recovers_the_boxed_rustls_error() {
+        let io_error =
+            std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
+        assert_eq!(tls_error_source(io_error), rustls::Error::DecryptError);
+    }
+
+    #[test]
+    /// TR-R-067 — a bare I/O failure with no boxed `rustls::Error` (e.g. an
+    /// EOF mid-handshake) falls back to `General`, not fabricated as some
+    /// other variant.
+    fn ut_tls_error_source_falls_back_to_general_when_no_source_is_boxed() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "tls handshake eof");
+        assert!(matches!(
+            tls_error_source(io_error),
+            rustls::Error::General(_)
+        ));
     }
 
     fn fixture(name: &str) -> Vec<u8> {
@@ -470,9 +525,10 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-067 — `Verify` rejects a server certificate issued by a CA the
-    /// root store does not trust, surfacing `Error::TlsHandshake` distinctly
-    /// (not merely `is_err()`).
+    /// TR-R-067, TR-R-069 — `Verify` rejects a server certificate issued by
+    /// a CA the root store does not trust, surfacing `Error::TlsHandshake`
+    /// distinctly (not merely `is_err()`), with `peer_cert: None` (a
+    /// client-side handshake failure).
     async fn ut_verify_rejects_a_cert_from_an_untrusted_issuer() {
         let (server_end, client_end) = duplex(4096);
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(no_client_auth_server_config()));
@@ -489,8 +545,17 @@ mod tests {
         let result = connector
             .connect(server_name(), client_end)
             .await
-            .map_err(|_error| Error::TlsHandshake);
-        assert_eq!(result.err(), Some(Error::TlsHandshake));
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None,
+            });
+        assert!(matches!(
+            result,
+            Err(Error::TlsHandshake {
+                peer_cert: None,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -510,7 +575,10 @@ mod tests {
         let result = connector
             .connect(server_name(), client_end)
             .await
-            .map_err(|_error| Error::TlsHandshake);
+            .map_err(|io_error| Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: None,
+            });
         assert!(result.is_ok());
         serving
             .await

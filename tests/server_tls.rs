@@ -66,7 +66,7 @@ fn response() -> ResponsePdu {
 }
 
 /// What a test service was asked, recorded in call order (SV-R-036).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Event {
     Connect(SocketAddr),
     Request,
@@ -146,9 +146,10 @@ async fn it_tls_client_against_tls_server_read_holding_registers() {
 }
 
 #[tokio::test]
-/// SV-R-056 -- a TLS handshake that fails (a required client cert is missing)
-/// never establishes a `Connection`; the service is notified through
-/// `on_tls_handshake_failed`, not `on_connect`.
+/// SV-R-056, TR-R-069 -- a TLS handshake that fails (a required client cert
+/// is missing) never establishes a `Connection`; the service is notified
+/// through `on_tls_handshake_failed`, not `on_connect`, with
+/// `peer_cert: None` (no client cert was offered).
 async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established() {
     let mut roots = RootStore::empty();
     roots.add_pem(&fixture("ca.crt")).expect("parses");
@@ -178,10 +179,17 @@ async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established()
 
     let events = service.events();
     assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::HandshakeFailed(_, Error::TlsHandshake))),
-        "the service must be notified of the failed handshake: {events:?}"
+        events.iter().any(|event| matches!(
+            event,
+            Event::HandshakeFailed(
+                _,
+                Error::TlsHandshake {
+                    peer_cert: None,
+                    ..
+                }
+            )
+        )),
+        "the service must be notified of the failed handshake, with no cert offered: {events:?}"
     );
     assert!(
         !events
