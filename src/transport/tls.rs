@@ -368,11 +368,15 @@ impl ClientCertVerifier for CapturingClientCertVerifier {
         intermediates: &[CertificateDer<'_>],
         now: UnixTime,
     ) -> core::result::Result<ClientCertVerified, rustls::Error> {
-        let _ = REJECTED_CLIENT_CERT.try_with(|cell| {
-            *cell.borrow_mut() = Some(end_entity.clone().into_owned());
-        });
-        self.inner
-            .verify_client_cert(end_entity, intermediates, now)
+        let result = self
+            .inner
+            .verify_client_cert(end_entity, intermediates, now);
+        if result.is_err() {
+            let _ = REJECTED_CLIENT_CERT.try_with(|cell| {
+                *cell.borrow_mut() = Some(end_entity.clone().into_owned());
+            });
+        }
+        result
     }
 
     fn verify_tls12_signature(
@@ -793,5 +797,37 @@ mod tests {
             .await;
 
         assert_eq!(captured, Some(end_entity));
+    }
+
+    #[tokio::test]
+    /// TR-R-069 — a trusted client cert that verifies successfully is never
+    /// cached: `peer_cert` reports why a handshake failed, not merely that a
+    /// cert was offered, so a later unrelated failure must not surface an
+    /// accepted cert as if it had been rejected.
+    async fn ut_capturing_client_cert_verifier_does_not_record_an_accepted_cert() {
+        let real = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots("ca.crt").0),
+            provider(),
+        )
+        .build()
+        .expect("builds");
+        let wrapper = CapturingClientCertVerifier { inner: real };
+        let end_entity = load_pem_cert_chain(&fixture("client.crt"))
+            .expect("parses")
+            .remove(0);
+
+        let (result, captured) = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let result = wrapper.verify_client_cert(&end_entity, &[], UnixTime::now());
+                let captured = REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take());
+                (result, captured)
+            })
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "client.crt is signed by ca.crt, trusted here"
+        );
+        assert_eq!(captured, None);
     }
 }
