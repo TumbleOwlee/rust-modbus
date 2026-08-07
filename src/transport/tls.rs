@@ -2,12 +2,16 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::net::SocketAddr;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme,
+};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -325,6 +329,79 @@ pub struct TlsServerConfig {
     pub client_certs: ClientCertPolicy,
 }
 
+tokio::task_local! {
+    /// The end-entity certificate `CapturingClientCertVerifier::verify_client_cert`
+    /// last saw during the current handshake (TR-R-069). Read back by
+    /// `TlsListener::handshake_framed` after a failed `accept`; stays
+    /// `None` when no client cert was offered, or under
+    /// `ClientCertPolicy::None` where the wrapper below is never
+    /// installed.
+    static REJECTED_CLIENT_CERT: RefCell<Option<CertificateDer<'static>>>;
+}
+
+/// Wraps a built `ClientCertVerifier`, cloning the offered end-entity
+/// certificate into `REJECTED_CLIENT_CERT` before delegating to `inner` —
+/// read back by `TlsListener::handshake_framed` after a failed handshake, to
+/// populate `Error::TlsHandshake.peer_cert` (TR-R-069). Built once, inside
+/// `server_config()` at `TlsListener::bind()`; never rebuilt per connection.
+#[derive(Debug)]
+struct CapturingClientCertVerifier {
+    inner: Arc<dyn ClientCertVerifier>,
+}
+
+impl ClientCertVerifier for CapturingClientCertVerifier {
+    fn offer_client_auth(&self) -> bool {
+        self.inner.offer_client_auth()
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        self.inner.client_auth_mandatory()
+    }
+
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        self.inner.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> core::result::Result<ClientCertVerified, rustls::Error> {
+        let _ = REJECTED_CLIENT_CERT.try_with(|cell| {
+            *cell.borrow_mut() = Some(end_entity.clone().into_owned());
+        });
+        self.inner
+            .verify_client_cert(end_entity, intermediates, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        self.inner.requires_raw_public_keys()
+    }
+}
+
 fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::ServerConfig, Error> {
     let builder = rustls::ServerConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
@@ -343,7 +420,9 @@ fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::Server
                 source: rustls::Error::General(error.to_string()),
                 peer_cert: None,
             })?;
-            builder.with_client_cert_verifier(verifier)
+            builder.with_client_cert_verifier(Arc::new(CapturingClientCertVerifier {
+                inner: verifier,
+            }))
         }
         ClientCertPolicy::None => builder.with_no_client_auth(),
     };
@@ -440,18 +519,27 @@ impl TlsListener {
         FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,
         Option<CertificateDer<'static>>,
     )> {
-        let tls_stream = self.acceptor.accept(stream).await.map_err(|io_error| {
-            Error::TlsHandshake {
-                source: tls_error_source(io_error),
-                peer_cert: None, // TR-R-069: wired to the offered cert in stage s2
+        let (result, rejected_cert) = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let result = self.acceptor.accept(stream).await;
+                let rejected_cert = REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take());
+                (result, rejected_cert)
+            })
+            .await;
+        match result {
+            Ok(tls_stream) => {
+                let cert = tls_stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .and_then(|certs| certs.first().cloned());
+                Ok((FrameTransport::new(tls_stream), cert))
             }
-        })?;
-        let cert = tls_stream
-            .get_ref()
-            .1
-            .peer_certificates()
-            .and_then(|certs| certs.first().cloned());
-        Ok((FrameTransport::new(tls_stream), cert))
+            Err(io_error) => Err(Error::TlsHandshake {
+                source: tls_error_source(io_error),
+                peer_cert: rejected_cert,
+            }),
+        }
     }
 }
 
@@ -679,5 +767,31 @@ mod tests {
             .await
             .expect("the server task finishes")
             .expect("the server accepts a trusted client cert");
+    }
+
+    #[tokio::test]
+    /// TR-R-069 — `CapturingClientCertVerifier::verify_client_cert` clones
+    /// the offered end-entity certificate into `REJECTED_CLIENT_CERT`,
+    /// readable inside the same task-local scope after the call.
+    async fn ut_capturing_client_cert_verifier_records_the_offered_cert() {
+        let real = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots("ca.crt").0),
+            provider(),
+        )
+        .build()
+        .expect("builds");
+        let wrapper = CapturingClientCertVerifier { inner: real };
+        let end_entity = load_pem_cert_chain(&fixture("unrelated-client.crt"))
+            .expect("parses")
+            .remove(0);
+
+        let captured = REJECTED_CLIENT_CERT
+            .scope(RefCell::new(None), async {
+                let _ = wrapper.verify_client_cert(&end_entity, &[], UnixTime::now());
+                REJECTED_CLIENT_CERT.with(|cell| cell.borrow_mut().take())
+            })
+            .await;
+
+        assert_eq!(captured, Some(end_entity));
     }
 }
