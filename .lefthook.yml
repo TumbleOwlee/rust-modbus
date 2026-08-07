@@ -32,6 +32,22 @@ pre-commit:
         fi
         exit 0
 
+    # Warning only: .claude/AGENTS.core.md is a manually-copied excerpt of AGENTS.md
+    # (marked by CORE:BEGIN/END comments there). Catches drift between the two.
+    agents-core-drift:
+      run: |
+        staged="$(git diff --cached --name-only)"
+        if printf '%s\n' "$staged" | grep -qE '^(AGENTS\.md|\.claude/AGENTS\.core\.md)$'; then
+          expected="$(awk '/<!-- CORE:BEGIN/{p=1} p{print} /<!-- CORE:END/{p=0}' AGENTS.md | grep -v 'CORE:BEGIN\|CORE:END' | grep -v '^$')"
+          actual="$(tail -n +3 .claude/AGENTS.core.md | grep -v '^$')"
+          if [ "$expected" != "$actual" ]; then
+            echo "note: AGENTS.md and .claude/AGENTS.core.md have drifted."
+            echo "      Re-copy the CORE:BEGIN/END sections of AGENTS.md into AGENTS.core.md."
+            echo "      This is a reminder, not a failure."
+          fi
+        fi
+        exit 0
+
     # Warning only: every test that pins observable behavior cites its requirement ID
     # in a doc comment directly below the #[test] attribute (see AGENTS.md).
     test-id-reminder:
