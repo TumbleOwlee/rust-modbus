@@ -38,7 +38,7 @@ Router for AI coding agents. Read first.
 Triggers on **behavior change, any size**: new public function, changed default, new error variant, any observable semantics. Not a behavior change: refactor, rename, perf-with-identical-semantics, tests, docs — no gates, just do it. Size sets stage count, never gate existence.
 
 - Replaces any generic workflow skill (`/workflow`) — don't run one. `docs/specs/` is already the PRD and design record.
-- Branch off `main`, never commit to `main`. `<type>/<slug>`, type ∈ {`feat`, `fix`, `docs`}.
+- Branch off `main`, never commit to `main`. `<type>/<slug>`, type ∈ {`feat`, `fix`, `docs`}. **Enforced, not just advisory:** the same `PreToolUse` hook (`.claude/scripts/hook-guard-shell.sh`) denies `git commit` while the checkout is on `main`, and `git push` targeting `main` — the safety net for an agent that missed the worktree step, not just a written rule.
 - **Gate 1 = orchestrator's own conversation with the user, not an agent's.** Abstract: existing spec + current goal, nothing about current code. No worktree/branch until gate 2 approved.
 - Gate 2 onward delegates to agents. **All agents Sonnet or better** — weaker models stop mid-plan, commit stubs as "green," report hanging tests as verified.
 - **Issue and PR belong to the orchestrator alone.** Neither planning nor implementing agent is ever told an issue number exists; orchestrator updates the issue itself if planning surfaces a spec change.
