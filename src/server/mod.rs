@@ -1525,6 +1525,55 @@ mod tests {
         serving.abort();
     }
 
+    #[tokio::test]
+    /// SV-R-020 — the unit filter applies over UDP exactly as over a
+    /// stream: a datagram for another unit draws no response and is never
+    /// dispatched.
+    async fn ut_configured_unit_ignores_other_units_over_udp() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(
+            Server::with_config(
+                Arc::clone(&service),
+                ServerConfig {
+                    unit: Some(UnitId(1)),
+                },
+            )
+            .serve_udp(socket),
+        );
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 2), &read_holding())
+            .await
+            .expect("sends to another unit");
+        client
+            .send_request(&header(2, 1), &read_holding())
+            .await
+            .expect("sends to the configured unit");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers()))
+        );
+
+        serving.abort();
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|e| matches!(e, Event::Request(..)))
+                .count(),
+            1,
+            "the request to unit 2 must never reach the service"
+        );
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     /// SV-R-054 — `ServerConfig` round-trips through JSON.
