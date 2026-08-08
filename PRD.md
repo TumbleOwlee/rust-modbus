@@ -71,12 +71,13 @@ The four combinations are all first-class and none is an afterthought:
   boundary is where the standard's own authority ends — byte order *within* a
   register is protocol and is implemented (FR-R-003, big-endian on the wire);
   order *across* registers is convention and stays the caller's.
-- **No transport beyond TCP, RTU serial, and RTU framing over TCP** (no UDP)
-  unless later specified. RTU-over-TCP is in scope because the installed base of
+- **No transport beyond TCP, RTU serial, RTU framing over TCP, and UDP** unless
+  later specified. RTU-over-TCP is in scope because the installed base of
   serial-to-Ethernet converters is large and a user who has bought one cannot
   choose what it speaks; it is supported on the honest terms its wire allows —
   a content-derived frame boundary, function codes whose length is not derivable
-  refused rather than guessed, and a link that does not survive a bad frame.
+  refused rather than guessed, and a link that does not survive a bad frame. UDP
+  support is MBAP framing only (TR-R-070); there is no raw-PDU-over-UDP mode.
 
 ## Users
 

@@ -12,8 +12,9 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::error::{Error, Result};
-use crate::frame::{ExceptionResponse, ResponsePdu, Tcp, UnitId};
+use crate::frame::{ExceptionResponse, Framing, MbapHeader, RequestPdu, ResponsePdu, Tcp, UnitId};
 use crate::transport::FrameTransport;
+use crate::transport::{recv_datagram_request, send_datagram_response_into};
 
 pub use framing::ServerFraming;
 pub use handle::ServerHandle;
@@ -179,6 +180,74 @@ where
         }
     }
 
+    /// Serve an already-bound UDP socket over Modbus TCP (MBAP) framing
+    /// (SV-R-057).
+    ///
+    /// Each inbound datagram is decoded and dispatched to
+    /// [`Service::on_request`] independently of every other, and its
+    /// response, if any, is sent to that datagram's source address. No
+    /// connection identity is assigned and neither [`Service::on_connect`]
+    /// nor [`Service::on_disconnect`] fires, since a datagram is not part of
+    /// a connection (SV-R-031): every notification instead carries the
+    /// sentinel [`UDP_CONNECTION`] (`ConnectionId(0)`), paired with the
+    /// datagram's source address where known, so a service can still see who
+    /// it answered without a synthesized identity.
+    ///
+    /// A datagram that fails to receive or decode is reported through
+    /// [`Service::on_error`] and costs nothing beyond itself (SV-R-058,
+    /// TR-R-074): unlike a stream, a UDP socket carries no boundary state a
+    /// bad datagram could desynchronize, so this never ends serving.
+    ///
+    /// Built on [`recv_datagram_request`](crate::transport::recv_datagram_request)
+    /// and [`send_datagram_response_into`](crate::transport::send_datagram_response_into)
+    /// (TR-R-072), fixed to [`Tcp`] here per the wire format this feature
+    /// supports (MBAP framing only, no raw-PDU-over-UDP mode).
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; the result is part of the signature so that a
+    /// future serving failure needs no API change.
+    pub async fn serve_udp(self, socket: tokio::net::UdpSocket) -> Result<()> {
+        let socket = Arc::new(socket);
+        let mut datagrams: JoinSet<()> = JoinSet::new();
+        let mut signal = self.shutdown.subscribe();
+        let mut buf = alloc::vec![0u8; Tcp::MAX_ADU_LEN];
+        loop {
+            let received = tokio::select! {
+                biased;
+                () = shutdown_requested(&mut signal) => {
+                    while datagrams.join_next().await.is_some() {}
+                    return Ok(());
+                }
+                received = recv_datagram_request::<Tcp>(&socket, &mut buf) => received,
+            };
+            match received {
+                Ok((header, request, peer)) => {
+                    let service = Arc::clone(&self.service);
+                    let config = self.config;
+                    let socket = Arc::clone(&socket);
+                    let conn = Connection::new(UDP_CONNECTION, Some(peer));
+                    datagrams.spawn(async move {
+                        serve_datagram(
+                            service.as_ref(),
+                            &config,
+                            &conn,
+                            &socket,
+                            peer,
+                            header,
+                            request,
+                        )
+                        .await;
+                    });
+                }
+                Err(error) => {
+                    let conn = Connection::new(UDP_CONNECTION, None);
+                    self.service.on_error(&conn, &error).await;
+                }
+            }
+        }
+    }
+
     /// Serve a TLS listener, handling every connection it accepts
     /// concurrently, for any framing (SV-R-007, SV-R-030, TR-R-063).
     ///
@@ -253,6 +322,15 @@ where
         ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))
     }
 }
+
+/// The `ConnectionId` every UDP-dispatched notification carries (SV-R-057).
+///
+/// A UDP datagram is not part of a connection, so no identity is allocated
+/// for it (SV-R-031 does not apply): every datagram uses this fixed value
+/// instead of one from [`Server::next_id`], whose `AtomicU64` starts at 1
+/// (`next_connection: AtomicU64::new(1)`, this file) and so never produces
+/// `0` — the two paths' identifiers can never collide.
+const UDP_CONNECTION: ConnectionId = ConnectionId(0);
 
 /// Run one connection from its first notification to its last (SV-R-032,
 /// SV-R-033).
@@ -357,6 +435,41 @@ where
     }
 }
 
+/// Answer one UDP datagram to completion (SV-R-057, SV-R-058).
+async fn serve_datagram<S>(
+    service: &S,
+    config: &ServerConfig,
+    conn: &Connection,
+    socket: &tokio::net::UdpSocket,
+    peer: core::net::SocketAddr,
+    header: MbapHeader,
+    request: RequestPdu,
+) where
+    S: Service,
+{
+    let unit = Tcp::unit(&header);
+    // Tcp::is_broadcast is always false (Modbus TCP has no broadcast, see
+    // server::framing), so only the unit filter applies here — unlike
+    // `exchange`'s stream loop, there is no broadcast branch to mirror.
+    if config.unit.is_some_and(|configured| configured != unit) {
+        return;
+    }
+    let function = request.function();
+    let response = match service.on_request(conn, unit, request).await {
+        Ok(response) => response,
+        Err(exception) => ResponsePdu::Exception(ExceptionResponse {
+            function,
+            exception,
+        }),
+    };
+    let mut out = alloc::vec::Vec::new();
+    if let Err(error) =
+        send_datagram_response_into::<Tcp>(socket, peer, &header, &response, &mut out).await
+    {
+        service.on_error(conn, &error).await;
+    }
+}
+
 /// Resolve as soon as shutdown has been requested (SV-R-041).
 ///
 /// `changed` alone would miss a request made *before* this receiver subscribed,
@@ -401,7 +514,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     enum Event {
         Connect(ConnectionId, Option<SocketAddr>),
-        Request(ConnectionId, UnitId, RequestPdu),
+        Request(ConnectionId, Option<SocketAddr>, UnitId, RequestPdu),
         Failed(Error),
         Disconnect(Disconnect),
     }
@@ -516,7 +629,12 @@ mod tests {
             unit: UnitId,
             request: RequestPdu,
         ) -> core::result::Result<ResponsePdu, ExceptionCode> {
-            self.push(Event::Request(conn.id(), unit, request.clone()));
+            self.push(Event::Request(
+                conn.id(),
+                conn.peer(),
+                unit,
+                request.clone(),
+            ));
             if let Some(overlap) = self.overlap.as_ref() {
                 overlap.wait().await;
             }
@@ -610,7 +728,7 @@ mod tests {
             service.events(),
             alloc::vec![
                 Event::Connect(ConnectionId(1), None),
-                Event::Request(ConnectionId(1), UnitId(0x11), read_holding()),
+                Event::Request(ConnectionId(1), None, UnitId(0x11), read_holding()),
                 Event::Disconnect(Disconnect::Closed),
             ]
         );
@@ -937,7 +1055,12 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(event, Event::Request(..)))
                 .collect::<Vec<_>>(),
-            alloc::vec![&Event::Request(ConnectionId(1), UnitId(1), read_holding())],
+            alloc::vec![&Event::Request(
+                ConnectionId(1),
+                None,
+                UnitId(1),
+                read_holding()
+            )],
             "the unit that does not match must never reach the service"
         );
     }
@@ -970,7 +1093,7 @@ mod tests {
                 .events()
                 .iter()
                 .filter_map(|event| match event {
-                    Event::Request(_, unit, _) => Some(*unit),
+                    Event::Request(_, _, unit, _) => Some(*unit),
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -1022,7 +1145,7 @@ mod tests {
                 .events()
                 .iter()
                 .filter_map(|event| match event {
-                    Event::Request(_, unit, _) => Some(*unit),
+                    Event::Request(_, _, unit, _) => Some(*unit),
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -1358,6 +1481,142 @@ mod tests {
                 .filter(|event| matches!(event, Event::Request(..)))
                 .count(),
             1
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-057 — a UDP datagram is dispatched to the service and answered to
+    /// its source address, with no `on_connect`/`on_disconnect` at all, unlike
+    /// every stream-based path (ut_serve_link_answers_a_request, above).
+    async fn ut_serve_udp_answers_a_request_with_no_connection_lifecycle() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve_udp(socket));
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 0x11), &read_holding())
+            .await
+            .expect("sends");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(1, 0x11), registers()))
+        );
+        let client_addr = client
+            .into_inner()
+            .local_addr()
+            .expect("reports its address");
+
+        assert_eq!(
+            service.events(),
+            alloc::vec![Event::Request(
+                ConnectionId(0),
+                Some(client_addr),
+                UnitId(0x11),
+                read_holding()
+            )]
+        );
+        serving.abort();
+    }
+
+    #[tokio::test]
+    /// SV-R-020 — the unit filter applies over UDP exactly as over a
+    /// stream: a datagram for another unit draws no response and is never
+    /// dispatched.
+    async fn ut_configured_unit_ignores_other_units_over_udp() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(
+            Server::with_config(
+                Arc::clone(&service),
+                ServerConfig {
+                    unit: Some(UnitId(1)),
+                },
+            )
+            .serve_udp(socket),
+        );
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 2), &read_holding())
+            .await
+            .expect("sends to another unit");
+        client
+            .send_request(&header(2, 1), &read_holding())
+            .await
+            .expect("sends to the configured unit");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers()))
+        );
+
+        serving.abort();
+        assert_eq!(
+            service
+                .events()
+                .iter()
+                .filter(|e| matches!(e, Event::Request(..)))
+                .count(),
+            1,
+            "the request to unit 2 must never reach the service"
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-058 — a datagram that fails to decode is reported and costs
+    /// nothing beyond itself: the next datagram, however malformed the first
+    /// one was, is answered normally.
+    async fn ut_udp_decode_failure_does_not_disturb_other_datagrams() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve_udp(socket));
+
+        let raw = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        raw.connect(addr).await.expect("connects");
+        // A well-formed MBAP header over function code 0, not a request
+        // (FR-R-014).
+        raw.send(&[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("sends garbage");
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("sends a good request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(1, 1), registers()))
+        );
+
+        serving.abort();
+        assert!(
+            service
+                .events()
+                .iter()
+                .any(|e| matches!(e, Event::Failed(Error::InvalidFunctionCode(0)))),
+            "the decode failure must be reported: {:?}",
+            service.events()
         );
     }
 

@@ -138,3 +138,17 @@ behavior, stated limitations).
 **TR-R-068** — The crate shall export `MODBUS_TLS_PORT: u16 = 802` (documentation constant only); no API applies it implicitly — `connect_tls`/the TLS listener each take an explicit `SocketAddr`, same as their plain-TCP counterparts.
 
 **TR-R-069** — On a server-side handshake rejecting a client certificate under `ClientCertPolicy::Require`, `Error::TlsHandshake.peer_cert` shall be `Some` with the offered certificate. `peer_cert` is `None` when no client cert was offered, when the failure has another cause, or on any client-side (`connect_tls`) handshake failure — capturing the rejected server cert there is out of scope.
+
+---
+
+## 8. UDP
+
+**TR-R-070** — The crate shall provide `UdpTransport`, a framing-generic transport over a UDP socket bound to one fixed peer address for its lifetime, sending and receiving exactly one ADU per datagram. Unlike `FrameTransport` (TR-R-002), it performs no partial-frame accumulation: each datagram is handed whole to `F::decode_request`/`F::decode_response` on receive and built whole by `F::encode_request_into`/`F::encode_response_into` before one `send` on transmit, since the OS already delimits the datagram boundary.
+
+**TR-R-071** — The crate shall provide `connect_udp`, taking a peer socket address and a `UdpConfig`, returning a `UdpTransport` bound to that peer. Associating a UDP socket with a peer performs no network handshake; TR-R-021's connect timeout does not apply to it.
+
+**TR-R-072** — The crate shall provide a UDP server entry point taking an already-bound UDP socket, usable with any framing, mirroring TR-R-024's framing-agnostic stance.
+
+**TR-R-073** — Sending on `UdpTransport` shall encode the ADU into the TR-R-043 reused buffer and pass it to one `send` call; an encoded ADU exceeding the OS's maximum UDP payload or the framing's `MAX_ADU_LEN` shall be refused before any I/O is attempted.
+
+**TR-R-074** — Receiving on `UdpTransport` shall yield exactly one ADU per datagram. A datagram that fails to decode shall surface as a typed error without affecting any later receive — a datagram transport has no stream state to desynchronize, so TR-R-005 and TR-R-044 do not apply to it.
