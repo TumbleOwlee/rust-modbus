@@ -156,4 +156,52 @@ mod tests {
             .await
             .expect("connects with no peer listening");
     }
+
+    #[tokio::test]
+    /// TR-R-073 — the transport owns one outgoing buffer, reused
+    /// datagram after datagram: cleared between sends, capacity retained once
+    /// grown to the framing maximum.
+    async fn ut_write_buffer_capacity_is_retained() {
+        use crate::frame::{Address, Quantity, Tcp};
+        use crate::{MbapHeader, RequestPdu, TransactionId, UnitId};
+
+        let peer = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        let peer_addr = peer.local_addr().expect("reports its address");
+        let mut client = connect_udp(peer_addr, UdpConfig::default())
+            .await
+            .expect("connects");
+
+        let header = MbapHeader {
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
+        };
+        let request = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+
+        client
+            .send_request(&header, &request)
+            .await
+            .expect("sends");
+        let capacity = client.outgoing.capacity();
+        assert!(
+            capacity >= Tcp::MAX_ADU_LEN,
+            "reserved {capacity} of {}",
+            Tcp::MAX_ADU_LEN
+        );
+        assert_eq!(client.outgoing.len(), 0);
+
+        client
+            .send_request(&header, &request)
+            .await
+            .expect("sends again");
+        assert_eq!(
+            client.outgoing.capacity(),
+            capacity,
+            "the second send reallocated the buffer"
+        );
+    }
 }
