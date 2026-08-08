@@ -82,9 +82,12 @@ owns the desynchronization that TR-R-041 describes.
   write by design — and that is the stream's business, not the transport's. The
   test that pins TR-R-043 therefore writes into a stream that allocates nothing,
   so the count it reports is ours.
-- **No UDP.** Modbus over UDP is not part of the specification, and a datagram
-  transport has different framing and retransmission semantics than the stream
-  the client and server are written against.
+- **UDP has no transport-level reliability.** `UdpTransport` and `Server::serve_udp`
+  (TR-R-070, SV-R-057) do no retransmission, acknowledgement, or sequencing of
+  datagrams — a lost or reordered datagram is invisible at this layer and relies
+  entirely on the client's own retry (`CL-R-*`) to recover. An ADU too large for
+  one UDP datagram is refused at encode time (TR-R-073); the transport does not
+  fragment or reassemble across multiple datagrams.
 - **RTU-over-TCP costs the whole link, not one frame.** The mode is supported
   (FR-R-145), but its boundary is derived from each frame's own content, so it is
   not self-locating (FR-R-150) and one corrupted or undecodable frame

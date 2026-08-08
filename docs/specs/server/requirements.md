@@ -117,3 +117,11 @@ limitations).
 **SV-R-053** — Serving a TCP listener shall be available for any framing, so that a listener accepting gateway-framed connections runs the same per-connection behavior as one accepting MBAP-framed connections (SV-R-007).
 
 **SV-R-054** — Behind the crate's `serde` feature, `ServerConfig` shall implement `serde::Serialize` and `serde::Deserialize` with no validation beyond its field types'.
+
+---
+
+## 7. UDP
+
+**SV-R-057** — The crate shall provide `Server::serve_udp`, taking an already-bound UDP socket. Each inbound datagram is dispatched to `Service`'s request-handling method (SV-R-003) independently and its response, if any, is sent to that datagram's source address. No connection identity is assigned and no connection lifecycle notification (SV-R-030–036) fires, since a UDP datagram is not part of a connection.
+
+**SV-R-058** — A request-handling failure on one datagram shall not affect handling of any other datagram (per-datagram counterpart to SV-R-035's per-connection isolation).
