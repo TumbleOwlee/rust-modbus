@@ -16,27 +16,32 @@ One type for every framing (CL-R-001), built from a transport that is already
 established (CL-R-002).
 
 ```rust
-pub struct Client<S, F> { /* transport, config, next transaction id, state */ }
+pub struct Client<T, F> { /* transport, config, next transaction id, state */ }
 
-impl<S, F> Client<S, F>
+pub trait ClientTransport<F: Framing> {
+    fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>> + Send;
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;
+}
+
+impl<T, F> Client<T, F>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    T: ClientTransport<F>,
     F: ClientFraming,
 {
-    pub fn new(transport: FrameTransport<S, F>) -> Self;
-    pub fn with_config(transport: FrameTransport<S, F>, config: ClientConfig) -> Self;
-    pub fn into_inner(self) -> FrameTransport<S, F>;
+    pub fn new(transport: T) -> Self;
+    pub fn with_config(transport: T, config: ClientConfig) -> Self;
+    pub fn into_inner(self) -> T;
     pub fn is_desynchronized(&self) -> bool;
     pub fn state(&self) -> ClientState;
 }
 
-pub type TcpClient = Client<TcpStream, Tcp>;
-pub type RtuOverTcpClient = Client<TcpStream, RtuOverTcp>;
-
+pub type TcpClient = Client<FrameTransport<TcpStream, Tcp>, Tcp>;
+pub type RtuOverTcpClient = Client<FrameTransport<TcpStream, RtuOverTcp>, RtuOverTcp>;
 #[cfg(feature = "rtu")]
-pub type RtuClient = Client<SerialStream, Rtu>;
+pub type RtuClient = Client<FrameTransport<SerialStream, Rtu>, Rtu>;
 #[cfg(feature = "rtu")]
-pub type AsciiClient = Client<SerialStream, Ascii>;
+pub type AsciiClient = Client<FrameTransport<SerialStream, Ascii>, Ascii>;
+pub type UdpClient = Client<UdpTransport<Tcp>, Tcp>;
 ```
 
 Every request method takes `&mut self`, which is how CL-R-005 is enforced: the

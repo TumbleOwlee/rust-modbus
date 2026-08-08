@@ -144,3 +144,11 @@ types, methods, configuration fields), [`edge-cases.md`](./edge-cases.md)
 **CL-R-078** — The blocking client shall report the state of CL-R-034 and CL-R-035 without entering its runtime, since CL-R-038 forbids reporting that blocks.
 
 **CL-R-079** — No blocking server shall be provided. A server is driven by inbound connections rather than by caller-issued calls, so the thread structure that would serve it is the caller's choice and not this crate's.
+
+---
+
+## 9. Transport genericity
+
+**CL-R-080** — `Client<T, F>` shall be generic over any `T: ClientTransport<F>` (TR-R-075), not only `FrameTransport<S, F>`. `TcpClient`, `RtuOverTcpClient`, `RtuClient`, and `AsciiClient` shall keep their existing public names and behavior under this change.
+
+**CL-R-081** — The crate shall provide `UdpClient = Client<UdpTransport<Tcp>, Tcp>`, mirroring `TcpClient`'s naming, so a caller can build a `Client`-compatible UDP client directly from `connect_udp`'s output.

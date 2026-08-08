@@ -33,6 +33,8 @@ behavior, stated limitations).
 
 **TR-R-043** — A transport shall encode each outgoing ADU into a single buffer that it owns and reuses across frames, clearing its contents but retaining its capacity between sends, so that sending in steady state performs no allocation. That buffer shall never exceed the framing's maximum ADU length.
 
+**TR-R-075** — The crate shall provide a `ClientTransport<F>` trait, exposing `send_request`/`recv_response` for a client-side exchange over framing `F`. It shall be implemented by `FrameTransport<S, F>` for any `S: AsyncRead + AsyncWrite + Unpin + Send` and by `UdpTransport<F>` (TR-R-070), so a client-side consumer can be written generically over either transport.
+
 ---
 
 ## 2. Framing boundaries
