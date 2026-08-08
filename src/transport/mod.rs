@@ -29,7 +29,9 @@ pub use serial::{Rs485Config, RtsPolarity};
 pub use tcp::{
     RtuOverTcpTransport, TcpConfig, TcpListener, TcpTransport, connect_tcp, connect_tcp_framed,
 };
-pub use udp::{UdpConfig, UdpTransport, connect_udp};
+pub use udp::{
+    UdpConfig, UdpTransport, connect_udp, recv_datagram_request, send_datagram_response_into,
+};
 
 #[cfg(feature = "rtu")]
 pub use rtu::{SerialStream, SerialTransport, open_serial};

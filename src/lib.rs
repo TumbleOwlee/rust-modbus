@@ -234,7 +234,7 @@ pub use transport::{
 pub use transport::{
     DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
     TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig, UdpTransport, connect_tcp,
-    connect_tcp_framed, connect_udp,
+    connect_tcp_framed, connect_udp, recv_datagram_request, send_datagram_response_into,
 };
 #[cfg(feature = "rs485")]
 pub use transport::{Rs485Config, RtsPolarity};

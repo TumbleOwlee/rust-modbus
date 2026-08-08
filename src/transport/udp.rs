@@ -144,6 +144,59 @@ pub async fn connect_udp(
     Ok(UdpTransport::new(socket))
 }
 
+/// Receive one request from any peer on an already-bound socket, for any
+/// framing (TR-R-072).
+///
+/// The framing-generic counterpart to [`UdpTransport::recv_request`], for a
+/// socket serving many peers rather than one — mirrors
+/// [`connect_tcp_framed`](crate::transport::connect_tcp_framed)'s
+/// framing-agnostic stance at the transport layer. `buf` is caller-owned and
+/// reused across calls (TR-R-043); it must hold at least `F::MAX_ADU_LEN`
+/// bytes for a maximum-size datagram to decode rather than truncate.
+///
+/// # Errors
+///
+/// Fails if the socket does, or if the datagram does not decode. Either
+/// failure leaves the socket fully usable for the next receive (TR-R-074).
+/// The source address is not reported on failure — only on a successful
+/// decode.
+pub async fn recv_datagram_request<F: Framing>(
+    socket: &UdpSocket,
+    buf: &mut [u8],
+) -> Result<(F::Header, RequestPdu, SocketAddr)> {
+    let (n, peer) = socket.recv_from(buf).await?;
+    let received = buf
+        .get(..n)
+        .expect("recv_from never reports more bytes than the buffer holds");
+    let (header, pdu) = F::decode_request(received)?;
+    Ok((header, pdu, peer))
+}
+
+/// Send one response to one peer on an already-bound socket, for any framing
+/// (TR-R-072).
+///
+/// The framing-generic counterpart to [`UdpTransport::send_response`]. `out`
+/// is caller-owned and reused across calls (TR-R-043, TR-R-073): cleared here
+/// before encoding, so its capacity survives the call.
+///
+/// # Errors
+///
+/// Fails if the PDU does not encode, if the encoded ADU exceeds
+/// `F::MAX_ADU_LEN` (refused before `send_to` — see Shared in the plan), or if
+/// the socket does.
+pub async fn send_datagram_response_into<F: Framing>(
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    header: &F::Header,
+    pdu: &ResponsePdu,
+    out: &mut Vec<u8>,
+) -> Result<()> {
+    out.clear();
+    F::encode_response_into(header, pdu, out)?;
+    socket.send_to(out, peer).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
