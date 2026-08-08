@@ -6,7 +6,9 @@
 //! nothing about what a consumer can name.
 #![cfg(feature = "rtu")]
 
-use rust_modbus::{Ascii, AsciiClient, Client, Rtu, RtuClient, SerialStream, SerialTransport};
+use rust_modbus::{
+    Ascii, AsciiClient, Client, FrameTransport, Rtu, RtuClient, SerialStream, SerialTransport,
+};
 
 /// A consumer's own type, generic over the stream — the shape that had no
 /// spellable RTU instantiation before this export existed.
@@ -16,7 +18,7 @@ use rust_modbus::{Ascii, AsciiClient, Client, Rtu, RtuClient, SerialStream, Seri
 /// compiler settles without a device.
 #[allow(dead_code)]
 struct Poller<S, F> {
-    _client: Client<S, F>,
+    _client: Client<FrameTransport<S, F>, F>,
 }
 
 #[test]
@@ -27,15 +29,19 @@ struct Poller<S, F> {
 fn it_serial_stream_names_the_type_in_the_public_signatures() {
     // Identity conversions in both directions. A distinct-but-similar type
     // would fail to compile here, which is the whole assertion.
-    fn _rtu_client_is_client_of_serial_stream(client: RtuClient) -> Client<SerialStream, Rtu> {
+    fn _rtu_client_is_client_of_serial_stream(
+        client: RtuClient,
+    ) -> Client<FrameTransport<SerialStream, Rtu>, Rtu> {
         client
     }
-    fn _client_of_serial_stream_is_rtu_client(client: Client<SerialStream, Rtu>) -> RtuClient {
+    fn _client_of_serial_stream_is_rtu_client(
+        client: Client<FrameTransport<SerialStream, Rtu>, Rtu>,
+    ) -> RtuClient {
         client
     }
     fn _ascii_client_is_client_of_serial_stream(
         client: AsciiClient,
-    ) -> Client<SerialStream, Ascii> {
+    ) -> Client<FrameTransport<SerialStream, Ascii>, Ascii> {
         client
     }
     fn _serial_transport_is_over_serial_stream(

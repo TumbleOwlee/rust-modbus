@@ -205,7 +205,7 @@ pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
 pub use client::{
     Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
-    RtuOverTcpClient, TcpClient, UnusableReason,
+    RtuOverTcpClient, TcpClient, UdpClient, UnusableReason,
 };
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use client::{SyncAsciiClient, SyncRtuClient};
@@ -232,9 +232,10 @@ pub use transport::{
 };
 #[cfg(feature = "std")]
 pub use transport::{
-    DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport, SerialConfig, StopBits,
-    TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig, UdpTransport, connect_tcp,
-    connect_tcp_framed, connect_udp, recv_datagram_request, send_datagram_response_into,
+    ClientTransport, DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport,
+    SerialConfig, StopBits, TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig,
+    UdpTransport, connect_tcp, connect_tcp_framed, connect_udp, recv_datagram_request,
+    send_datagram_response_into,
 };
 #[cfg(feature = "rs485")]
 pub use transport::{Rs485Config, RtsPolarity};

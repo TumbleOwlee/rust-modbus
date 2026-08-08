@@ -2,6 +2,7 @@
 //! TR-R-074).
 
 use alloc::vec::Vec;
+use core::future::Future;
 use core::marker::PhantomData;
 use std::net::SocketAddr;
 
@@ -9,6 +10,7 @@ use tokio::net::UdpSocket;
 
 use crate::error::Result;
 use crate::frame::{Framing, RequestPdu, ResponsePdu};
+use crate::transport::ClientTransport;
 
 /// How a UDP transport is set up (TR-R-071).
 ///
@@ -116,6 +118,20 @@ impl<F: Framing> UdpTransport<F> {
             .get(..n)
             .expect("recv never reports more bytes than the buffer holds");
         F::decode_response(received)
+    }
+}
+
+impl<F: Framing> ClientTransport<F> for UdpTransport<F> {
+    fn send_request(
+        &mut self,
+        header: &F::Header,
+        pdu: &RequestPdu,
+    ) -> impl Future<Output = Result<()>> {
+        UdpTransport::send_request(self, header, pdu)
+    }
+
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> {
+        UdpTransport::recv_response(self)
     }
 }
 
