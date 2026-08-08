@@ -121,10 +121,6 @@ pub type AsciiClient =
     Client<FrameTransport<tokio_serial::SerialStream, crate::frame::Ascii>, crate::frame::Ascii>;
 
 /// A client over a UDP socket, mirroring [`TcpClient`]'s naming (CL-R-081).
-///
-/// `#[allow(dead_code)]`: not yet re-exported at the crate root — that, and its
-/// citing test, land in stage s2.
-#[allow(dead_code)]
 pub type UdpClient = Client<UdpTransport<crate::frame::Tcp>, crate::frame::Tcp>;
 
 /// A Modbus client (CL-R-001).

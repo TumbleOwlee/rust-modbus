@@ -205,7 +205,7 @@ pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
 pub use client::{
     Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
-    RtuOverTcpClient, TcpClient, UnusableReason,
+    RtuOverTcpClient, TcpClient, UdpClient, UnusableReason,
 };
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use client::{SyncAsciiClient, SyncRtuClient};
