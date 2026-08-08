@@ -3,7 +3,7 @@
 # — exact spot to edit, no guessing which file an ID lives in. Batch every ID
 # needed into one call instead of one invocation per ID.
 #
-# Usage: sh scripts/extract-id.sh [spec-dir] <ID> [<ID> ...]
+# Usage: sh .claude/scripts/extract-id.sh [spec-dir] <ID> [<ID> ...]
 #   spec-dir defaults to docs/specs (autodetected relative to cwd)
 set -eu
 

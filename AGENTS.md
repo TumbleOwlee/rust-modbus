@@ -125,7 +125,7 @@ Not delegated — direct interactive conversation, orchestrator + user, about ex
 - Goal + normative changes only. No implementation detail (structure/files/functions/approach) — belongs to gate 2 and PR.
 - `##` sections, not prose: `## Background`/`## Why`, `## Scope`, `## Goal`, more as warranted. Compact enumerations, grouped ID ranges. Same shape for PR bodies.
 
-Neither planning nor implementing agent is ever told this issue exists. Orchestrator is sole owner, including later updates from gate 2 findings.
+Neither planning nor implementing agent is ever told this issue exists. Orchestrator is sole owner, including later updates from gate 2 findings. **Never edit the issue body after filing** — always `gh issue comment` to append the delta. An edited body destroys the history of what was originally filed vs. refined later; a comment preserves that trail and keeps the issue trackable.
 
 ### Gate 2 — implementation plan. Stop for approval.
 
@@ -280,7 +280,10 @@ Full set before done. `lefthook` enforces fast checks pre-commit; CI runs the fu
 - Edition 2024, stable toolchain (`rust-toolchain.toml`); MSRV bump is normative (non-functional requirement).
 - No bare `unwrap` outside tests; `expect("why this cannot fail")`.
 - Specs and AI-facing files (skills, agents, `AGENTS.md`/`CLAUDE.md` itself) stay concise and compact: facts only, no prose, no filler, zero information loss. Every word an agent must re-read on every load; padding is recurring cost, not one-time.
+- Never read a whole file when only part is needed, filter shell output before it lands in context — not after: `sh .claude/scripts/extract-section.sh` (see `list-sections.sh` first if the heading's unknown) or `sed -n '<start>,<end>p'` instead of `cat`/Read on a whole file; narrow `find`/`git show`/`git diff` at the shell instead of dumping the full output. Applies equally to the Read tool and a Bash `cat` — both cost the same context. **Enforced, not just advisory:** a `PreToolUse` hook (`.claude/scripts/hook-guard-shell.sh`) denies an unpiped `cat` of a markdown or large file, an unscoped `git show`/`git diff`, an unscoped `find -type f/d`, a raw `gh issue view`, and a raw `gh pr view`. A denial here means take the message's redirect, not retry the same command differently.
+- Read an existing PR's body/comments with `sh .claude/scripts/pr-view.sh <number>`, never raw `gh pr view` — sidesteps a GitHub Projects-Classic GraphQL bug (`repository.pullRequest.projectCards`) that errors on the raw command, with or without `--comments`.
 - **Every agent's output stays concise and compact** — chat responses, stage/final reports, commit messages, PR and issue bodies, review findings: say the same thing in fewer words whenever fewer words say it. No restating what a diff, file, or prior message already shows. Extra words for the same fact are a defect, not thoroughness — applies to every agent in this workflow, not just the files they write.
+- **No hard line wrap on anything posted externally** — issue bodies, PR bodies, PR/review comments. The host (GitHub) soft-wraps for display; a manually inserted `\n` mid-sentence survives rendering as a real line break and fragments the text. Paragraphs as single unbroken lines; only headings, list items, and code blocks get their own line.
 <!-- CORE:END conventions -->
 
 <!-- CORE:BEGIN scope -->
