@@ -12,6 +12,7 @@ mod serial;
 mod tcp;
 #[cfg(feature = "tls")]
 mod tls;
+mod udp;
 
 use core::marker::PhantomData;
 use core::time::Duration;
@@ -28,6 +29,7 @@ pub use serial::{Rs485Config, RtsPolarity};
 pub use tcp::{
     RtuOverTcpTransport, TcpConfig, TcpListener, TcpTransport, connect_tcp, connect_tcp_framed,
 };
+pub use udp::{UdpConfig, UdpTransport, connect_udp};
 
 #[cfg(feature = "rtu")]
 pub use rtu::{SerialStream, SerialTransport, open_serial};
