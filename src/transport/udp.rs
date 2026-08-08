@@ -97,7 +97,11 @@ impl<F: Framing> UdpTransport<F> {
     /// (TR-R-074).
     pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)> {
         let n = self.socket.recv(&mut self.incoming).await?;
-        F::decode_request(&self.incoming[..n])
+        let received = self
+            .incoming
+            .get(..n)
+            .expect("recv never reports more bytes than the buffer holds");
+        F::decode_request(received)
     }
 
     /// Receive one response from one datagram (TR-R-074).
@@ -107,7 +111,11 @@ impl<F: Framing> UdpTransport<F> {
     /// Fails if the socket does, or if the datagram does not decode.
     pub async fn recv_response(&mut self) -> Result<(F::Header, ResponsePdu)> {
         let n = self.socket.recv(&mut self.incoming).await?;
-        F::decode_response(&self.incoming[..n])
+        let received = self
+            .incoming
+            .get(..n)
+            .expect("recv never reports more bytes than the buffer holds");
+        F::decode_response(received)
     }
 }
 
@@ -182,10 +190,7 @@ mod tests {
             quantity: Quantity(3),
         };
 
-        client
-            .send_request(&header, &request)
-            .await
-            .expect("sends");
+        client.send_request(&header, &request).await.expect("sends");
         let capacity = client.outgoing.capacity();
         assert!(
             capacity >= Tcp::MAX_ADU_LEN,
@@ -203,5 +208,51 @@ mod tests {
             capacity,
             "the second send reallocated the buffer"
         );
+    }
+
+    #[tokio::test]
+    /// TR-R-074 — a datagram that fails to decode surfaces as a typed error and
+    /// costs nothing beyond itself: the next datagram, however malformed the
+    /// first one was, still decodes normally.
+    async fn ut_decode_failure_leaves_udp_transport_usable() {
+        use crate::error::Error;
+        use crate::frame::{Address, Quantity, Tcp};
+        use crate::{MbapHeader, RequestPdu, TransactionId, UnitId};
+
+        let server_socket = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        let server_addr = server_socket.local_addr().expect("reports its address");
+        let peer_socket = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        peer_socket.connect(server_addr).await.expect("connects");
+        let mut peer = UdpTransport::<Tcp>::new(peer_socket);
+        let mut server_side = UdpTransport::<Tcp>::new(server_socket);
+
+        // A well-formed MBAP prefix carrying function code 0, which is not a
+        // request (FR-R-014).
+        let garbage = [0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x11, 0x00];
+        let socket = peer.into_inner();
+        socket.send(&garbage).await.expect("sends garbage");
+        peer = UdpTransport::new(socket);
+
+        assert_eq!(
+            server_side.recv_request().await,
+            Err(Error::InvalidFunctionCode(0))
+        );
+
+        let header = MbapHeader {
+            transaction_id: TransactionId(2),
+            unit_id: UnitId(0x11),
+        };
+        let request = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        peer.send_request(&header, &request)
+            .await
+            .expect("sends a good request");
+        assert_eq!(server_side.recv_request().await, Ok((header, request)));
     }
 }
