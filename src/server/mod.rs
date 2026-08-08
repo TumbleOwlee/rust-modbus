@@ -1574,6 +1574,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    /// SV-R-058 — a datagram that fails to decode is reported and costs
+    /// nothing beyond itself: the next datagram, however malformed the first
+    /// one was, is answered normally.
+    async fn ut_udp_decode_failure_does_not_disturb_other_datagrams() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(Server::new(Arc::clone(&service)).serve_udp(socket));
+
+        let raw = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        raw.connect(addr).await.expect("connects");
+        // A well-formed MBAP header over function code 0, not a request
+        // (FR-R-014).
+        raw.send(&[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("sends garbage");
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("sends a good request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(1, 1), registers()))
+        );
+
+        serving.abort();
+        assert!(
+            service
+                .events()
+                .iter()
+                .any(|e| matches!(e, Event::Failed(Error::InvalidFunctionCode(0)))),
+            "the decode failure must be reported: {:?}",
+            service.events()
+        );
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     /// SV-R-054 — `ServerConfig` round-trips through JSON.
