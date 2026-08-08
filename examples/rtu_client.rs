@@ -16,7 +16,8 @@
 //!
 //! Opening a port is the only thing the `rtu` feature gates, and it is off by
 //! default so a TCP-only consumer acquires no serial dependency. RTU *framing*
-//! is always available — `Client<S, Rtu>` over any duplex stream works with the
+//! is always available — `Client` over any duplex stream (via `FrameTransport<S,
+//! Rtu>`) works with the
 //! feature off, which is how this crate's own tests exercise RTU without
 //! hardware.
 

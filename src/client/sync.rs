@@ -20,7 +20,7 @@ use crate::frame::{
     FileRecordWrite, Mask, MeiRequest, MeiResponse, Quantity, RegisterValue, RequestPdu,
     ResponsePdu, UnitId,
 };
-use crate::transport::{TcpConfig, connect_tcp_framed};
+use crate::transport::{FrameTransport, TcpConfig, connect_tcp_framed};
 
 /// A blocking Modbus client (CL-R-070).
 ///
@@ -31,7 +31,7 @@ use crate::transport::{TcpConfig, connect_tcp_framed};
 #[derive(Debug)]
 pub struct SyncClient<S, F> {
     /// The async client every method delegates to (CL-R-072).
-    client: Client<S, F>,
+    client: Client<FrameTransport<S, F>, F>,
     /// The runtime that drives it (CL-R-073). Owned, so a caller never supplies
     /// one and no runtime type appears in a signature (CL-R-074).
     runtime: Runtime,

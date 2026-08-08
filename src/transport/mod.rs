@@ -14,6 +14,7 @@ mod tcp;
 mod tls;
 mod udp;
 
+use core::future::Future;
 use core::marker::PhantomData;
 use core::time::Duration;
 
@@ -370,6 +371,50 @@ where
     }
 }
 
+/// A client-side exchange over some transport, named once so a consumer can be
+/// written generically over either `FrameTransport` or `UdpTransport`
+/// (TR-R-075).
+///
+/// Declared with an explicit `-> impl Future` return rather than `async fn`
+/// (`async fn` in a public trait is a clippy/rustc lint, `async_fn_in_trait`:
+/// auto-trait bounds on the future cannot be named). No `+ Send` is added,
+/// unlike `Service` (`src/server/service.rs`): `Service` futures are spawned
+/// per connection and so must be `Send`, but nothing in this crate spawns a
+/// `Client`'s own future — `Client::call` (and every typed method built on it)
+/// is always awaited inline, including from `SyncClient::call`'s
+/// `runtime.block_on`. A `+ Send` bound here would force `F: Send` and
+/// `F::Header: Sync` onto every generic-over-`F` caller (`SyncClient<S, F>`
+/// among them) for no consumer that needs it.
+pub trait ClientTransport<F: Framing> {
+    /// Send a request (TR-R-075).
+    fn send_request(
+        &mut self,
+        header: &F::Header,
+        pdu: &RequestPdu,
+    ) -> impl Future<Output = Result<()>>;
+
+    /// Receive a response (TR-R-075).
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>>;
+}
+
+impl<S, F> ClientTransport<F> for FrameTransport<S, F>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+    F: Framing,
+{
+    fn send_request(
+        &mut self,
+        header: &F::Header,
+        pdu: &RequestPdu,
+    ) -> impl Future<Output = Result<()>> {
+        FrameTransport::send_request(self, header, pdu)
+    }
+
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> {
+        FrameTransport::recv_response(self)
+    }
+}
+
 /// Bytes read from the stream at a time; one read covers the largest ADU any
 /// framing permits (FR-R-113).
 const READ_CHUNK: usize = 513;
@@ -386,11 +431,12 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
+    use crate::error::{Error, Result};
     use crate::frame::{MbapHeader, Tcp};
-    use crate::{Address, Quantity, RequestPdu, TransactionId, UnitId};
+    use crate::{Address, Quantity, RegisterValue, RequestPdu, ResponsePdu, TransactionId, UnitId};
     use alloc::vec;
     use tokio::io::{AsyncWriteExt, duplex};
+    use tokio::net::UdpSocket;
 
     /// The MBAP header of every fixture below: transaction 1, unit `0x11`.
     fn header() -> MbapHeader {
@@ -412,6 +458,62 @@ mod tests {
     const REQUEST_ADU: [u8; 12] = [
         0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
     ];
+
+    #[tokio::test]
+    /// TR-R-075 — `ClientTransport<F>` is implemented by both `FrameTransport`
+    /// and `UdpTransport`: one generic function, bound only on the trait,
+    /// round-trips a request/response pair through either, called once per
+    /// transport.
+    async fn ut_client_transport_is_implemented_by_frame_and_udp_transports() {
+        async fn exchange<T: ClientTransport<Tcp>>(
+            client: &mut T,
+        ) -> Result<(MbapHeader, ResponsePdu)> {
+            client.send_request(&header(), &read_holding()).await?;
+            client.recv_response().await
+        }
+
+        fn registers() -> ResponsePdu {
+            ResponsePdu::ReadHoldingRegisters {
+                registers: vec![RegisterValue(0x022B)],
+            }
+        }
+
+        // FrameTransport, over an in-memory duplex pair.
+        let (client_end, server_end) = duplex(1024);
+        let mut client = FrameTransport::<_, Tcp>::new(client_end);
+        let mut server = FrameTransport::<_, Tcp>::new(server_end);
+        let answering = tokio::spawn(async move {
+            let (received_header, request) = server.recv_request().await.expect("receives");
+            assert_eq!(request, read_holding());
+            server
+                .send_response(&received_header, &registers())
+                .await
+                .expect("responds");
+        });
+        assert_eq!(exchange(&mut client).await, Ok((header(), registers())));
+        answering.await.expect("the frame peer finishes");
+
+        // UdpTransport, over two loopback sockets bound to an ephemeral port.
+        let a = UdpSocket::bind("127.0.0.1:0").await.expect("binds");
+        let b = UdpSocket::bind("127.0.0.1:0").await.expect("binds");
+        a.connect(b.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+        b.connect(a.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+        let mut client = UdpTransport::<Tcp>::new(a);
+        let mut peer = UdpTransport::<Tcp>::new(b);
+        let answering = tokio::spawn(async move {
+            let (received_header, request) = peer.recv_request().await.expect("receives");
+            assert_eq!(request, read_holding());
+            peer.send_response(&received_header, &registers())
+                .await
+                .expect("responds");
+        });
+        assert_eq!(exchange(&mut client).await, Ok((header(), registers())));
+        answering.await.expect("the udp peer finishes");
+    }
 
     #[tokio::test]
     /// TR-R-043 — the transport owns one outgoing buffer, reused frame after

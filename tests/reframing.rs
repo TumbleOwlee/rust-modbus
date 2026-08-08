@@ -133,7 +133,7 @@ fn noisy_link<F>(
     to_server: usize,
     to_client: usize,
     corrupt: fn(&mut [u8]),
-) -> (Client<DuplexStream, F>, Recorder)
+) -> (Client<FrameTransport<DuplexStream, F>, F>, Recorder)
 where
     F: ClientFraming + ServerFraming + Send + 'static,
     F::Header: Send + Sync,

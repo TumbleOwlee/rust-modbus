@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rust_modbus::{
-    Address, Client, ClientConfig, Connection, Disconnect, Error, ExceptionCode, FunctionCode,
-    Quantity, RegisterValue, RequestPdu, ResponsePdu, Server, ServerConfig, Service, TcpConfig,
-    TcpListener, UnitId, connect_tcp,
+    Address, Client, ClientConfig, Connection, Disconnect, Error, ExceptionCode, FrameTransport,
+    FunctionCode, Quantity, RegisterValue, RequestPdu, ResponsePdu, Server, ServerConfig, Service,
+    TcpConfig, TcpListener, UnitId, connect_tcp,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -110,7 +110,9 @@ async fn start(config: ServerConfig) -> Running {
     }
 }
 
-async fn connect(address: SocketAddr) -> Client<tokio::net::TcpStream, rust_modbus::Tcp> {
+async fn connect(
+    address: SocketAddr,
+) -> Client<FrameTransport<tokio::net::TcpStream, rust_modbus::Tcp>, rust_modbus::Tcp> {
     Client::with_config(
         connect_tcp(address, TcpConfig::default())
             .await

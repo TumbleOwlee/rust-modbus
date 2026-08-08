@@ -6,7 +6,6 @@ mod sync;
 
 use core::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
 
 use crate::error::{Error, Result};
@@ -17,7 +16,7 @@ use crate::frame::{
     FileRecordWrite, FunctionCode, Mask, MeiRequest, MeiResponse, Quantity, RegisterValue,
     RequestPdu, ResponsePdu, TransactionId, UnitId,
 };
-use crate::transport::FrameTransport;
+use crate::transport::{ClientTransport, FrameTransport, UdpTransport};
 
 pub use framing::ClientFraming;
 #[cfg(all(feature = "sync", feature = "rtu"))]
@@ -98,22 +97,35 @@ pub enum ClientState {
 }
 
 /// A client over a TCP socket.
-pub type TcpClient = Client<tokio::net::TcpStream, crate::frame::Tcp>;
+pub type TcpClient =
+    Client<FrameTransport<tokio::net::TcpStream, crate::frame::Tcp>, crate::frame::Tcp>;
 
 /// A client over a TCP socket carrying RTU-over-stream framing, for a
 /// transparent serial gateway (TR-R-024).
 ///
 /// Unlike [`RtuClient`], this is not behind the `rtu` feature: it opens no
 /// serial port (TR-R-033).
-pub type RtuOverTcpClient = Client<tokio::net::TcpStream, crate::frame::RtuOverTcp>;
+pub type RtuOverTcpClient = Client<
+    FrameTransport<tokio::net::TcpStream, crate::frame::RtuOverTcp>,
+    crate::frame::RtuOverTcp,
+>;
 
 /// A client over a serial line in RTU framing.
 #[cfg(feature = "rtu")]
-pub type RtuClient = Client<tokio_serial::SerialStream, crate::frame::Rtu>;
+pub type RtuClient =
+    Client<FrameTransport<tokio_serial::SerialStream, crate::frame::Rtu>, crate::frame::Rtu>;
 
 /// A client over a serial line in ASCII framing.
 #[cfg(feature = "rtu")]
-pub type AsciiClient = Client<tokio_serial::SerialStream, crate::frame::Ascii>;
+pub type AsciiClient =
+    Client<FrameTransport<tokio_serial::SerialStream, crate::frame::Ascii>, crate::frame::Ascii>;
+
+/// A client over a UDP socket, mirroring [`TcpClient`]'s naming (CL-R-081).
+///
+/// `#[allow(dead_code)]`: not yet re-exported at the crate root — that, and its
+/// citing test, land in stage s2.
+#[allow(dead_code)]
+pub type UdpClient = Client<UdpTransport<crate::frame::Tcp>, crate::frame::Tcp>;
 
 /// A Modbus client (CL-R-001).
 ///
@@ -123,9 +135,9 @@ pub type AsciiClient = Client<tokio_serial::SerialStream, crate::frame::Ascii>;
 /// Every request takes `&mut self`, which is how CL-R-005 holds without a
 /// run-time flag: the borrow checker permits one exchange at a time.
 #[derive(Debug)]
-pub struct Client<S, F> {
-    /// The established transport this client speaks over (CL-R-002).
-    transport: FrameTransport<S, F>,
+pub struct Client<T, F> {
+    /// The established transport this client speaks over (CL-R-002, TR-R-075).
+    transport: T,
     /// How long a response may take (CL-R-030).
     config: ClientConfig,
     /// The identifier the next request will carry (CL-R-011).
@@ -134,21 +146,25 @@ pub struct Client<S, F> {
     /// desynchronization flag of CL-R-031 is one of its cases rather than a
     /// second value beside it, so the two cannot disagree (CL-R-034).
     state: ClientState,
+    /// Which framing this client speaks — `T` alone no longer names it now
+    /// that `T` ranges over any `ClientTransport`, not just `FrameTransport<_,
+    /// F>` (TR-R-075).
+    framing: core::marker::PhantomData<F>,
 }
 
-impl<S, F> Client<S, F>
+impl<T, F> Client<T, F>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    T: ClientTransport<F>,
     F: ClientFraming,
 {
     /// Build a client over an established transport, with the default
     /// configuration (CL-R-002).
-    pub fn new(transport: FrameTransport<S, F>) -> Self {
+    pub fn new(transport: T) -> Self {
         Self::with_config(transport, ClientConfig::default())
     }
 
     /// Build a client over an established transport.
-    pub fn with_config(transport: FrameTransport<S, F>, config: ClientConfig) -> Self {
+    pub fn with_config(transport: T, config: ClientConfig) -> Self {
         Self {
             transport,
             config,
@@ -156,6 +172,7 @@ where
             // matched against an unset field (CL-R-011).
             next_transaction: TransactionId(1),
             state: ClientState::Untried,
+            framing: core::marker::PhantomData,
         }
     }
 
@@ -163,7 +180,7 @@ where
     ///
     /// The only recovery from desynchronization is to discard the client; this
     /// is how the connection underneath can be inspected or replaced.
-    pub fn into_inner(self) -> FrameTransport<S, F> {
+    pub fn into_inner(self) -> T {
         self.transport
     }
 
@@ -796,7 +813,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
     /// A client and the transport a test server answers it on.
-    fn pair() -> (Client<DuplexStream, Tcp>, FrameTransport<DuplexStream, Tcp>) {
+    fn pair() -> (
+        Client<FrameTransport<DuplexStream, Tcp>, Tcp>,
+        FrameTransport<DuplexStream, Tcp>,
+    ) {
         let (client, server) = duplex(1024);
         (
             Client::new(FrameTransport::new(client)),
@@ -815,6 +835,40 @@ mod tests {
         ResponsePdu::ReadHoldingRegisters {
             registers: vec![RegisterValue(0x022B)],
         }
+    }
+
+    #[tokio::test]
+    /// CL-R-080 — `Client` is generic over any `ClientTransport`, proven here
+    /// with `UdpTransport` rather than `FrameTransport`: no code path in
+    /// `Client` may assume the transport wraps a byte stream.
+    async fn ut_client_is_generic_over_udp_transport() {
+        use crate::transport::UdpTransport;
+        use tokio::net::UdpSocket;
+
+        let a = UdpSocket::bind("127.0.0.1:0").await.expect("binds");
+        let b = UdpSocket::bind("127.0.0.1:0").await.expect("binds");
+        a.connect(b.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+        b.connect(a.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+
+        let mut client: Client<UdpTransport<Tcp>, Tcp> = Client::new(UdpTransport::new(a));
+        let mut peer = UdpTransport::<Tcp>::new(b);
+        let answering = tokio::spawn(async move {
+            let (header, request) = peer.recv_request().await.expect("receives");
+            assert_eq!(request, read_holding());
+            peer.send_response(&header, &registers())
+                .await
+                .expect("responds");
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(registers()))
+        );
+        answering.await.expect("the server task finishes");
     }
 
     #[tokio::test]
