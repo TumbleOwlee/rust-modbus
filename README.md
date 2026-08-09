@@ -11,8 +11,9 @@ Every combination below is first-class, and none is an afterthought:
 | **Server** (responder)   | ✅  |      ✅      |     ✅     | ✅  |
 
 Both roles sit on one shared frame layer, so a fix in encoding benefits both and
-the two cannot drift apart. Modbus **ASCII** framing is encodable and decodable
-too, but only as a frame format — see [Deliberate omissions](#deliberate-omissions).
+the two cannot drift apart. Modbus **ASCII** framing is a supported serial
+operating mode too, encodable, decodable, and directly operable over a real
+port.
 
 Two more transports build on the table above without adding a new role:
 **RTU-over-TCP**, for RS-485-to-Ethernet gateways that forward the raw RTU ADU
@@ -463,10 +464,6 @@ Honest about what this crate does not do, and why. Full reasoning in
   since the boundary comes out of each frame's own length fields. UDP support is
   MBAP framing only; there is no raw-PDU-over-UDP mode, and no transport-level
   retransmission, sequencing, or fragmentation handling.
-- **No ASCII *transport*.** ASCII framing exists at the frame layer for test
-  fixtures and for comparing frames against upstream tooling by eye. Operating a
-  serial port in ASCII mode is out of scope; the `AsciiClient` alias exists, but
-  ASCII is not a supported operating mode.
 - **No retry or reconnect in the client** (CL-R-033). A failed request surfaces
   the failure; what to do next depends on the installation, so it stays yours.
 - **No device-specific quirk layer.** Vendor deviations from the standard are the

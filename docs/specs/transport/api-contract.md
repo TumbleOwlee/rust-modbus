@@ -43,11 +43,15 @@ the whole of the difference between the roles at this layer (TR-R-002).
 
 `TransportConfig` carries what boundary detection needs and nothing else — the
 RTU inter-frame interval of TR-R-011, derived from a `SerialConfig` or set
-directly. TCP, RTU-over-TCP and ASCII boundaries are found in the bytes and
-ignore it (TR-R-048).
+directly, and the ASCII inter-character timeout of TR-R-076, fixed at 1 second
+by default and not derived from any serial parameter. TCP and RTU-over-TCP
+boundaries are found in the bytes and ignore both fields (TR-R-048).
 
 ```rust
-pub struct TransportConfig { pub inter_frame_interval: Duration }  // 2.005 ms
+pub struct TransportConfig {
+    pub inter_frame_interval: Duration,        // 2.005 ms
+    pub ascii_inter_character_timeout: Duration,  // 1 s
+}
 
 impl TransportConfig {
     pub fn from_serial(config: &SerialConfig) -> Result<Self>;
