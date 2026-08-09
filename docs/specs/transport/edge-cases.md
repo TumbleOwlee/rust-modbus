@@ -15,7 +15,7 @@ here so they are not mistaken for oversights and silently "fixed".
 | An RTU frame contains gaps shorter than 3.5 character times | Treated as one frame. The t1.5 intra-character rule is **not** enforced — see limitations |
 | An RTU idle gap on an in-memory pair | Detected exactly as on a real port: the rule is implemented as a read timeout, not as a UART property (TR-R-011) |
 | Bytes before an ASCII `:` | Discarded silently, up to the maximum ADU length, then an oversized-ADU error (TR-R-012, TR-R-013) |
-| An ASCII frame with no terminator, followed by silence | Read until the ADU maximum, then an oversized-ADU error; silence alone does not terminate an ASCII frame |
+| An ASCII frame with no terminator, followed by silence past the inter-character timeout | Abandoned: the timeout error (TR-R-076), the gathered bytes discarded (TR-R-044) |
 | A frame fails to decode | Exactly that frame's bytes are consumed, the error surfaces, and the transport stays usable (TR-R-005) |
 | An ADU claims or occupies more than `MAX_ADU_LEN` | Oversized-ADU error; the read buffer never grows past that bound (TR-R-013) |
 | A receive fails before the ADU was delimited, RTU or ASCII | The bytes gathered for the attempt are discarded, so the next receive starts at the next boundary the wire provides (TR-R-044) |
@@ -45,8 +45,9 @@ Both cases above are errors, because the receive methods return `Result` with no
 vacant success value; they are distinguished by variant, which is what TR-R-014
 requires.
 
-Sending imposes no timeout of its own, and receiving imposes none beyond the RTU
-inter-frame interval: per-request timing belongs to the client (TR-R-042). A
+Sending imposes no timeout of its own; receiving imposes none beyond RTU's
+inter-frame interval and ASCII's inter-character timeout (TR-R-076): per-request
+timing belongs to the client (TR-R-042). A
 caller wanting a bounded receive wraps it in `tokio::time::timeout` — and then
 owns the desynchronization that TR-R-041 describes.
 
@@ -99,12 +100,6 @@ owns the desynchronization that TR-R-041 describes.
   backend surfaces them, at best, as an I/O error covering an entire read. A byte
   corrupted in a way the UART detected is therefore indistinguishable here from
   one corrupted silently; both are caught by the CRC or LRC.
-- **ASCII framing has no inter-character timeout.** The specification gives ASCII
-  mode a configurable inter-character timeout, defaulting to one second, after
-  which a partial frame is abandoned. TR-R-012 terminates an ASCII frame on CR LF
-  and on the ADU maximum only, so a stalled sender holds the receive pending
-  until the caller's own timeout fires rather than being abandoned at one second.
-
 ## 6. TLS
 
 - **A server cert rejected by `Verify`** (untrusted issuer, expired, wrong name)

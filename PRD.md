@@ -35,9 +35,10 @@ The four combinations are all first-class and none is an afterthought:
   failure modes are types, not integers and strings.
 - **Testable by construction.** Transports sit behind a seam so client and server
   logic is exercised without hardware or fixed ports. Coverage floor of 80%.
-- **ASCII framing for testability.** Modbus ASCII is encodable and decodable at
-  the frame layer, so frames are readable in test fixtures and comparable against
-  upstream tooling by eye.
+- **ASCII as a supported serial operating mode.** Modbus ASCII is encodable and
+  decodable at the frame layer and operable directly over a real serial port —
+  including the specification's inter-character timeout (TR-R-076) — as an
+  alternative to RTU framing on the same physical line.
 - **Reachability through transparent gateways.** A device behind a converter that
   forwards bare RTU ADUs over a socket is addressable with the same client and
   server types as any other, with the mode's limits stated in the specification
@@ -51,9 +52,6 @@ The four combinations are all first-class and none is an afterthought:
   runtime and delegates to the async client, so the two cannot diverge. A
   blocking server is out of scope — the thread structure serving inbound
   connections is the consumer's choice.
-- **No ASCII *transport*.** ASCII framing exists at the frame layer for test
-  fixtures and interoperability checking; operating a serial port in ASCII mode
-  is not in scope unless later specified.
 - **No device-specific quirk layer.** Vendor deviations from the standard are the
   consumer's problem unless a requirement says otherwise.
 - **No data model at all.** The server declares a `Service` trait and ships no

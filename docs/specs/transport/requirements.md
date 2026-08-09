@@ -89,9 +89,11 @@ behavior, stated limitations).
 
 **TR-R-041** — Timeouts shall surface as a distinct timeout error naming what timed out. A transport that has timed out mid-ADU shall be treated as desynchronized and shall not be reused for a further receive.
 
-**TR-R-042** — The transport area shall not impose a response timeout. Per-request timing is the client's (`CL-R-*`); the only timeouts here are connect and RTU inter-frame silence.
+**TR-R-042** — The transport area shall not impose a response timeout. Per-request timing is the client's (`CL-R-*`); the only timeouts here are connect, RTU inter-frame silence, and ASCII's inter-character timeout (TR-R-076).
 
 **TR-R-048** — The inter-frame interval of TR-R-011 shall have no effect on RTU-over-stream framing, and no idle-gap heuristic shall be offered as a boundary rule over a socket. A gap in a TCP stream measures the network and the peer's buffering, not the bus: it would split a frame the network fragmented and join two the gateway coalesced.
+
+**TR-R-076** — Over ASCII, once the start byte has been seen, a receive that produces no further byte within a configurable inter-character timeout shall be abandoned: the accumulated bytes shall be discarded per TR-R-044 (ASCII is self-locating, FR-R-144) and surfaced as a distinct timeout error. The timeout shall default to 1 second, matching the Modbus specification, and shall not be derived from baud rate as TR-R-011's RTU interval is.
 
 ---
 

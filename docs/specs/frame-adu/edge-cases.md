@@ -41,11 +41,9 @@ input whatsoever.
   specification permits a configurable end-of-frame character in some
   implementations; that configurability is not offered, so a peer using a
   non-standard terminator will not interoperate.
-- **ASCII framing is provided at the frame layer only.** Whether a serial
-  transport can be *operated* in ASCII mode — including that mode's 1-second
-  inter-character timeout — is transport-area behavior and is not specified here.
-  ASCII exists here so frames are readable in test fixtures and comparable
-  against upstream tooling.
+- **ASCII framing is specified at the frame layer; operating a serial port in
+  ASCII mode, including its inter-character timeout, is transport-area behavior
+  (TR-R-076).** This area only encodes and decodes the ADU.
 - **Broadcast is recognised, not enforced.** FR-R-096 names address 0; the rule
   that a server sends no response to a broadcast is server-area behavior.
 - **RTU over a stream cannot carry every function code.** The boundary is derived
