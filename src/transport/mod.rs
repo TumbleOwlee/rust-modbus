@@ -45,14 +45,18 @@ pub use tls::{
 };
 
 /// What boundary detection needs that the framing itself cannot supply
-/// (TR-R-011).
+/// (TR-R-011, TR-R-076).
 ///
-/// Only RTU consults it: TCP and ASCII ADUs are self-delimiting.
+/// RTU consults `inter_frame_interval`, ASCII consults
+/// `ascii_inter_character_timeout`; TCP and RTU-over-TCP ADUs are
+/// self-delimiting and ignore both (TR-R-048).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransportConfig {
     /// Silence that ends an RTU frame.
     pub inter_frame_interval: Duration,
+    /// Silence, once an ASCII frame has begun, that abandons it (TR-R-076).
+    pub ascii_inter_character_timeout: Duration,
 }
 
 impl Default for TransportConfig {
@@ -60,6 +64,8 @@ impl Default for TransportConfig {
         Self {
             // The interval implied by the default serial line, 19200 8E1.
             inter_frame_interval: Duration::from_nanos(2_005_208),
+            // Fixed by the Modbus spec, not derived from baud rate (TR-R-076).
+            ascii_inter_character_timeout: Duration::from_secs(1),
         }
     }
 }
@@ -68,12 +74,16 @@ impl TransportConfig {
     /// Derive the inter-frame interval from a serial line's parameters
     /// (TR-R-011).
     ///
+    /// The ASCII inter-character timeout is not serial-derived (TR-R-076), so
+    /// it comes from the default regardless of line speed.
+    ///
     /// # Errors
     ///
     /// Fails if the configuration implies no character time.
     pub fn from_serial(config: &SerialConfig) -> Result<Self> {
         Ok(Self {
             inter_frame_interval: config.inter_frame_interval()?,
+            ascii_inter_character_timeout: TransportConfig::default().ascii_inter_character_timeout,
         })
     }
 }
@@ -259,7 +269,22 @@ where
                 searched = 0;
             }
             self.check_buffer_bound()?;
-            self.read_more(!self.buffer.is_empty()).await?;
+            if self.buffer.is_empty() {
+                // No start byte seen yet: unbounded, same as RTU waiting for a
+                // frame to begin (TR-R-042).
+                self.read_more(false).await?;
+            } else {
+                // Mid-frame: a stall here is abandoned, not waited out
+                // (TR-R-076).
+                tokio::time::timeout(
+                    self.config.ascii_inter_character_timeout,
+                    self.read_more(true),
+                )
+                .await
+                .map_err(|_elapsed| Error::Timeout {
+                    what: "ascii inter-character",
+                })??;
+            }
         }
     }
 
@@ -688,17 +713,18 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// TR-R-058 — `TransportConfig` round-trips through JSON, with
-    /// `inter_frame_interval` under the field name `inter_frame_interval_ns`
-    /// in whole nanoseconds. The default (2,005,208 ns, derived from 19200
-    /// 8E1) must survive exactly: a millisecond representation would round it
-    /// to 2 ms and silently change RTU framing timing.
+    /// TR-R-058 — `TransportConfig` round-trips through JSON, `Duration`
+    /// fields keeping `Duration`'s own serde representation. The
+    /// `inter_frame_interval` default (2,005,208 ns, derived from 19200 8E1)
+    /// must survive exactly: a millisecond representation would round it to
+    /// 2 ms and silently change RTU framing timing. `ascii_inter_character_timeout`
+    /// (TR-R-076) round-trips the same way.
     fn ut_transport_config_serde_roundtrip() {
         let config = TransportConfig::default();
         let text = serde_json::to_string(&config).expect("serializes");
         assert_eq!(
             text,
-            r#"{"inter_frame_interval":{"secs":0,"nanos":2005208}}"#
+            r#"{"inter_frame_interval":{"secs":0,"nanos":2005208},"ascii_inter_character_timeout":{"secs":1,"nanos":0}}"#
         );
         assert_eq!(
             serde_json::from_str::<TransportConfig>(&text).expect("deserializes"),
@@ -732,6 +758,39 @@ mod ascii_tests {
         bytes.extend_from_slice(REQUEST_ADU);
         peer.write_all(&bytes).await.expect("writes");
 
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-076 — once the ASCII start byte has begun a frame, a sender that
+    /// falls silent past the inter-character timeout is abandoned rather than
+    /// held forever; the gathered bytes are discarded (TR-R-044) so the next
+    /// receive starts clean.
+    async fn ut_ascii_inter_character_timeout_abandons_stalled_frame() {
+        let (mut peer, server) = duplex(64);
+        let config = TransportConfig {
+            ascii_inter_character_timeout: Duration::from_millis(50),
+            ..TransportConfig::default()
+        };
+        let mut server = FrameTransport::<_, Ascii>::with_config(server, config);
+
+        peer.write_all(b":110300")
+            .await
+            .expect("writes partial frame");
+
+        assert_eq!(
+            server.recv_request().await,
+            Err(Error::Timeout {
+                what: "ascii inter-character"
+            })
+        );
+
+        // The stalled attempt's bytes are gone; a fresh frame is received as if
+        // nothing had happened (TR-R-044).
+        peer.write_all(REQUEST_ADU).await.expect("writes a frame");
         assert_eq!(
             server.recv_request().await,
             Ok((UnitId(0x11), read_holding()))

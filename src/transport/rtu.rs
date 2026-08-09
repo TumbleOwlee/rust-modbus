@@ -288,4 +288,48 @@ mod tests {
         let opened = open_serial::<Rtu>(&path, config);
         assert!(opened.is_ok(), "expected success, got {opened:?}");
     }
+
+    #[test]
+    /// TR-R-076 — `open_serial::<Ascii>` applies the inter-character timeout
+    /// over a genuine serial stream, not only an in-memory duplex. The pty's
+    /// master end is written to directly, bypassing this crate's own
+    /// transport entirely, so this exercises the real backend's read path.
+    /// Uses the crate's default 1 s timeout (not shortened), so this test
+    /// necessarily takes about one real second.
+    fn ut_open_serial_ascii_applies_inter_character_timeout() {
+        use std::io::Write;
+
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+
+        use crate::error::Error;
+        use crate::frame::Ascii;
+
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let slave_path = ptsname_r(&master).expect("ptsname_r");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let _guard = runtime.enter();
+
+        let mut transport = open_serial::<Ascii>(&slave_path, SerialConfig::default())
+            .expect("pty opens like any serial device");
+
+        // Write only a partial ASCII frame from the master side, then fall
+        // silent past the (default, 1 s) inter-character timeout.
+        let master_fd: std::os::fd::OwnedFd = master.into();
+        let mut master_file: std::fs::File = master_fd.into();
+        master_file
+            .write_all(b":1103")
+            .expect("writes partial frame");
+
+        let received = runtime.block_on(transport.recv_request());
+        assert_eq!(
+            received,
+            Err(Error::Timeout {
+                what: "ascii inter-character"
+            })
+        );
+    }
 }
