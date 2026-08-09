@@ -1,18 +1,24 @@
 # Modbus Library in Rust
 
-Async Modbus **client** and **server** for Rust, over **Modbus TCP** and
-**Modbus RTU** serial.
+Async Modbus **client** and **server** for Rust, over **Modbus TCP**, **Modbus
+RTU** serial, **TLS** (encrypted TCP), and **UDP**.
 
-All four combinations are first-class, and none is an afterthought:
+Every combination below is first-class, and none is an afterthought:
 
-|                          | TCP | RTU serial |
-| ------------------------ | :-: | :--------: |
-| **Client** (initiator)   | ✅  |     ✅     |
-| **Server** (responder)   | ✅  |     ✅     |
+|                          | TCP | TLS over TCP | RTU serial | UDP |
+| ------------------------ | :-: | :----------: | :--------: | :-: |
+| **Client** (initiator)   | ✅  |      ✅      |     ✅     | ✅  |
+| **Server** (responder)   | ✅  |      ✅      |     ✅     | ✅  |
 
 Both roles sit on one shared frame layer, so a fix in encoding benefits both and
 the two cannot drift apart. Modbus **ASCII** framing is encodable and decodable
 too, but only as a frame format — see [Deliberate omissions](#deliberate-omissions).
+
+Two more transports build on the table above without adding a new role:
+**RTU-over-TCP**, for RS-485-to-Ethernet gateways that forward the raw RTU ADU
+over a socket (see [Transparent gateways](#transparent-gateways)), and
+**RS-485 kernel direction control** on Linux, for half-duplex serial adapters
+driven by `TIOCSRS485` (see [RS-485 direction control](#rs-485-direction-control)).
 
 - Async-first on [Tokio](https://tokio.rs). No thread pool, no blocking bridge.
 - **Typed, not stringly.** Addresses, quantities, register values and unit
@@ -43,20 +49,27 @@ too, but only as a frame format — see [Deliberate omissions](#deliberate-omiss
 cargo add rust-modbus
 # for RTU serial ports:
 cargo add rust-modbus --features rtu
+# for TLS:
+cargo add rust-modbus --features tls
 ```
 
 ### Feature flags
 
 | Feature | Default | What it gates |
 | --- | --- | --- |
-| `std` | **on** | Everything above the frame layer: `Client`, `Server`, `FrameTransport`, TCP. Pulls in Tokio. |
+| `std` | **on** | Everything above the frame layer: `Client`, `Server`, `FrameTransport`, TCP, UDP. Pulls in Tokio. |
 | `rtu` | off | Opening a real serial port: `open_serial`, `SerialTransport`, `RtuClient`, `AsciiClient`. Implies `std`. |
+| `rs485` | off | RS-485 kernel direction control (`TIOCSRS485`) on Linux. Implies `rtu`. |
 | `sync` | off | The blocking client: `SyncClient` and its aliases. Implies `std`. |
+| `tls` | off | TLS transport over TCP: `connect_tls`, `TlsListener`. Implies `std`. |
+| `serde` | off | `Serialize`/`Deserialize` on domain value types and configuration types. |
 
 `rtu` is off by default so a TCP-only consumer acquires no serial dependency. It
 gates *only opening a port* — RTU and ASCII **framing** are always available, so
-`Client<S, Rtu>` over any duplex stream (an in-memory pipe, a socket, a pty)
-works with the feature off. That is how this crate tests RTU in CI.
+`Client<FrameTransport<S, Rtu>, Rtu>` over any duplex stream (an in-memory pipe,
+a socket, a pty) works with the feature off. That is how this crate tests RTU in
+CI. UDP needs no feature beyond `std`: unlike a serial port, opening a socket
+carries no extra dependency.
 
 Turning `std` off leaves a `no_std` + `alloc` crate that still encodes and
 decodes every supported function code over every framing.
@@ -106,6 +119,68 @@ and the exception code.
 `Client::call` is the escape hatch: it hands back the response exactly as
 received, exception responses and echoes included, and is how a function code
 outside the named set is issued.
+
+### Over UDP
+
+`UdpClient` is `Client` built over `connect_udp`'s output instead of a TCP
+stream — every request method above works identically:
+
+```rust,no_run
+use rust_modbus::{Address, Client, Quantity, UdpClient, UdpConfig, UnitId, connect_udp};
+
+#[tokio::main]
+async fn main() -> rust_modbus::Result<()> {
+    let address = "127.0.0.1:502".parse().expect("a literal socket address");
+    let transport = connect_udp(address, UdpConfig::default()).await?;
+    let mut client: UdpClient = Client::new(transport);
+
+    let registers = client
+        .read_holding_registers(UnitId(1), Address(0), Quantity(4))
+        .await?;
+    println!("{registers:?}");
+    Ok(())
+}
+```
+
+UDP carries one ADU per datagram with no transport-level retransmission,
+sequencing, or fragmentation handling (TR-R-070) — the client's own response
+timeout is what notices a dropped datagram, same as it notices a slow TCP peer.
+
+### Over TLS
+
+Enable the `tls` feature. `connect_tls` performs a TCP connect, then a TLS
+handshake, then hands back a `FrameTransport` — everything past that point is
+the same `Client`:
+
+```rust,no_run
+use rust_modbus::{
+    Address, Client, Quantity, RootStore, ServerCertVerification, TcpConfig, TlsClientConfig,
+    UnitId, connect_tls,
+};
+
+#[tokio::main]
+async fn main() -> rust_modbus::Result<()> {
+    let address = "127.0.0.1:802".parse().expect("a literal socket address");
+    let tls_config = TlsClientConfig {
+        // `RootStore::default()` trusts the platform's native roots.
+        server_cert: ServerCertVerification::Verify(RootStore::default()),
+        client_identity: None,
+    };
+    let transport = connect_tls(address, TcpConfig::default(), tls_config).await?;
+    let mut client = Client::new(transport);
+
+    let registers = client
+        .read_holding_registers(UnitId(1), Address(0), Quantity(4))
+        .await?;
+    println!("{registers:?}");
+    Ok(())
+}
+```
+
+`TlsClientConfig::client_identity` presents a client certificate if the server
+requests one (`ClientCertPolicy::Require`). `ServerCertVerification` has no
+boolean spelling for "skip verification" — the escape hatch is named
+`DangerousDisableVerification` so it cannot pass unnoticed in a diff.
 
 ### Without async
 
@@ -224,6 +299,36 @@ Beyond `on_request`, `Service` has three optional hooks with sensible defaults:
 and `on_error`. `on_error` is separate because most per-request failures do not
 end the connection.
 
+### Over UDP
+
+`serve_udp` answers datagrams on an already-bound socket. There is no
+connection to accept — a UDP peer is stateless, so this reuses the same
+`Service` written above with no lifecycle hooks called:
+
+```rust
+let socket = tokio::net::UdpSocket::bind("127.0.0.1:502").await?;
+server.serve_udp(socket).await?;
+```
+
+### Over TLS
+
+Enable the `tls` feature. `TlsListener::bind` takes a `TlsServerConfig` (a
+certificate chain, its private key, and a `ClientCertPolicy`) and performs the
+handshake per accepted connection before yielding a `FrameTransport` — the rest
+of the accept loop is the plain-TCP one, hand-rolled or via `serve_link`:
+
+```rust
+use rust_modbus::{ClientCertPolicy, TlsListener, TlsServerConfig, load_pem_cert_chain, load_pem_private_key};
+
+let config = TlsServerConfig {
+    cert_chain: load_pem_cert_chain(include_bytes!("server.pem"))?,
+    key: load_pem_private_key(include_bytes!("server.key"))?,
+    client_certs: ClientCertPolicy::None,
+};
+let listener = TlsListener::bind("127.0.0.1:802".parse().expect("a literal address"), config).await?;
+let (transport, _peer_addr, _client_cert) = listener.accept().await?;
+```
+
 ## Examples
 
 In [`examples/`](./examples/), runnable with `cargo run --example <name>`:
@@ -301,6 +406,32 @@ direction, the function code, and the byte-count fields the frame carries
 
 No `rtu` feature is needed — nothing here opens a serial port.
 
+## RS-485 direction control
+
+Enable the `rs485` feature (implies `rtu`; Linux only). Many RS-485 adapters need
+the kernel told when to assert RTS for transmission — this configures that
+directly, with no application-driven GPIO hook:
+
+```rust
+use core::time::Duration;
+use rust_modbus::{Rs485Config, RtsPolarity, SerialConfig};
+
+let config = SerialConfig {
+    rs485: Some(Rs485Config {
+        rts_on_send: RtsPolarity::High,
+        delay_before_send: Duration::from_millis(0),
+        delay_after_send: Duration::from_millis(0),
+    }),
+    ..SerialConfig::default()
+};
+```
+
+`open_serial` issues the `TIOCSRS485` ioctl with this configuration before
+returning the transport, so a caller never holds one whose direction control
+silently failed to apply. On a non-Linux target, or a driver that does not
+implement the ioctl, opening fails with a typed error rather than returning a
+transport that would then hang mid-transmission.
+
 ## Deliberate omissions
 
 Honest about what this crate does not do, and why. Full reasoning in
@@ -325,11 +456,13 @@ Honest about what this crate does not do, and why. Full reasoning in
   caller-issued calls, so the thread structure that would serve it is yours to
   choose. The blocking client also has no `into_inner`, since the transport it
   would hand back needs a runtime the caller does not have.
-- **No transport beyond TCP and RTU serial.** No UDP. RTU-over-TCP *is*
-  supported (see [Transparent gateways](#transparent-gateways)), but a bad frame
-  there costs the link rather than the frame — the boundary comes out of each
-  frame's own length fields, so a frame that is wrong takes the next one's
-  position with it.
+- **No transport beyond TCP, RTU serial, RTU-over-TCP, UDP, and TLS-over-TCP**
+  unless later specified. RTU-over-TCP (see
+  [Transparent gateways](#transparent-gateways)) trades a per-frame boundary for
+  a per-connection one — a bad frame there costs the link, not just the frame,
+  since the boundary comes out of each frame's own length fields. UDP support is
+  MBAP framing only; there is no raw-PDU-over-UDP mode, and no transport-level
+  retransmission, sequencing, or fragmentation handling.
 - **No ASCII *transport*.** ASCII framing exists at the frame layer for test
   fixtures and for comparing frames against upstream tooling by eye. Operating a
   serial port in ASCII mode is out of scope; the `AsciiClient` alias exists, but
@@ -353,7 +486,7 @@ and in this README refer to it.
 | [`docs/specs/frame/`](./docs/specs/frame/) | PDU/ADU encoding, function codes, exception responses, CRC-16, MBAP header. |
 | [`docs/specs/client/`](./docs/specs/client/) | Request issuing, response matching, timeouts. |
 | [`docs/specs/server/`](./docs/specs/server/) | Request dispatch, the `Service` trait, exception generation. |
-| [`docs/specs/transport/`](./docs/specs/transport/) | TCP sockets, RTU serial ports, framing boundaries, connection lifecycle. |
+| [`docs/specs/transport/`](./docs/specs/transport/) | TCP, TLS, UDP sockets, RTU serial ports and RS-485 direction control, framing boundaries, connection lifecycle. |
 | [`docs/specs/non-functional-requirements.md`](./docs/specs/non-functional-requirements.md) | Platforms, `no_std`, security posture, testing conventions. |
 | [`PRD.md`](./PRD.md) | What the library is and is not for. |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | The module map, data flow, and concurrency model. |
