@@ -209,7 +209,7 @@ pub use client::{
     RtuOverTcpClient, TcpClient, UdpClient, UnusableReason,
 };
 #[cfg(feature = "pipeline")]
-pub use client::{PipelineConfig, PipelinedClient};
+pub use client::{PipelineConfig, PipelinedClient, PipelinedUdpClient};
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use client::{SyncAsciiClient, SyncRtuClient};
 #[cfg(feature = "sync")]

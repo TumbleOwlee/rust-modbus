@@ -22,7 +22,7 @@ use crate::transport::{ClientTransport, FrameTransport, UdpTransport};
 
 pub use framing::ClientFraming;
 #[cfg(feature = "pipeline")]
-pub use pipeline::{PipelineConfig, PipelinedClient};
+pub use pipeline::{PipelineConfig, PipelinedClient, PipelinedUdpClient};
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use sync::{SyncAsciiClient, SyncRtuClient};
 #[cfg(feature = "sync")]

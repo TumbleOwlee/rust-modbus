@@ -151,6 +151,13 @@ pub struct PipelinedClient<T = FrameTransport<tokio::net::TcpStream, Tcp>> {
     core: Arc<Core<T>>,
 }
 
+/// A pipelined client over UDP: each `send` is one datagram, and a response
+/// timeout fails only that one request rather than desynchronizing the whole
+/// handle (CL-R-091, CL-R-083) — `PipelineTransport::TIMEOUT_DESYNCS` is
+/// `false` for `UdpTransport<Tcp>`, the one behavioral difference from
+/// [`PipelinedClient`]'s default TCP instantiation.
+pub type PipelinedUdpClient = PipelinedClient<UdpTransport<Tcp>>;
+
 impl<T> Clone for PipelinedClient<T> {
     fn clone(&self) -> Self {
         Self {
@@ -809,5 +816,218 @@ mod tests {
             Ok(registers())
         );
         answering.await.expect("server task finishes");
+    }
+
+    /// A `PipelinedUdpClient` and the peer transport it exchanges with, two
+    /// loopback sockets `connect`ed to each other — same shape as
+    /// `ut_client_is_generic_over_udp_transport` (`src/client/mod.rs`).
+    async fn udp_pair() -> (PipelinedUdpClient, UdpTransport<Tcp>) {
+        udp_pair_with_config(PipelineConfig::default()).await
+    }
+
+    async fn udp_pair_with_config(
+        config: PipelineConfig,
+    ) -> (PipelinedUdpClient, UdpTransport<Tcp>) {
+        let client_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let peer_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let client_addr = client_socket.local_addr().expect("has an address");
+        let peer_addr = peer_socket.local_addr().expect("has an address");
+        client_socket.connect(peer_addr).await.expect("connects");
+        peer_socket.connect(client_addr).await.expect("connects");
+        (
+            PipelinedUdpClient::with_config(UdpTransport::new(client_socket), config),
+            UdpTransport::new(peer_socket),
+        )
+    }
+
+    #[tokio::test]
+    /// CL-R-091 — a response timeout on one in-flight `PipelinedUdpClient`
+    /// request fails only that request: the connection is not
+    /// desynchronized, and a concurrent, answered request still succeeds.
+    ///
+    /// Not run with a paused clock (unlike the TCP timeout tests above):
+    /// this test drives real UDP socket I/O, and tokio's auto-advance would
+    /// fast-forward the virtual clock past `response_timeout` before the
+    /// real localhost round trip below gets a chance to complete.
+    async fn ut_udp_timeout_fails_only_that_request() {
+        let (client, mut peer) = udp_pair_with_config(PipelineConfig {
+            response_timeout: Duration::from_millis(200),
+            ..PipelineConfig::default()
+        })
+        .await;
+        let c1 = client.clone();
+        let c2 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        let t2 = tokio::spawn(async move { c2.send(UnitId(0x11), read_holding()).await });
+
+        // Answer only one of the two; the other times out unanswered.
+        let (header, request) = peer.recv_request().await.expect("receives one of the two");
+        assert_eq!(request, read_holding());
+        peer.recv_request()
+            .await
+            .expect("receives the other, left unanswered");
+        peer.send_response(&header, &registers())
+            .await
+            .expect("answers the first only");
+
+        let results = [t1.await.expect("task"), t2.await.expect("task")];
+        assert!(
+            results.iter().any(|r| *r == Ok(registers())),
+            "the answered request should have succeeded: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| *r == Err(Error::Timeout { what: "response" })),
+            "the unanswered request should have timed out, not desynchronized: {results:?}"
+        );
+
+        // Not desynchronized: a third request still succeeds normally.
+        let c3 = client.clone();
+        let t3 = tokio::spawn(async move { c3.send(UnitId(0x11), read_holding()).await });
+        let (header, _) = peer.recv_request().await.expect("receives a third request");
+        peer.send_response(&header, &registers())
+            .await
+            .expect("answers");
+        assert_eq!(t3.await.expect("task"), Ok(registers()));
+    }
+
+    #[tokio::test]
+    /// CL-R-091 — an I/O failure (distinct from a timeout) still
+    /// desynchronizes the whole `PipelinedUdpClient` connection, same
+    /// posture as CL-R-031. A UDP socket connected to a peer whose port has
+    /// since gone away reports this as a `recv` error once the kernel
+    /// delivers the resulting ICMP port-unreachable back to us (Linux).
+    async fn ut_udp_io_failure_still_desynchronizes() {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let dead_peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let peer_addr = dead_peer.local_addr().expect("has an address");
+        socket.connect(peer_addr).await.expect("connects");
+        // The port is now unbound; a datagram sent to it triggers an ICMP
+        // port-unreachable, which a later `recv` on `socket` observes.
+        drop(dead_peer);
+
+        let client = PipelinedUdpClient::with_config(
+            UdpTransport::new(socket),
+            PipelineConfig {
+                response_timeout: Duration::from_secs(2),
+                ..PipelineConfig::default()
+            },
+        );
+
+        // The first send may resolve as the I/O failure itself or as a
+        // timeout, depending on how quickly the ICMP error is delivered —
+        // either way the connection ends up desynchronized.
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.send(UnitId(0x11), read_holding()),
+        )
+        .await;
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-089 — same rule as `PipelinedClient`'s TCP case, over real UDP
+    /// sockets: a datagram carrying a transaction id this handle never
+    /// allocated desynchronizes it.
+    async fn ut_udp_never_issued_id_desynchronizes() {
+        let (client, mut peer) = udp_pair().await;
+        let c1 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        peer.recv_request().await.expect("receives");
+
+        let bogus = MbapHeader {
+            transaction_id: TransactionId(9999),
+            unit_id: UnitId(0x11),
+        };
+        peer.send_response(&bogus, &registers())
+            .await
+            .expect("sends an unsolicited reply");
+
+        assert_eq!(t1.await.expect("task"), Err(Error::Desynchronized));
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
+    }
+
+    #[tokio::test]
+    /// CL-R-083 — `PipelinedUdpClient` is documented as
+    /// `PipelinedClient<UdpTransport<Tcp>>`: the alias resolves and the
+    /// constructor works unchanged for the UDP instantiation.
+    async fn ut_pipelined_udp_client_is_the_documented_alias() {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let peer_addr = socket.local_addr().expect("has an address");
+        socket.connect(peer_addr).await.expect("connects");
+        let _client: PipelinedUdpClient = PipelinedClient::new(UdpTransport::new(socket));
+    }
+
+    #[tokio::test]
+    /// CL-R-082, CL-R-083 — pipelining is genuinely concurrent: four
+    /// requests fire without waiting for each other, the peer answers them
+    /// in reverse order, and each caller still resolves with its own
+    /// matching response — proving dispatch is keyed by transaction id, not
+    /// FIFO arrival order.
+    async fn ut_udp_pipelining_is_genuinely_concurrent() {
+        let (client, mut peer) = udp_pair().await;
+
+        let mut tasks = Vec::new();
+        for i in 0..4u16 {
+            let c = client.clone();
+            tasks.push(tokio::spawn(async move {
+                c.send(
+                    UnitId(0x11),
+                    RequestPdu::ReadHoldingRegisters {
+                        address: Address(i),
+                        quantity: Quantity(1),
+                    },
+                )
+                .await
+            }));
+        }
+
+        let mut received = Vec::new();
+        for _ in 0..4 {
+            received.push(peer.recv_request().await.expect("receives"));
+        }
+        // Answer in reverse order: the last request received gets the first
+        // response sent.
+        for (header, request) in received.into_iter().rev() {
+            let RequestPdu::ReadHoldingRegisters { address, .. } = request else {
+                panic!("unexpected request shape");
+            };
+            peer.send_response(
+                &header,
+                &ResponsePdu::ReadHoldingRegisters {
+                    registers: vec![RegisterValue(address.0)],
+                },
+            )
+            .await
+            .expect("answers");
+        }
+
+        for (i, task) in tasks.into_iter().enumerate() {
+            let index = u16::try_from(i).expect("test uses fewer than u16::MAX requests");
+            assert_eq!(
+                task.await.expect("task"),
+                Ok(ResponsePdu::ReadHoldingRegisters {
+                    registers: vec![RegisterValue(index)],
+                }),
+                "request {i} must resolve with its own response, not another's"
+            );
+        }
     }
 }
