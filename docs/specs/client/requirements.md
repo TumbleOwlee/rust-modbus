@@ -184,3 +184,5 @@ types, methods, configuration fields), [`edge-cases.md`](./edge-cases.md)
 **CL-R-094** — `PipelinedClient` and `PipelinedUdpClient` shall be gated behind an off-by-default `pipeline` feature that implies `std`.
 
 **CL-R-095** — `ClientConfig` shall implement `From<ClientConfig> for PipelineConfig`, carrying over `response_timeout` and setting `max_in_flight` to CL-R-093's default, so a caller moving from `Client` to a pipelined type is not required to reconstruct configuration it already had.
+
+**CL-R-096** — `PipelinedClient` and `PipelinedUdpClient` shall expose `is_desynchronized(&self) -> bool`, reporting whether the handle currently refuses every request, mirroring CL-R-034.
