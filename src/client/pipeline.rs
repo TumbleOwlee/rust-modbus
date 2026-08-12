@@ -976,7 +976,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-082, CL-R-083 — pipelining is genuinely concurrent: four
+    /// CL-R-082 — pipelining is genuinely concurrent: four
     /// requests fire without waiting for each other, the peer answers them
     /// in reverse order, and each caller still resolves with its own
     /// matching response — proving dispatch is keyed by transaction id, not
