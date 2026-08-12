@@ -1,5 +1,7 @@
 # Modbus Library in Rust
 
+[![Claude](https://img.shields.io/badge/Claude-D97757?logo=claude&logoColor=fff)](#) [![check](https://github.com/TumbleOwlee/rust-modbus/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/TumbleOwlee/rust-modbus/actions/workflows/check.yml)
+
 Async Modbus **client** and **server** for Rust, over **Modbus TCP**, **Modbus
 RTU** serial, **TLS** (encrypted TCP), and **UDP**.
 
