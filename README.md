@@ -7,10 +7,10 @@ RTU** serial, **TLS** (encrypted TCP), and **UDP**.
 
 Every combination below is first-class, and none is an afterthought:
 
-|                          | TCP | TLS over TCP | RTU serial | UDP |
-| ------------------------ | :-: | :----------: | :--------: | :-: |
-| **Client** (initiator)   | ✅  |      ✅      |     ✅     | ✅  |
-| **Server** (responder)   | ✅  |      ✅      |     ✅     | ✅  |
+|                          | TCP (TLS/mTLS) | RTU serial | RTU over TCP (TLS/mTLS) | UDP |
+| ------------------------ | :-: | :--------: | :----------: | :-: |
+| **Client** (initiator)   | ✅  |     ✅     |     ✅      | ✅  |
+| **Server** (responder)   | ✅  |     ✅     |     ✅      | ✅  |
 
 Both roles sit on one shared frame layer, so a fix in encoding benefits both and
 the two cannot drift apart. Modbus **ASCII** framing is a supported serial
