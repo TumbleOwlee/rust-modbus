@@ -201,8 +201,6 @@ mod server;
 #[cfg(feature = "std")]
 mod transport;
 
-#[cfg(feature = "pipeline")]
-pub use client::PipelineConfig;
 #[cfg(feature = "rtu")]
 pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
@@ -210,6 +208,8 @@ pub use client::{
     Client, ClientConfig, ClientFraming, ClientState, CommEventCounter, CommEventLog,
     RtuOverTcpClient, TcpClient, UdpClient, UnusableReason,
 };
+#[cfg(feature = "pipeline")]
+pub use client::{PipelineConfig, PipelinedClient};
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use client::{SyncAsciiClient, SyncRtuClient};
 #[cfg(feature = "sync")]

@@ -1,6 +1,7 @@
 //! A UDP transport carrying one MBAP-framed ADU per datagram (TR-R-070 …
 //! TR-R-074).
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::marker::PhantomData;
@@ -118,6 +119,113 @@ impl<F: Framing> UdpTransport<F> {
             .get(..n)
             .expect("recv never reports more bytes than the buffer holds");
         F::decode_response(received)
+    }
+
+    /// Split into an owned, independently pollable read half and write half.
+    ///
+    /// Unlike [`FrameTransport::split`](crate::transport::FrameTransport::split),
+    /// this is not needed to avoid corrupting any partial-frame state — one UDP
+    /// datagram is one whole ADU, so a cancelled `recv` here is always safe to
+    /// retry (TR-R-074). It exists so `PipelineTransport` (`src/client/pipeline.rs`)
+    /// can treat both transports the same way: one shared socket handle, cloned
+    /// via `Arc` (`UdpSocket::send`/`recv` both take `&self`, so concurrent
+    /// reading and writing needs no splitting at the OS level, just two owners).
+    pub fn split(self) -> (UdpTransportReader<F>, UdpTransportWriter<F>) {
+        let socket = Arc::new(self.socket);
+        (
+            UdpTransportReader {
+                socket: Arc::clone(&socket),
+                incoming: self.incoming,
+                framing: PhantomData,
+            },
+            UdpTransportWriter {
+                socket,
+                outgoing: self.outgoing,
+                framing: PhantomData,
+            },
+        )
+    }
+}
+
+/// The read half of a [`UdpTransport`] produced by [`UdpTransport::split`]
+/// (TR-R-074).
+#[derive(Debug)]
+pub struct UdpTransportReader<F> {
+    socket: Arc<UdpSocket>,
+    incoming: Vec<u8>,
+    framing: PhantomData<F>,
+}
+
+impl<F: Framing> UdpTransportReader<F> {
+    /// Receive one request from one datagram (TR-R-074). See
+    /// [`UdpTransport::recv_request`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the socket does, or if the datagram does not decode.
+    pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)> {
+        let n = self.socket.recv(&mut self.incoming).await?;
+        let received = self
+            .incoming
+            .get(..n)
+            .expect("recv never reports more bytes than the buffer holds");
+        F::decode_request(received)
+    }
+
+    /// Receive one response from one datagram (TR-R-074). See
+    /// [`UdpTransport::recv_response`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the socket does, or if the datagram does not decode.
+    pub async fn recv_response(&mut self) -> Result<(F::Header, ResponsePdu)> {
+        let n = self.socket.recv(&mut self.incoming).await?;
+        let received = self
+            .incoming
+            .get(..n)
+            .expect("recv never reports more bytes than the buffer holds");
+        F::decode_response(received)
+    }
+}
+
+/// The write half of a [`UdpTransport`] produced by [`UdpTransport::split`]
+/// (TR-R-073).
+#[derive(Debug)]
+pub struct UdpTransportWriter<F> {
+    socket: Arc<UdpSocket>,
+    outgoing: Vec<u8>,
+    framing: PhantomData<F>,
+}
+
+impl<F: Framing> UdpTransportWriter<F> {
+    /// Send a request as one datagram (TR-R-073). See
+    /// [`UdpTransport::send_request`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode, if the encoded ADU exceeds the
+    /// framing's [`Framing::MAX_ADU_LEN`], or if the socket does.
+    pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
+        self.outgoing.clear();
+        F::encode_request_into(header, pdu, &mut self.outgoing)?;
+        self.socket.send(&self.outgoing).await?;
+        self.outgoing.clear();
+        Ok(())
+    }
+
+    /// Send a response as one datagram (TR-R-073). See
+    /// [`UdpTransport::send_response`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode, if the encoded ADU exceeds the
+    /// framing's [`Framing::MAX_ADU_LEN`], or if the socket does.
+    pub async fn send_response(&mut self, header: &F::Header, pdu: &ResponsePdu) -> Result<()> {
+        self.outgoing.clear();
+        F::encode_response_into(header, pdu, &mut self.outgoing)?;
+        self.socket.send(&self.outgoing).await?;
+        self.outgoing.clear();
+        Ok(())
     }
 }
 
