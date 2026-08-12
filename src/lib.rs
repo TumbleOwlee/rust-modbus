@@ -23,6 +23,7 @@
 //! |---|---|---|
 //! | `std` | **on** | Everything but the frame layer — `Client`, `Server`, `FrameTransport`. Pulls in Tokio. |
 //! | `rtu` | off | Opening a real serial port (`open_serial`, `SerialTransport`, [`SerialStream`], `RtuClient`, `AsciiClient`). Implies `std`. |
+//! | `pipeline` | off | `PipelinedClient`, `PipelinedUdpClient`. Implies `std`. |
 //!
 //! Turning `std` off leaves a `no_std` + `alloc` crate that still encodes and
 //! decodes every function code over every framing. Turning `rtu` on is only
@@ -200,6 +201,8 @@ mod server;
 #[cfg(feature = "std")]
 mod transport;
 
+#[cfg(feature = "pipeline")]
+pub use client::PipelineConfig;
 #[cfg(feature = "rtu")]
 pub use client::{AsciiClient, RtuClient};
 #[cfg(feature = "std")]
