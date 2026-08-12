@@ -241,6 +241,15 @@ impl<T: PipelineTransport> PipelinedClient<T> {
     ///
     /// # Errors
     ///
+    /// Whether this handle currently refuses every request (CL-R-096),
+    /// mirroring [`Client::is_desynchronized`](super::Client::is_desynchronized)
+    /// (CL-R-034). Answers from what the background task has already
+    /// observed: touches neither the transport nor the clock, and never
+    /// blocks.
+    pub fn is_desynchronized(&self) -> bool {
+        self.core.desynchronized.load(Ordering::Acquire)
+    }
+
     /// Fails with [`Error::TooManyInFlight`] at the limit, without writing to
     /// the transport. Otherwise as [`PipelinedClient::send`].
     pub async fn try_send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu> {
@@ -735,6 +744,35 @@ mod tests {
             client.send(UnitId(0x11), read_holding()).await,
             Err(Error::Desynchronized)
         );
+    }
+
+    #[tokio::test]
+    /// CL-R-096 — `is_desynchronized` reports `false` on a fresh handle and
+    /// `true` once desynchronization has occurred, without blocking or
+    /// touching the transport.
+    async fn ut_is_desynchronized_reports_current_state() {
+        let (client, mut server) = pipeline_pair();
+        assert!(!client.is_desynchronized());
+
+        let c1 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        server.recv_request().await.expect("receives");
+
+        let bogus = MbapHeader {
+            transaction_id: TransactionId(9999),
+            unit_id: UnitId(0x11),
+        };
+        server
+            .send_response(&bogus, &registers())
+            .await
+            .expect("sends an unsolicited reply");
+        t1.await
+            .expect("task")
+            .expect_err("desynchronized by the unsolicited reply");
+
+        assert!(client.is_desynchronized());
+        // A clone observes the same state (CL-R-085's shared background task).
+        assert!(client.clone().is_desynchronized());
     }
 
     #[tokio::test(start_paused = true)]
