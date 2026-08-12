@@ -1,6 +1,6 @@
 ---
 name: context-audit
-description: Analyze Claude Code session transcripts for repeated full-file reads, large re-derived tool output, and other context-cost waste; recommend small scripts (like .claude/scripts/extract-section.sh) that would cut it. Use when the user asks to "audit context cost", "reduce context bloat", "what scripts should we add", "analyze tool usage", or invokes /context-audit.
+description: Analyze Claude Code session transcripts for repeated full-file reads, large re-derived tool output, and other context-cost waste; recommend small scripts (like .claude/scripts/extract-section.sh) that would cut it, and where a waste pattern is a repeated bypass of an existing convention, propose a concrete fix (a PreToolUse guard hook, a convention edit) rather than a script alone. Use when the user asks to "audit context cost", "reduce context bloat", "what scripts should we add", "analyze tool usage", or invokes /context-audit.
 ---
 
 # Context cost audit
@@ -52,5 +52,14 @@ jq -s '
 ## 4. Report
 
 Ranked table: file/pattern, count, rough cost (`lines × occurrences` for Reads), proposed fix. One line each — no praise, no summary paragraph. Precede it with section 2b's per-tool ranking, unabridged — it's the map of where cost concentrates before the fix-level detail. `.claude/scripts/extract-section.sh` (if the project has it) already covers markdown-heading slicing — recommend *extending its use*, never a duplicate script, when the pattern already fits it. Only propose a new script when the data shape doesn't (JSON, log tail, CSV column, etc).
+
+## 5. Propose enforcement when the pattern is a bypassed convention
+
+A waste pattern that keeps recurring even though `AGENTS.md`/`AGENTS.core.md`'s Conventions already say not to do it (e.g. a raw Bash `cat` of a whole `.md`/large file when `extract-section.sh`/`sed -n`/Read already exist for it) is not a missing-script problem — the fix already exists and is being routed around. For each such pattern, propose as a numbered list, most-costly first:
+
+- **A `PreToolUse` hook** that detects the exact bypass shape at the tool-call boundary and denies it with a message pointing at the convention's intended path — same shape as `.claude/scripts/hook-guard-shell.sh` if the project has it (checked with `ls .claude/scripts/hook-guard-*.sh`; extend an existing guard script before adding a new one covering an overlapping shape). State the matcher (tool name), the detection condition, and the redirect message.
+- **A convention-wording gap**, if the bypass happened because the existing bullet didn't cover the observed shape (wrong tool, wrong file type, ambiguous wording) — quote the current bullet and the proposed edit.
+
+One line each: pattern → proposed fix → which file changes (`.claude/settings.json` + a new/edited `.claude/scripts/hook-guard-*.sh`, or the Conventions bullet). Do not create or edit anything in this skill — list the proposal, let the user approve which to build, same as section 4's script proposals.
 
 Do not create anything here. If the user approves a specific recommendation, draft that one script the same way `extract-section.sh` was built: POSIX `sh`, single file, one clear job, tested against a real sample before reporting done.
