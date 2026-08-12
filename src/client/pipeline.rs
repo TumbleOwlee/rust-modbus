@@ -236,11 +236,6 @@ impl<T: PipelineTransport> PipelinedClient<T> {
         self.dispatch(unit, request, permit).await
     }
 
-    /// Issue a request, failing immediately if `max_in_flight` is already
-    /// reached rather than waiting for a slot (CL-R-086).
-    ///
-    /// # Errors
-    ///
     /// Whether this handle currently refuses every request (CL-R-096),
     /// mirroring [`Client::is_desynchronized`](super::Client::is_desynchronized)
     /// (CL-R-034). Answers from what the background task has already
@@ -250,6 +245,11 @@ impl<T: PipelineTransport> PipelinedClient<T> {
         self.core.desynchronized.load(Ordering::Acquire)
     }
 
+    /// Issue a request, failing immediately if `max_in_flight` is already
+    /// reached rather than waiting for a slot (CL-R-086).
+    ///
+    /// # Errors
+    ///
     /// Fails with [`Error::TooManyInFlight`] at the limit, without writing to
     /// the transport. Otherwise as [`PipelinedClient::send`].
     pub async fn try_send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu> {
