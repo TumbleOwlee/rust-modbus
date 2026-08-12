@@ -20,6 +20,8 @@ here so they are not mistaken for oversights and silently "fixed".
 | A frame split in two by a spurious gap on RTU | Both halves fail their checksum, one per receive; each costs one frame and the link stays usable |
 | A late response to a timed-out request arrives during the next request | Discarded by CL-R-021 if it does not correspond — but on RTU/ASCII to the same unit it *does* correspond, which is why CL-R-031 refuses the next request outright |
 | Server replies to a broadcast (it should not) | The reply is never read by the broadcast request; it is left in the stream and desynchronizes the next exchange |
+| `PipelinedClient`/`PipelinedUdpClient`: response transaction id belongs to a request already resolved by timeout or desync | Discarded, no effect on any other in-flight request (CL-R-088) |
+| `PipelinedClient`/`PipelinedUdpClient`: response transaction id was never issued | Connection desynchronized, on both transports (CL-R-089) |
 
 The deadline is absolute and fixed when the write completes (CL-R-014). A stream
 of mismatched responses therefore cannot hold a request open indefinitely.
@@ -64,10 +66,6 @@ called on a client that has never been used and between requests without cost.
   by simply retrying. This is stricter than some Modbus clients, which drain and
   continue; draining cannot distinguish a late reply from the next reply, and
   guessing wrong returns one server's data as another's.
-- **One request in flight, no pipelining.** Modbus TCP permits several
-  outstanding transactions distinguished by transaction identifier. `&mut self`
-  forbids it (CL-R-005). Pipelining is a product decision with its own
-  matching, ordering, and cancellation semantics, not a mechanical extension.
 - **Echoed fields are not verified** (CL-R-064). A server that echoes the wrong
   address in a code 6 response yields `Ok(())`. Use `call` to inspect the echo.
 - **Broadcast writes cannot be confirmed.** CL-R-051 returns as soon as the
@@ -118,3 +116,28 @@ called on a client that has never been used and between requests without cost.
   threads' worth of drivers. A caller creating many should use the async client
   on one runtime instead.
 - **No blocking server** (CL-R-079).
+
+---
+
+## 6. Pipelined clients
+
+`PipelinedClient` (TCP) and `PipelinedUdpClient` (UDP) share one engine and
+diverge on exactly one rule: what a single request's timeout means for the
+other requests sharing the connection.
+
+| Condition | `PipelinedClient` (TCP) | `PipelinedUdpClient` (UDP) |
+|---|---|---|
+| One request times out | Desynchronizes the whole connection; every other in-flight request fails immediately (CL-R-090) | Fails only that request; the connection and other in-flight requests are unaffected (CL-R-091) |
+| I/O failure | Desynchronizes the whole connection (CL-R-031, CL-R-091) | Desynchronizes the whole connection (CL-R-031, CL-R-091) |
+
+The two disagree here because a timeout means something different per
+transport. TCP is a stream: a socket that produces sporadic long delays is
+itself suspect, in the same way an I/O failure or EOF is — CL-R-090 keeps the
+conservative posture CL-R-031/032 already apply to the single-request client.
+UDP is packetized and unreliable by design: one dropped or slow datagram is
+routine and says nothing about whether the socket can still send and receive
+the next one, so treating it as connection-wide would make ordinary packet
+loss disproportionately expensive to a caller. A response carrying a
+transaction id neither type ever issued (CL-R-089) is not subject to this
+split — it signals a genuine correctness violation on either transport, not
+network unreliability, so both desynchronize.

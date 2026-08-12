@@ -145,6 +145,7 @@ area (TR-R-011).
 | `std` | on | the whole client area (CL-R-004) |
 | `rtu` | off | `RtuClient` and `AsciiClient` only |
 | `sync` | off | the blocking client of §7 (CL-R-070) |
+| `pipeline` | off | `PipelinedClient` and `PipelinedUdpClient` of §8 (CL-R-094), implies `std` |
 
 The client is generic over the stream, so `Client<S, Rtu>` over an in-memory
 duplex pair works with the `rtu` feature off; only the alias naming a serial
@@ -158,8 +159,9 @@ Added by this area, all gated on `std`:
 |---|---|---|
 | `Exception` | `function: FunctionCode, exception: ExceptionCode` | CL-R-040, CL-R-041 |
 | `UnexpectedFunction` | `expected: FunctionCode, actual: FunctionCode` | CL-R-022 |
-| `Desynchronized` | — | CL-R-031, CL-R-032 |
+| `Desynchronized` | — | CL-R-031, CL-R-032; reused for CL-R-089, CL-R-090, CL-R-091 |
 | `BlockingInAsyncContext` | — | CL-R-075 |
+| `TooManyInFlight` | — | CL-R-086, gated on `pipeline` |
 
 A broadcast read (CL-R-052) is refused with the frame area's existing
 `IllegalValue { field: "broadcast read", value: 0 }` rather than a variant of its
@@ -268,3 +270,50 @@ back to a caller who has no runtime to drive it serves nobody (CL-R-074). A
 caller that wants the transport uses the async client.
 
 No blocking server exists (CL-R-079).
+
+## 8. Pipelined clients
+
+Gated on `pipeline` (CL-R-094). Coexist with `Client<T, F>`; TCP-only (CL-R-082,
+CL-R-083), no generic framing parameter.
+
+```rust
+pub struct PipelinedClient<T = FrameTransport<TcpStream, Tcp>> { /* Arc-shared handle */ }
+pub type PipelinedUdpClient = PipelinedClient<UdpTransport<Tcp>>;
+
+impl<T> Clone for PipelinedClient<T> { /* shares the background task (CL-R-085) */ }
+
+impl<T> PipelinedClient<T> {
+    pub fn new(transport: T) -> Self;
+    pub fn with_config(transport: T, config: PipelineConfig) -> Self;
+
+    pub async fn send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu>;
+    pub async fn try_send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu>;
+
+    pub fn is_desynchronized(&self) -> bool;
+}
+```
+
+`send` awaits a free in-flight slot at `max_in_flight` (CL-R-086); `try_send`
+fails immediately with `TooManyInFlight` instead. Neither returns
+`Option<ResponsePdu>` the way `Client::call` does — both types are fixed to
+`Tcp` framing, where broadcast is impossible, so the `None` arm `call` needs
+for RTU/ASCII broadcasts can never occur here.
+
+```rust
+pub struct PipelineConfig {
+    pub response_timeout: Duration,
+    pub max_in_flight: u16,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self { response_timeout: Duration::from_secs(1), max_in_flight: 16 } // CL-R-093
+    }
+}
+
+impl From<ClientConfig> for PipelineConfig { /* CL-R-095 */ }
+```
+
+The background task spawned by `new`/`with_config` (CL-R-084) owns the
+transport for the handle's lifetime and shuts down when the last clone drops
+(CL-R-085); there is no explicit shutdown method and no `into_inner`.

@@ -49,6 +49,10 @@ tls = [
     "dep:rustls-pki-types",
     "dep:rustls-native-certs",
 ]
+# CL-R-094. Off by default; gates the pipelined clients (`PipelinedClient`,
+# `PipelinedUdpClient`). Implies `std` because the background task needs
+# Tokio's runtime and channels, same reasoning as `sync`.
+pipeline = ["std", "dep:tokio-util"]
 
 # NF-R-004. Every dependency below carries `default-features = false` and names
 # only the features the crate actually uses. This table is where that
@@ -66,6 +70,10 @@ winnow = { version = "1.0.4", default-features = false, features = ["alloc", "as
 tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # The only maintained async serial port for Tokio; wraps `serialport`.
 tokio-serial = { version = "5.5", optional = true, default-features = false }
+# CL-R-090, CL-R-091. Per-transaction-id timeout tracking for the pipelined
+# clients: many outstanding deadlines that must be armed, cancelled, and fired
+# independently. `time` only, no extra transitive dependency.
+tokio-util = { version = "0.7", optional = true, default-features = false, features = ["time"] }
 # NF-R-025. `derive` and `alloc` only: no `std`, so the bare-metal build of
 # NF-R-003 stays `no_std` with `serde` enabled, and no serde data format
 # (`serde_json`, `serde_yaml`, ...) is pulled in transitively.

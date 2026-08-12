@@ -19,7 +19,7 @@ use core::marker::PhantomData;
 use core::time::Duration;
 
 use alloc::vec::Vec;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 
 use crate::error::{Error, Result};
 use crate::frame::{AduBoundary, Direction, Extent, Framing, RequestPdu, ResponsePdu};
@@ -31,7 +31,8 @@ pub use tcp::{
     RtuOverTcpTransport, TcpConfig, TcpListener, TcpTransport, connect_tcp, connect_tcp_framed,
 };
 pub use udp::{
-    UdpConfig, UdpTransport, connect_udp, recv_datagram_request, send_datagram_response_into,
+    UdpConfig, UdpTransport, UdpTransportReader, UdpTransportWriter, connect_udp,
+    recv_datagram_request, send_datagram_response_into,
 };
 
 #[cfg(feature = "rtu")]
@@ -146,7 +147,7 @@ where
     pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
         self.outgoing.clear();
         F::encode_request_into(header, pdu, &mut self.outgoing)?;
-        self.send().await
+        shared::send(&mut self.stream, &mut self.outgoing).await
     }
 
     /// Send a response (TR-R-003).
@@ -157,7 +158,7 @@ where
     pub async fn send_response(&mut self, header: &F::Header, pdu: &ResponsePdu) -> Result<()> {
         self.outgoing.clear();
         F::encode_response_into(header, pdu, &mut self.outgoing)?;
-        self.send().await
+        shared::send(&mut self.stream, &mut self.outgoing).await
     }
 
     /// Receive one request (TR-R-004).
@@ -167,7 +168,14 @@ where
     /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
     /// does not decode.
     pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)> {
-        let adu = self.recv_adu(Direction::Request).await?;
+        let adu = shared::recv_adu::<S, F>(
+            &mut self.stream,
+            &mut self.buffer,
+            &self.config,
+            &mut self.receiving,
+            Direction::Request,
+        )
+        .await?;
         F::decode_request(&adu)
     }
 
@@ -178,107 +186,274 @@ where
     /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
     /// does not decode.
     pub async fn recv_response(&mut self) -> Result<(F::Header, ResponsePdu)> {
-        let adu = self.recv_adu(Direction::Response).await?;
+        let adu = shared::recv_adu::<S, F>(
+            &mut self.stream,
+            &mut self.buffer,
+            &self.config,
+            &mut self.receiving,
+            Direction::Response,
+        )
+        .await?;
         F::decode_response(&adu)
     }
 
-    /// Write every byte of an ADU (TR-R-003).
-    async fn send(&mut self) -> Result<()> {
-        self.stream.write_all(&self.outgoing).await?;
-        self.stream.flush().await?;
-        // The bytes are gone; the capacity stays (TR-R-043).
-        self.outgoing.clear();
-        Ok(())
+    /// Split into an owned, independently pollable read half and write half
+    /// (TR-R-002's "anything async and duplex" now includes the two-task
+    /// shape a background pipeline needs).
+    ///
+    /// A caller that races receiving against writing in one `select!` loop —
+    /// `PipelinedClient`'s background task (`src/client/pipeline.rs`) is the
+    /// one in this crate — cannot safely call `recv_response`/`send_request`
+    /// on a shared `&mut FrameTransport`: `select!` polls every branch once
+    /// per pass even before picking a winner, and a `recv_response` call that
+    /// gets polled and then dropped (its branch lost) leaves `receiving`
+    /// latched `true` forever (TR-R-041), so every later receive fails
+    /// immediately rather than actually waiting — livelocking the loop. A
+    /// [`FrameTransportReader`] held across loop iterations as one
+    /// never-cancelled future sidesteps this; its own send-independent
+    /// [`FrameTransportWriter`] lets the same loop write concurrently.
+    pub fn split(self) -> (FrameTransportReader<S, F>, FrameTransportWriter<S, F>) {
+        let (read_half, write_half) = tokio::io::split(self.stream);
+        (
+            FrameTransportReader {
+                stream: read_half,
+                buffer: self.buffer,
+                config: self.config,
+                receiving: self.receiving,
+                framing: PhantomData,
+            },
+            FrameTransportWriter {
+                stream: write_half,
+                outgoing: self.outgoing,
+                framing: PhantomData,
+            },
+        )
     }
+}
+
+/// The read half of a [`FrameTransport`] produced by [`FrameTransport::split`]
+/// (TR-R-004).
+#[derive(Debug)]
+pub struct FrameTransportReader<S, F> {
+    stream: ReadHalf<S>,
+    buffer: Vec<u8>,
+    config: TransportConfig,
+    receiving: bool,
+    framing: PhantomData<F>,
+}
+
+impl<S, F> FrameTransportReader<S, F>
+where
+    S: AsyncRead + Send,
+    F: Framing,
+{
+    /// Receive one request (TR-R-004). See [`FrameTransport::recv_request`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
+    /// does not decode.
+    pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)> {
+        let adu = shared::recv_adu::<ReadHalf<S>, F>(
+            &mut self.stream,
+            &mut self.buffer,
+            &self.config,
+            &mut self.receiving,
+            Direction::Request,
+        )
+        .await?;
+        F::decode_request(&adu)
+    }
+
+    /// Receive one response (TR-R-004). See [`FrameTransport::recv_response`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the stream does, if the peer disappears mid-ADU, or if the ADU
+    /// does not decode.
+    pub async fn recv_response(&mut self) -> Result<(F::Header, ResponsePdu)> {
+        let adu = shared::recv_adu::<ReadHalf<S>, F>(
+            &mut self.stream,
+            &mut self.buffer,
+            &self.config,
+            &mut self.receiving,
+            Direction::Response,
+        )
+        .await?;
+        F::decode_response(&adu)
+    }
+}
+
+/// The write half of a [`FrameTransport`] produced by [`FrameTransport::split`]
+/// (TR-R-003).
+#[derive(Debug)]
+pub struct FrameTransportWriter<S, F> {
+    stream: WriteHalf<S>,
+    outgoing: Vec<u8>,
+    framing: PhantomData<F>,
+}
+
+impl<S, F> FrameTransportWriter<S, F>
+where
+    S: AsyncWrite + Send,
+    F: Framing,
+{
+    /// Send a request (TR-R-003). See [`FrameTransport::send_request`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode, or if the stream does.
+    pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
+        self.outgoing.clear();
+        F::encode_request_into(header, pdu, &mut self.outgoing)?;
+        shared::send(&mut self.stream, &mut self.outgoing).await
+    }
+
+    /// Send a response (TR-R-003). See [`FrameTransport::send_response`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the PDU does not encode, or if the stream does.
+    pub async fn send_response(&mut self, header: &F::Header, pdu: &ResponsePdu) -> Result<()> {
+        self.outgoing.clear();
+        F::encode_response_into(header, pdu, &mut self.outgoing)?;
+        shared::send(&mut self.stream, &mut self.outgoing).await
+    }
+}
+
+/// Boundary-detection logic shared by [`FrameTransport`] and its split
+/// [`FrameTransportReader`]/[`FrameTransportWriter`] halves — TR-R-004's
+/// framing rules have exactly one correct implementation regardless of which
+/// type owns the stream half at the time.
+mod shared {
+    use super::{
+        AduBoundary, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Direction, Error, Extent,
+        Framing, READ_CHUNK, Result, TransportConfig, find,
+    };
+    use alloc::vec::Vec;
 
     /// Read exactly one ADU, leaving any surplus buffered (TR-R-004).
     ///
     /// The ADU's bytes leave the buffer before it is decoded, so a decode
     /// failure costs exactly that frame and no more (TR-R-005).
-    async fn recv_adu(&mut self, direction: Direction) -> Result<Vec<u8>> {
-        if self.receiving {
+    pub(super) async fn recv_adu<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
+        config: &TransportConfig,
+        receiving: &mut bool,
+        direction: Direction,
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
+        if *receiving {
             // A previous receive was abandoned part-way through an ADU, so the
             // buffer may hold a fragment of one (TR-R-041).
             return Err(Error::Timeout { what: "receive" });
         }
-        self.receiving = true;
-        let result = self.read_adu(direction).await;
-        self.receiving = false;
+        *receiving = true;
+        let result = read_adu::<R, F>(stream, buffer, config, direction).await;
+        *receiving = false;
         if result.is_err() && F::boundary().is_self_locating() {
             // No ADU was delimited, so these bytes belong to no frame anyone
             // can name. This framing finds the next boundary on the wire, so
             // dropping them is what lets the next receive start clean
             // (TR-R-044); keeping them would fail the same way forever.
-            self.buffer.clear();
+            buffer.clear();
         }
         result
     }
 
     /// Apply this framing's boundary rule until one ADU is in hand (FR-R-122).
-    async fn read_adu(&mut self, direction: Direction) -> Result<Vec<u8>> {
+    async fn read_adu<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
+        config: &TransportConfig,
+        direction: Direction,
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
         match F::boundary() {
-            AduBoundary::Prefixed { prefix, total } => self.read_prefixed(prefix, total).await,
-            AduBoundary::Delimited { start, end } => self.read_delimited(start, end).await,
-            AduBoundary::Silence => self.read_until_silence().await,
+            AduBoundary::Prefixed { prefix, total } => {
+                read_prefixed::<R, F>(stream, buffer, prefix, total).await
+            }
+            AduBoundary::Delimited { start, end } => {
+                read_delimited::<R, F>(stream, buffer, config, start, end).await
+            }
+            AduBoundary::Silence => read_until_silence::<R, F>(stream, buffer, config).await,
             AduBoundary::ContentLength { min, extent } => {
-                self.read_content_length(min, extent, direction).await
+                read_content_length::<R, F>(stream, buffer, min, extent, direction).await
             }
         }
     }
 
     /// A length-prefixed ADU: read enough to compute the length, validate it,
     /// then read the rest (TR-R-010).
-    async fn read_prefixed(
-        &mut self,
+    async fn read_prefixed<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
         prefix: usize,
         total: fn(&[u8]) -> Result<usize>,
-    ) -> Result<Vec<u8>> {
-        self.fill_to(prefix).await?;
-        let head = self
-            .buffer
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
+        fill_to::<R, F>(stream, buffer, prefix).await?;
+        let head = buffer
             .get(..prefix)
             .expect("fill_to returned, so the buffer holds at least prefix bytes");
         // The length is validated before it sizes anything (TR-R-010).
         let len = total(head)?;
-        self.fill_to(len).await?;
-        Ok(self.take(len))
+        fill_to::<R, F>(stream, buffer, len).await?;
+        Ok(take(buffer, len))
     }
 
     /// A delimited ADU: discard anything before the start byte, then read to
     /// the terminator (TR-R-012).
-    async fn read_delimited(&mut self, start: u8, end: &'static [u8]) -> Result<Vec<u8>> {
+    async fn read_delimited<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
+        config: &TransportConfig,
+        start: u8,
+        end: &'static [u8],
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
         let mut searched = 0;
         loop {
-            if let Some(offset) = self.buffer.iter().position(|byte| *byte == start) {
+            if let Some(offset) = buffer.iter().position(|byte| *byte == start) {
                 if offset > 0 {
                     // Bytes before a start byte belong to no ADU (TR-R-012).
-                    self.buffer.drain(..offset);
+                    buffer.drain(..offset);
                     searched = 0;
                 }
-                if let Some(at) = find(&self.buffer, end, searched) {
-                    return Ok(self.take(at.saturating_add(end.len())));
+                if let Some(at) = find(buffer, end, searched) {
+                    return Ok(take(buffer, at.saturating_add(end.len())));
                 }
                 // All but a possible partial terminator has been searched.
-                searched = self
-                    .buffer
-                    .len()
-                    .saturating_sub(end.len().saturating_sub(1));
+                searched = buffer.len().saturating_sub(end.len().saturating_sub(1));
             } else {
                 // No start byte in sight; none of these bytes can begin an ADU.
-                self.buffer.clear();
+                buffer.clear();
                 searched = 0;
             }
-            self.check_buffer_bound()?;
-            if self.buffer.is_empty() {
+            check_buffer_bound::<F>(buffer)?;
+            if buffer.is_empty() {
                 // No start byte seen yet: unbounded, same as RTU waiting for a
                 // frame to begin (TR-R-042).
-                self.read_more(false).await?;
+                read_more(stream, buffer, false).await?;
             } else {
                 // Mid-frame: a stall here is abandoned, not waited out
                 // (TR-R-076).
                 tokio::time::timeout(
-                    self.config.ascii_inter_character_timeout,
-                    self.read_more(true),
+                    config.ascii_inter_character_timeout,
+                    read_more(stream, buffer, true),
                 )
                 .await
                 .map_err(|_elapsed| Error::Timeout {
@@ -289,22 +464,31 @@ where
     }
 
     /// An RTU ADU: whatever arrives before the line falls silent (TR-R-011).
-    async fn read_until_silence(&mut self) -> Result<Vec<u8>> {
+    async fn read_until_silence<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
+        config: &TransportConfig,
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
         loop {
-            if self.buffer.is_empty() {
+            if buffer.is_empty() {
                 // Nothing yet: wait rather than call the silence before the
                 // frame has begun (TR-R-042).
-                self.read_more(false).await?;
+                read_more(stream, buffer, false).await?;
                 continue;
             }
-            self.check_buffer_bound()?;
-            match tokio::time::timeout(self.config.inter_frame_interval, self.read_more(true)).await
+            check_buffer_bound::<F>(buffer)?;
+            match tokio::time::timeout(config.inter_frame_interval, read_more(stream, buffer, true))
+                .await
             {
                 // The line went quiet: the frame ends here.
-                Err(_elapsed) => return Ok(self.take(self.buffer.len())),
+                Err(_elapsed) => return Ok(take(buffer, buffer.len())),
                 Ok(Ok(())) => {}
                 // A close after a complete frame ends it just the same.
-                Ok(Err(Error::ConnectionClosed)) => return Ok(self.take(self.buffer.len())),
+                Ok(Err(Error::ConnectionClosed)) => return Ok(take(buffer, buffer.len())),
                 Ok(Err(error)) => return Err(error),
             }
         }
@@ -315,50 +499,59 @@ where
     /// Call `extent` repeatedly as bytes arrive to determine when a complete
     /// ADU has been received. Consume exactly the extent it yields, leaving
     /// any surplus for the next ADU.
-    async fn read_content_length(
-        &mut self,
+    async fn read_content_length<R, F>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
         min: usize,
         extent: fn(Direction, &[u8]) -> Result<Extent>,
         direction: Direction,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Vec<u8>>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
         // Ensure we have at least `min` bytes to start derivation (TR-R-045).
-        self.fill_to(min).await?;
+        fill_to::<R, F>(stream, buffer, min).await?;
 
         loop {
             // Try to determine the extent from the bytes we have (TR-R-045).
-            match extent(direction, &self.buffer)? {
+            match extent(direction, buffer)? {
                 Extent::Complete(len) => {
                     // We have the complete ADU; take exactly those bytes (TR-R-045).
-                    return Ok(self.take(len));
+                    return Ok(take(buffer, len));
                 }
                 Extent::NeedMore => {
                     // Need more bytes; check the buffer bound and read more (TR-R-013).
-                    self.check_buffer_bound()?;
-                    self.read_more(true).await?;
+                    check_buffer_bound::<F>(buffer)?;
+                    read_more(stream, buffer, true).await?;
                 }
             }
         }
     }
 
     /// Read until the buffer holds at least `len` bytes (TR-R-013).
-    async fn fill_to(&mut self, len: usize) -> Result<()> {
+    async fn fill_to<R, F>(stream: &mut R, buffer: &mut Vec<u8>, len: usize) -> Result<()>
+    where
+        R: AsyncRead + Unpin,
+        F: Framing,
+    {
         if len > F::MAX_ADU_LEN {
             return Err(Error::AduTooLarge {
                 len,
                 max: F::MAX_ADU_LEN,
             });
         }
-        while self.buffer.len() < len {
-            self.read_more(!self.buffer.is_empty()).await?;
+        while buffer.len() < len {
+            read_more(stream, buffer, !buffer.is_empty()).await?;
         }
         Ok(())
     }
 
     /// Refuse to buffer more than one ADU's worth for one ADU (TR-R-013).
-    fn check_buffer_bound(&self) -> Result<()> {
-        if self.buffer.len() >= F::MAX_ADU_LEN {
+    fn check_buffer_bound<F: Framing>(buffer: &[u8]) -> Result<()> {
+        if buffer.len() >= F::MAX_ADU_LEN {
             return Err(Error::AduTooLarge {
-                len: self.buffer.len(),
+                len: buffer.len(),
                 max: F::MAX_ADU_LEN,
             });
         }
@@ -369,9 +562,13 @@ where
     ///
     /// `mid_adu` distinguishes the two ways a stream can end (TR-R-014): a
     /// close between ADUs ends the stream, one inside an ADU severs a frame.
-    async fn read_more(&mut self, mid_adu: bool) -> Result<()> {
+    async fn read_more<R: AsyncRead + Unpin>(
+        stream: &mut R,
+        buffer: &mut Vec<u8>,
+        mid_adu: bool,
+    ) -> Result<()> {
         let mut chunk = [0u8; READ_CHUNK];
-        let read = self.stream.read(&mut chunk).await?;
+        let read = stream.read(&mut chunk).await?;
         if read == 0 {
             return Err(if mid_adu {
                 Error::ConnectionClosed
@@ -381,7 +578,7 @@ where
                 }
             });
         }
-        self.buffer.extend_from_slice(
+        buffer.extend_from_slice(
             chunk
                 .get(..read)
                 .expect("a read never reports more bytes than the chunk holds"),
@@ -391,8 +588,20 @@ where
 
     /// Remove and return the first `len` buffered bytes, keeping the rest for
     /// the next call (TR-R-004).
-    fn take(&mut self, len: usize) -> Vec<u8> {
-        self.buffer.drain(..len).collect()
+    fn take(buffer: &mut Vec<u8>, len: usize) -> Vec<u8> {
+        buffer.drain(..len).collect()
+    }
+
+    /// Write every byte of an ADU (TR-R-003).
+    pub(super) async fn send<W: AsyncWrite + Unpin>(
+        stream: &mut W,
+        outgoing: &mut Vec<u8>,
+    ) -> Result<()> {
+        stream.write_all(outgoing).await?;
+        stream.flush().await?;
+        // The bytes are gone; the capacity stays (TR-R-043).
+        outgoing.clear();
+        Ok(())
     }
 }
 

@@ -152,3 +152,37 @@ types, methods, configuration fields), [`edge-cases.md`](./edge-cases.md)
 **CL-R-080** — `Client<T, F>` shall be generic over any `T: ClientTransport<F>` (TR-R-075), not only `FrameTransport<S, F>`. `TcpClient`, `RtuOverTcpClient`, `RtuClient`, and `AsciiClient` shall keep their existing public names and behavior under this change.
 
 **CL-R-081** — The crate shall provide `UdpClient = Client<UdpTransport<Tcp>, Tcp>`, mirroring `TcpClient`'s naming, so a caller can build a `Client`-compatible UDP client directly from `connect_udp`'s output.
+
+---
+
+## 10. Pipelined clients
+
+**CL-R-082** — The crate shall provide `PipelinedClient`, a cloneable handle over a TCP transport permitting several requests in flight concurrently, distinguished by MBAP transaction id, coexisting with `Client<T, F>` rather than replacing it. RTU and ASCII shall remain served only by `Client<T, F>`, since their framings carry no transaction id and cannot distinguish concurrent responses.
+
+**CL-R-083** — The crate shall provide `PipelinedUdpClient`, the same concurrent-request handle as CL-R-082 built over `UdpTransport<Tcp>`, mirroring `PipelinedClient`'s API.
+
+**CL-R-084** — `PipelinedClient` and `PipelinedUdpClient` shall be backed by a background task, spawned on construction, that owns the transport and dispatches each response to the caller awaiting its transaction id.
+
+**CL-R-085** — A `PipelinedClient`/`PipelinedUdpClient` handle shall be `Clone`; every clone shall share the same background task and transport. The background task shall shut down and the transport shall close when the last handle clone is dropped.
+
+**CL-R-086** — Both types shall expose a `send` method that, when the number of in-flight requests has reached the configured `max_in_flight`, awaits a free slot before writing to the transport, and a `try_send` method that instead fails immediately with a distinct error naming the condition.
+
+**CL-R-087** — Dropping the future returned by `send`/`try_send` before it resolves shall free its slot in the in-flight table; no explicit cancellation method shall be required.
+
+**CL-R-088** — A response whose transaction id belonged to a request already resolved by timeout or desynchronization shall be discarded and shall not affect any other in-flight request.
+
+**CL-R-089** — A response whose transaction id was never issued by this handle shall desynchronize the connection, on both `PipelinedClient` and `PipelinedUdpClient` — unlike CL-R-090/091's transport-specific timeout handling, this case indicates a genuine correctness violation (a garbled echo, crossed wires, or an injected frame) rather than routine packet loss, so no UDP exception applies. Distinct from CL-R-088's silent discard.
+
+**CL-R-090** — On `PipelinedClient`, a response timeout on any one in-flight request shall desynchronize the whole connection, immediately failing every other in-flight request with the same desynchronized error, and refusing every subsequent request without writing to the transport — the same posture as CL-R-031/032, extended from one request to every request sharing the connection.
+
+**CL-R-091** — On `PipelinedUdpClient`, a response timeout on one in-flight request shall fail only that request; it shall not desynchronize the connection and shall not affect any other in-flight request. An I/O failure shall still desynchronize the whole connection, as CL-R-031 states.
+
+**CL-R-092** — Recovery from a desynchronized `PipelinedClient`/`PipelinedUdpClient` shall be by discarding the handle and constructing a new one, exactly as CL-R-033 states for `Client<T, F>`; neither type shall silently resynchronize.
+
+**CL-R-093** — The crate shall provide `PipelineConfig`, distinct from `ClientConfig`, carrying `response_timeout` (defaulting to 1 second, mirroring CL-R-030) and `max_in_flight` (defaulting to 16, with a hard ceiling of 65535 — the MBAP transaction id space) bounding the in-flight table.
+
+**CL-R-094** — `PipelinedClient` and `PipelinedUdpClient` shall be gated behind an off-by-default `pipeline` feature that implies `std`.
+
+**CL-R-095** — `ClientConfig` shall implement `From<ClientConfig> for PipelineConfig`, carrying over `response_timeout` and setting `max_in_flight` to CL-R-093's default, so a caller moving from `Client` to a pipelined type is not required to reconstruct configuration it already had.
+
+**CL-R-096** — `PipelinedClient` and `PipelinedUdpClient` shall expose `is_desynchronized(&self) -> bool`, reporting whether the handle currently refuses every request, mirroring CL-R-034.

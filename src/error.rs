@@ -208,6 +208,12 @@ pub enum Error {
     #[error("the exchange is desynchronized; a new connection is required")]
     Desynchronized,
 
+    /// `try_send` was called with `max_in_flight` requests already
+    /// outstanding (CL-R-086).
+    #[cfg(feature = "pipeline")]
+    #[error("too many requests already in flight")]
+    TooManyInFlight,
+
     /// A blocking method was called from a thread that already drives an async
     /// runtime (CL-R-075). Blocking on a runtime from inside one deadlocks or
     /// panics, so the blocking client refuses before touching the transport. Use

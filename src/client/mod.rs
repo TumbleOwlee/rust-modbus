@@ -1,6 +1,8 @@
 //! Async Modbus client (initiator). See `docs/specs/client/`.
 
 mod framing;
+#[cfg(feature = "pipeline")]
+mod pipeline;
 #[cfg(feature = "sync")]
 mod sync;
 
@@ -19,6 +21,8 @@ use crate::frame::{
 use crate::transport::{ClientTransport, FrameTransport, UdpTransport};
 
 pub use framing::ClientFraming;
+#[cfg(feature = "pipeline")]
+pub use pipeline::{PipelineConfig, PipelinedClient, PipelinedUdpClient};
 #[cfg(all(feature = "sync", feature = "rtu"))]
 pub use sync::{SyncAsciiClient, SyncRtuClient};
 #[cfg(feature = "sync")]
