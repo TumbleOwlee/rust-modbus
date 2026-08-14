@@ -412,7 +412,10 @@ where
         let function = request.function();
 
         let response = match service.on_request(conn, unit, request).await {
-            Ok(response) => response,
+            Ok(Some(response)) => response,
+            // SV-R-024 — the service withholds its own answer, same channel as
+            // broadcast (SV-R-023) and non-matching unit id (SV-R-021).
+            Ok(None) => continue,
             Err(exception) => ResponsePdu::Exception(ExceptionResponse {
                 function,
                 exception,
@@ -456,7 +459,10 @@ async fn serve_datagram<S>(
     }
     let function = request.function();
     let response = match service.on_request(conn, unit, request).await {
-        Ok(response) => response,
+        Ok(Some(response)) => response,
+        // SV-R-024 — withheld; the function is not a loop (one datagram per
+        // call), so withholding means returning without sending.
+        Ok(None) => return,
         Err(exception) => ResponsePdu::Exception(ExceptionResponse {
             function,
             exception,
@@ -628,7 +634,7 @@ mod tests {
             conn: &Connection,
             unit: UnitId,
             request: RequestPdu,
-        ) -> core::result::Result<ResponsePdu, ExceptionCode> {
+        ) -> core::result::Result<Option<ResponsePdu>, ExceptionCode> {
             self.push(Event::Request(
                 conn.id(),
                 conn.peer(),
@@ -642,7 +648,7 @@ mod tests {
                 let permit = hold.acquire().await.expect("the test never closes it");
                 permit.forget();
             }
-            (self.reply)(&request)
+            (self.reply)(&request).map(Some)
         }
 
         async fn on_connect(&self, conn: &Connection) -> Acceptance {

@@ -27,7 +27,7 @@ impl Service for Registers {
         _conn: &Connection,
         _unit: UnitId,
         request: RequestPdu,
-    ) -> Result<ResponsePdu, ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, ExceptionCode> {
         match request {
             RequestPdu::WriteSingleRegister { address, value } => {
                 self.0
@@ -51,6 +51,7 @@ impl Service for Registers {
             }
             _ => Err(ExceptionCode::IllegalFunction),
         }
+        .map(Some)
     }
 }
 

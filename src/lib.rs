@@ -100,7 +100,7 @@
 //!         _conn: &Connection,
 //!         _unit: UnitId,
 //!         request: RequestPdu,
-//!     ) -> Result<ResponsePdu, ExceptionCode> {
+//!     ) -> Result<Option<ResponsePdu>, ExceptionCode> {
 //!         let mut holding = self.holding.lock().expect("no doctest poisons the lock");
 //!         match request {
 //!             RequestPdu::WriteSingleRegister { address, value } => {
@@ -124,6 +124,7 @@
 //!             // Anything this device does not implement.
 //!             _ => Err(ExceptionCode::IllegalFunction),
 //!         }
+//!         .map(Some)
 //!     }
 //! }
 //!

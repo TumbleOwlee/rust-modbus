@@ -56,7 +56,7 @@ impl Service for Recorder {
         _conn: &Connection,
         _unit: UnitId,
         request: RequestPdu,
-    ) -> Result<ResponsePdu, ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, ExceptionCode> {
         self.log().requests += 1;
         match request {
             RequestPdu::ReadHoldingRegisters { quantity, .. } => {
@@ -66,6 +66,7 @@ impl Service for Recorder {
             }
             _ => Err(ExceptionCode::IllegalFunction),
         }
+        .map(Some)
     }
 
     async fn on_error(&self, _conn: &Connection, error: &Error) {

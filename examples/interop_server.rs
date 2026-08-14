@@ -94,7 +94,7 @@ impl Service for Device {
         conn: &Connection,
         unit: UnitId,
         request: RequestPdu,
-    ) -> Result<ResponsePdu, ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, ExceptionCode> {
         println!("[{:?}] unit {} {:?}", conn.id(), unit.0, request);
         match request {
             RequestPdu::ReadCoils { address, quantity } => Ok(ResponsePdu::ReadCoils {
@@ -150,6 +150,7 @@ impl Service for Device {
             // Everything else this device does not implement (SV-R-012).
             _ => Err(ExceptionCode::IllegalFunction),
         }
+        .map(Some)
     }
 
     async fn on_connect(&self, conn: &Connection) -> rust_modbus::Acceptance {
