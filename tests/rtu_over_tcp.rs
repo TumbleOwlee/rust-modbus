@@ -48,7 +48,7 @@ impl Service for Registers {
         _conn: &Connection,
         _unit: UnitId,
         request: RequestPdu,
-    ) -> Result<ResponsePdu, ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, ExceptionCode> {
         match request {
             RequestPdu::ReadHoldingRegisters { address, quantity } => {
                 let table = self.locked();
@@ -75,6 +75,7 @@ impl Service for Registers {
             // (SV-R-012).
             _ => Err(ExceptionCode::IllegalFunction),
         }
+        .map(Some)
     }
 }
 

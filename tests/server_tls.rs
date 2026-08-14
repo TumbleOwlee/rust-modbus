@@ -93,12 +93,12 @@ impl Service for Recorder {
         _conn: &Connection,
         _unit: UnitId,
         _request: RequestPdu,
-    ) -> Result<ResponsePdu, rust_modbus::ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, rust_modbus::ExceptionCode> {
         self.events
             .lock()
             .expect("no test poisons the lock")
             .push(Event::Request);
-        Ok(response())
+        Ok(Some(response()))
     }
 
     async fn on_connect(&self, conn: &Connection) -> rust_modbus::Acceptance {

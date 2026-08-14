@@ -145,13 +145,15 @@ pub trait Service: Send + Sync + 'static {
     /// Refusing is an [`ExceptionCode`], not an [`Error`]: a refusal is a Modbus
     /// answer, and the server sends it as an exception response to the function
     /// requested (SV-R-012). Whatever is returned is sent unaltered
-    /// (SV-R-013).
+    /// (SV-R-013). `Ok(None)` withholds the answer instead: no response is
+    /// sent and the connection is not ended, the same channel as a broadcast
+    /// or a non-matching unit id, now available for any unit id (SV-R-024).
     fn on_request(
         &self,
         conn: &Connection,
         unit: UnitId,
         request: RequestPdu,
-    ) -> impl Future<Output = core::result::Result<ResponsePdu, ExceptionCode>> + Send;
+    ) -> impl Future<Output = core::result::Result<Option<ResponsePdu>, ExceptionCode>> + Send;
 
     /// A connection has been taken up; answer whether to serve it (SV-R-032).
     ///
@@ -213,10 +215,10 @@ mod tests {
             _conn: &Connection,
             _unit: UnitId,
             _request: RequestPdu,
-        ) -> core::result::Result<ResponsePdu, ExceptionCode> {
-            Ok(ResponsePdu::ReadHoldingRegisters {
+        ) -> core::result::Result<Option<ResponsePdu>, ExceptionCode> {
+            Ok(Some(ResponsePdu::ReadHoldingRegisters {
                 registers: alloc::vec![RegisterValue(7)],
-            })
+            }))
         }
     }
 
@@ -255,9 +257,42 @@ mod tests {
                     },
                 )
                 .await,
-            Ok(ResponsePdu::ReadHoldingRegisters {
+            Ok(Some(ResponsePdu::ReadHoldingRegisters {
                 registers: alloc::vec![RegisterValue(7)],
-            })
+            }))
+        );
+    }
+
+    /// A service that withholds its answer for every request.
+    struct Withholding;
+
+    impl Service for Withholding {
+        async fn on_request(
+            &self,
+            _conn: &Connection,
+            _unit: UnitId,
+            _request: RequestPdu,
+        ) -> core::result::Result<Option<ResponsePdu>, ExceptionCode> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    /// SV-R-024 — a service may withhold its own answer for a matched,
+    /// non-broadcast unit id, distinct from returning a response or refusing.
+    async fn ut_on_request_may_withhold_its_answer() {
+        assert_eq!(
+            Withholding
+                .on_request(
+                    &connection(),
+                    UnitId(9),
+                    RequestPdu::ReadHoldingRegisters {
+                        address: Address(0),
+                        quantity: Quantity(1),
+                    },
+                )
+                .await,
+            Ok(None)
         );
     }
 

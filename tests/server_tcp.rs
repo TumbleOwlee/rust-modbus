@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use rust_modbus::{
     Address, Client, ClientConfig, Connection, Disconnect, Error, ExceptionCode, FrameTransport,
-    FunctionCode, Quantity, RegisterValue, RequestPdu, ResponsePdu, Server, ServerConfig, Service,
-    TcpConfig, TcpListener, UnitId, connect_tcp,
+    FunctionCode, MbapHeader, Quantity, RegisterValue, RequestPdu, ResponsePdu, Server,
+    ServerConfig, Service, TcpConfig, TcpListener, TransactionId, UnitId, connect_tcp,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -51,8 +51,11 @@ impl Service for Registers {
         _conn: &Connection,
         _unit: UnitId,
         request: RequestPdu,
-    ) -> Result<ResponsePdu, ExceptionCode> {
+    ) -> Result<Option<ResponsePdu>, ExceptionCode> {
         match request {
+            // SV-R-024 — a function code this test suite has not otherwise
+            // wired up, reused as this service's withhold signal.
+            RequestPdu::ReadInputRegisters { .. } => return Ok(None),
             RequestPdu::ReadHoldingRegisters { address, quantity } => {
                 let table = self.locked();
                 let registers = (0..quantity.0)
@@ -78,6 +81,7 @@ impl Service for Registers {
             // (SV-R-012).
             _ => Err(ExceptionCode::IllegalFunction),
         }
+        .map(Some)
     }
 
     async fn on_disconnect(&self, _conn: &Connection, reason: Disconnect) {
@@ -252,6 +256,71 @@ async fn it_configured_unit_answers_only_itself() {
             .await,
         Err(Error::Timeout { what: "response" }),
         "another unit's request must draw no response at all"
+    );
+
+    running.handle.shutdown().await;
+    running
+        .serving
+        .await
+        .expect("the task finishes")
+        .expect("serving succeeds");
+}
+
+#[tokio::test]
+/// SV-R-024 — a service withholding its own answer for a matched,
+/// non-broadcast unit draws no response, and the connection keeps serving.
+///
+/// Driven over a raw `FrameTransport`, not this crate's own `Client`: a
+/// `recv_response` call cancelled by an outer timeout latches the transport's
+/// `receiving` flag and fails every later receive immediately (TR-R-041), so
+/// this pipelines both requests first and takes exactly one response — proof
+/// that only the second draws one, without ever cancelling a receive.
+async fn it_service_withholding_draws_no_response_and_connection_continues() {
+    let running = start(ServerConfig::default()).await;
+    let mut transport = connect_tcp(running.address, TcpConfig::default())
+        .await
+        .expect("connects");
+
+    transport
+        .send_request(
+            &MbapHeader {
+                transaction_id: TransactionId(1),
+                unit_id: UnitId(1),
+            },
+            &RequestPdu::ReadInputRegisters {
+                address: Address(0),
+                quantity: Quantity(1),
+            },
+        )
+        .await
+        .expect("sends the withheld request");
+    transport
+        .send_request(
+            &MbapHeader {
+                transaction_id: TransactionId(2),
+                unit_id: UnitId(1),
+            },
+            &RequestPdu::WriteSingleRegister {
+                address: Address(0),
+                value: RegisterValue(1),
+            },
+        )
+        .await
+        .expect("sends the ordinary request");
+
+    // Exactly one response arrives, and it answers the second request: the
+    // withheld first drew nothing, and the connection kept serving past it.
+    let (header, response) = transport
+        .recv_response()
+        .await
+        .expect("the connection survives a withheld answer");
+    assert_eq!(header.transaction_id, TransactionId(2));
+    assert_eq!(
+        response,
+        ResponsePdu::WriteSingleRegister {
+            address: Address(0),
+            value: RegisterValue(1),
+        }
     );
 
     running.handle.shutdown().await;
