@@ -18,6 +18,7 @@ here so they are not mistaken for oversights and silently "fixed".
 | Address or quantity the *application* does not have | Nothing the server can judge — the service returns `IllegalDataAddress` (SV-R-005) |
 | A write to what the consumer considers read-only | The service's refusal; the crate has no read-only notion (SV-R-005) |
 | Unit identifier does not match a configured one | No response at all, connection continues (SV-R-021) |
+| `on_request` returns `Ok(None)` for a matched, non-broadcast unit id | No response sent, connection continues (SV-R-024) — same channel as broadcast/unit-mismatch, decided by the service |
 | A request to a non-matching unit id over RTU-over-TCP | No response, connection stays open (SV-R-021) — the socket is one gateway, but the bus behind it is many devices, so the identifier is a real address and answering for another device would corrupt its exchange |
 | Unit identifier when none is configured | Dispatched as received; the service decides (SV-R-022) |
 | Unit 0 on RTU or ASCII | Dispatched, never answered (SV-R-023) |

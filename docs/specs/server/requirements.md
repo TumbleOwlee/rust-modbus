@@ -42,7 +42,7 @@ limitations).
 
 ## 2. The exchange
 
-**SV-R-010** — For each request received on a connection the server shall dispatch the decoded request PDU, together with the unit identifier it was addressed to and the identity of the connection, to the service, and shall send the service's answer on that same connection.
+**SV-R-010** — For each request received on a connection the server shall dispatch the decoded request PDU, together with the unit identifier it was addressed to and the identity of the connection, to the service, and shall send the service's answer on that same connection, when it returns one (SV-R-024).
 
 **SV-R-011** — A response shall carry the header of the request it answers, so that an initiator's matching rule (CL-R-020) succeeds: on TCP both the transaction identifier and the unit identifier shall be those received, and on RTU and ASCII the unit identifier shall be the one received.
 
@@ -65,6 +65,8 @@ limitations).
 **SV-R-022** — When no unit identifier is configured, every request shall be dispatched regardless of the identifier it carries, and the service shall decide whether to answer or to refuse.
 
 **SV-R-023** — A request addressed to a broadcast identifier (FR-R-096) shall be dispatched to the service and shall never be answered, whatever the configuration.
+
+**SV-R-024** — `Service::on_request` shall return `Result<Option<ResponsePdu>, ExceptionCode>`. `Ok(Some(response))` shall be sent as today (SV-R-010, SV-R-013). `Ok(None)` shall send no response and shall not end the connection, exactly as for a broadcast request (SV-R-023) or a non-matching unit id (SV-R-021) — the service withholding its own answer rather than the wire deciding it. `Err(exception)` shall still draw an exception response (SV-R-012), unaffected.
 
 ---
 

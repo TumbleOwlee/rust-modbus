@@ -87,7 +87,7 @@ pub trait Service: Send + Sync + 'static {
         conn: &Connection,
         unit: UnitId,
         request: RequestPdu,
-    ) -> impl Future<Output = core::result::Result<ResponsePdu, ExceptionCode>> + Send;
+    ) -> impl Future<Output = core::result::Result<Option<ResponsePdu>, ExceptionCode>> + Send;
 
     fn on_connect(&self, conn: &Connection) -> impl Future<Output = Acceptance> + Send {
         async { Acceptance::Accept }
@@ -128,9 +128,12 @@ that is cheap to clone and *shares* when cloned — state behind `Arc<Mutex<…>
 fields — and hands one clone to `Server::new`. That is the shape
 `tests/server_tcp.rs` demonstrates.
 
-`on_request` returns `Result<ResponsePdu, ExceptionCode>`: a refusal is expressed
-in the protocol's own vocabulary (SV-R-012), so a service cannot accidentally
-answer a Modbus request with a transport error. `on_connect` answers with an
+`on_request` returns `Result<Option<ResponsePdu>, ExceptionCode>`: a refusal is
+expressed in the protocol's own vocabulary (SV-R-012), so a service cannot
+accidentally answer a Modbus request with a transport error. `Ok(None)`
+withholds the service's own answer, on the same channel as a broadcast
+(SV-R-023) or a non-matching unit id (SV-R-021) — now available to the service
+for any unit id (SV-R-024). `on_connect` answers with an
 `Acceptance`, not a `bool` (SV-R-032) — `Acceptance::Reject` reads the same way at
 the call site as in the signature, where `false` would have to be remembered. `on_error` is separate from `on_disconnect` because most
 per-request failures do not end the connection (SV-R-034).
