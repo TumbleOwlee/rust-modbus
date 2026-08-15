@@ -228,18 +228,18 @@ pub use server::{
     Acceptance, Connection, ConnectionId, Disconnect, Server, ServerConfig, ServerFraming,
     ServerHandle, Service,
 };
+#[cfg(feature = "std")]
+pub use transport::{
+    AduReader, ClientTransport, DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport,
+    SerialConfig, StopBits, TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig,
+    UdpTransport, connect_tcp, connect_tcp_framed, connect_udp, recv_datagram_request,
+    send_datagram_response_into,
+};
 #[cfg(feature = "tls")]
 pub use transport::{
     ClientCertPolicy, ClientIdentity, MODBUS_TLS_PORT, RootStore, ServerCertVerification,
     TlsClientConfig, TlsClientTransport, TlsListener, TlsServerConfig, connect_tls,
     connect_tls_framed, load_pem_cert_chain, load_pem_private_key,
-};
-#[cfg(feature = "std")]
-pub use transport::{
-    ClientTransport, DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport,
-    SerialConfig, StopBits, TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig,
-    UdpTransport, connect_tcp, connect_tcp_framed, connect_udp, recv_datagram_request,
-    send_datagram_response_into,
 };
 #[cfg(feature = "rs485")]
 pub use transport::{Rs485Config, RtsPolarity};
