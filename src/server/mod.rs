@@ -1107,7 +1107,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     /// SV-R-023 — a broadcast is dispatched and never answered, even when the
     /// server is configured for another unit.
     async fn ut_broadcast_is_dispatched_but_unanswered() {
@@ -1129,7 +1129,8 @@ mod tests {
             .await
             .expect("broadcasts a request");
         // RTU frames are separated by silence, not by a length field (TR-R-011):
-        // without a gap the two requests arrive as one malformed ADU.
+        // without a gap the two requests arrive as one malformed ADU. Paused
+        // time makes this deterministic instead of racing the real clock.
         tokio::time::sleep(core::time::Duration::from_millis(5)).await;
         client
             .send_request(&UnitId(1), &read_holding())
