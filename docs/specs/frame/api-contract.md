@@ -102,6 +102,9 @@ the raw code (FR-R-083).
 All three carry every function code in both directions (FR-R-118 states this
 explicitly for ASCII).
 
+`crc16` and `lrc` (§6) are exported standalone, so a caller can validate a
+captured frame's integrity without decoding it (FR-ADU-R-001, FR-ADU-R-002).
+
 ## 6. Exported types
 
 Everything below is exported from the crate root. All types derive `Debug`,
@@ -133,6 +136,7 @@ rustls::Error`, which has no `Eq`, so `Error`'s `Eq` derive is conditional on
 | `MbapHeader` | struct | `{ transaction_id: TransactionId, unit_id: UnitId }` |
 | `Error`, `Result<T>` | enum, alias | §7; `Result<T> = core::result::Result<T, Error>` |
 | `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-045) |
+| `crc16` | fn | `(bytes: &[u8]) -> u16`, the RTU/RTU-over-stream CRC of §5, computable independently of decoding (FR-ADU-R-001) |
 
 ### Domain value types (FR-R-007)
 
