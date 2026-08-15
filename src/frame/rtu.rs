@@ -19,6 +19,12 @@ const OVERHEAD: usize = 3;
 /// (FR-R-092), which is what `CRC_16_MODBUS` names.
 const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);
 
+/// CRC-16 over `bytes`, computable independently of decoding an ADU
+/// (FR-ADU-R-001).
+pub fn crc16(bytes: &[u8]) -> u16 {
+    CRC.checksum(bytes)
+}
+
 impl Framing for Rtu {
     /// The 1-byte server address (FR-R-096).
     type Header = UnitId;
@@ -88,7 +94,7 @@ fn split(bytes: &[u8]) -> Result<(UnitId, &[u8])> {
         crc.try_into()
             .expect("splitting at len - 2 leaves exactly two bytes"),
     );
-    let expected = CRC.checksum(body);
+    let expected = crc16(body);
     if expected != actual {
         return Err(Error::Checksum { expected, actual });
     }
@@ -117,7 +123,7 @@ fn wrap_into(
     let covered = out
         .get(at..)
         .expect("the address and the PDU were just appended at this offset");
-    let crc = CRC.checksum(covered).to_le_bytes();
+    let crc = crc16(covered).to_le_bytes();
     out.extend_from_slice(&crc);
     Ok(())
 }
@@ -401,6 +407,16 @@ mod tests {
     const READ_HOLDING_RESPONSE: [u8; 11] = [
         0x11, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64, 0xC8, 0xBA,
     ];
+
+    #[test]
+    /// FR-ADU-R-001 — CRC-16 is public and returns the same value `split`/
+    /// `wrap_into` compute internally, checked against the Modbus
+    /// specification's own worked example (address 0x11, FC 3, address
+    /// 0x006B, quantity 3): CRC 0x8776, sent low byte first as the trailing
+    /// 0x76, 0x87 of `READ_HOLDING_REQUEST` above.
+    fn ut_crc16_is_public() {
+        assert_eq!(crc16(&[0x11, 0x03, 0x00, 0x6B, 0x00, 0x03]), 0x8776);
+    }
 
     #[test]
     /// FR-R-090, FR-R-093 — an RTU ADU is address, PDU, CRC, and the CRC covers

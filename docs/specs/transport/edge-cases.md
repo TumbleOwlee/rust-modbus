@@ -100,6 +100,13 @@ owns the desynchronization that TR-R-041 describes.
   backend surfaces them, at best, as an I/O error covering an entire read. A byte
   corrupted in a way the UART detected is therefore indistinguishable here from
   one corrupted silently; both are caught by the CRC or LRC.
+- **`AduReader`'s `Direction` must match the physical stream.** Over
+  RTU-over-stream, boundary derivation depends on `Direction` (TR-R-078);
+  constructing a reader with the wrong one for the stream it reads — one
+  reader per TCP connection half — risks the same whole-link desync
+  TR-R-046/FR-R-150 describe for a live transport. This is the existing risk,
+  reached through a new door, not a new one.
+
 ## 6. TLS
 
 - **A server cert rejected by `Verify`** (untrusted issuer, expired, wrong name)

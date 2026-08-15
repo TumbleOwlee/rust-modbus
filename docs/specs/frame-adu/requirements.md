@@ -104,3 +104,11 @@ behavior.
 **FR-R-121** — Decoding an ADU shall yield its header and its PDU as separate values. The frame layer shall not merge the two into a single type, so that a caller may route on the header without re-encoding the PDU.
 
 **FR-R-122** — A framing shall declare how the end of an ADU is determined, as one of: a length derivable from a fixed-size prefix; a start and end delimiter; inter-frame silence; or a length derivable from the ADU's own content together with the direction it carries. The declaration shall be a property of the framing and shall involve no I/O.
+
+---
+
+## 6. Standalone checksum functions
+
+**FR-ADU-R-001** — CRC-16 computation (FR-R-092..FR-R-095) shall be exposed as a public standalone function taking the bytes to check and returning the 16-bit value, so a caller can validate a captured frame's integrity independently of decoding it.
+
+**FR-ADU-R-002** — LRC computation (the ASCII checksum of FR-R-114) shall be exposed as a public standalone function on the same terms as FR-ADU-R-001.

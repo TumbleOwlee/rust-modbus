@@ -231,6 +231,72 @@ where
     }
 }
 
+/// A read-only reader over a stream offering only `AsyncRead`: a listen-only
+/// serial port, or bytes replayed from a capture (TR-R-077).
+///
+/// Applies the same per-framing boundary rule as [`FrameTransport`] (reusing
+/// `shared::recv_adu`) and never requires a write half. Yields the raw bytes
+/// of one complete ADU per call, undecoded (TR-R-079) — decode via
+/// [`Framing::decode_request`]/[`Framing::decode_response`] on the result.
+#[derive(Debug)]
+pub struct AduReader<S, F> {
+    stream: S,
+    buffer: Vec<u8>,
+    config: TransportConfig,
+    receiving: bool,
+    direction: Direction,
+    framing: PhantomData<F>,
+}
+
+impl<S, F> AduReader<S, F>
+where
+    S: AsyncRead + Unpin + Send,
+    F: Framing,
+{
+    /// Wrap a stream, with the default boundary parameters.
+    ///
+    /// `direction` is consulted only by a boundary derivation that needs it —
+    /// RTU-over-stream (FR-R-146) — and ignored by TCP, RTU, and ASCII
+    /// (TR-R-078).
+    pub fn new(stream: S, direction: Direction) -> Self {
+        Self::with_config(stream, direction, TransportConfig::default())
+    }
+
+    /// Wrap a stream with explicit boundary parameters.
+    pub fn with_config(stream: S, direction: Direction, config: TransportConfig) -> Self {
+        Self {
+            stream,
+            buffer: Vec::new(),
+            config,
+            receiving: false,
+            direction,
+            framing: PhantomData,
+        }
+    }
+
+    /// Recover the underlying stream.
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+
+    /// Receive one ADU's raw bytes, undecoded (TR-R-079).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the stream does, if the peer disappears mid-ADU, or if a
+    /// content-derived boundary cannot be resolved (TR-R-080).
+    pub async fn recv_adu(&mut self) -> Result<Vec<u8>> {
+        shared::recv_adu::<S, F>(
+            &mut self.stream,
+            &mut self.buffer,
+            &self.config,
+            &mut self.receiving,
+            self.direction,
+        )
+        .await
+    }
+}
+
 /// The read half of a [`FrameTransport`] produced by [`FrameTransport::split`]
 /// (TR-R-004).
 #[derive(Debug)]
@@ -1381,6 +1447,201 @@ mod rtu_tests {
         assert_eq!(
             server.recv_request().await,
             Err(Error::Timeout { what: "receive" })
+        );
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+
+    #[tokio::test]
+    /// TR-R-077 — `AduReader` never requires a write half: this stream type
+    /// implements only `AsyncRead`, and the reader still receives a complete
+    /// ADU from it.
+    async fn ut_reader_never_requires_a_write_half() {
+        use core::pin::Pin;
+        use core::task::{Context, Poll};
+        use tokio::io::ReadBuf;
+
+        struct ReadOnlyBytes(std::io::Cursor<Vec<u8>>);
+        impl AsyncRead for ReadOnlyBytes {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                let before = buf.filled().len();
+                let n = std::io::Read::read(&mut self.0, buf.initialize_unfilled())?;
+                buf.set_filled(before + n);
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        // TCP framing's REQUEST_ADU fixture (from `tests::REQUEST_ADU` above).
+        let bytes = vec![
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
+        ];
+        let stream = ReadOnlyBytes(std::io::Cursor::new(bytes.clone()));
+        let mut reader = AduReader::<_, crate::frame::Tcp>::new(stream, Direction::Request);
+        assert_eq!(reader.recv_adu().await, Ok(bytes));
+    }
+
+    #[tokio::test]
+    /// TR-R-079 — `recv_adu` yields the ADU's raw bytes undecoded; the caller
+    /// decodes them through `Framing::decode_request`.
+    async fn ut_reader_yields_raw_undecoded_bytes() {
+        use crate::frame::Tcp;
+        let bytes: [u8; 12] = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
+        ];
+        let (mut peer, server) = tokio::io::duplex(64);
+        let mut reader = AduReader::<_, Tcp>::new(server, Direction::Request);
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &bytes)
+            .await
+            .expect("writes");
+
+        let adu = reader.recv_adu().await.expect("receives");
+        assert_eq!(adu, bytes);
+        let (header, pdu) = Tcp::decode_request(&adu).expect("decodes");
+        assert_eq!(header.unit_id, crate::frame::UnitId(0x11));
+        assert_eq!(
+            pdu,
+            crate::frame::RequestPdu::ReadHoldingRegisters {
+                address: crate::frame::Address(0x006B),
+                quantity: crate::frame::Quantity(3),
+            }
+        );
+    }
+
+    #[tokio::test]
+    /// TR-R-078 — `direction` is consulted only where the boundary needs it.
+    /// `Tcp` (`Prefixed`) ignores it: readers built with either `Direction`
+    /// receive the same ADU whole. `RtuOverTcp` (`ContentLength`) does not:
+    /// an FC 3 request is fixed-length in the request direction but carries a
+    /// byte count at a different offset in the response direction, so a
+    /// reader constructed with the wrong `Direction` derives a different
+    /// (wrong) boundary from the identical bytes.
+    async fn ut_reader_direction_governs_content_length_boundary_only() {
+        use crate::frame::{Address, Quantity, RequestPdu, RtuOverTcp, Tcp, UnitId};
+
+        let tcp_bytes: [u8; 12] = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
+        ];
+        for direction in [Direction::Request, Direction::Response] {
+            let (mut peer, server) = tokio::io::duplex(64);
+            let mut reader = AduReader::<_, Tcp>::new(server, direction);
+            tokio::io::AsyncWriteExt::write_all(&mut peer, &tcp_bytes)
+                .await
+                .expect("writes");
+            assert_eq!(reader.recv_adu().await, Ok(tcp_bytes.to_vec()));
+        }
+
+        let req = RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        };
+        let adu = RtuOverTcp::encode_request(&UnitId(0x11), &req).expect("encodes");
+        assert_eq!(adu.len(), 8, "address(1) + FC/addr/qty(5) + CRC(2)");
+
+        let (mut peer, server) = tokio::io::duplex(64);
+        let mut correct = AduReader::<_, RtuOverTcp>::new(server, Direction::Request);
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &adu)
+            .await
+            .expect("writes");
+        assert_eq!(correct.recv_adu().await, Ok(adu.clone()));
+
+        let (mut peer, server) = tokio::io::duplex(64);
+        let mut wrong = AduReader::<_, RtuOverTcp>::new(server, Direction::Response);
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &adu)
+            .await
+            .expect("writes");
+        // FC 3 read as a response: byte count is read from offset 2 (0x00,
+        // the high byte of address 0x006B), so the wrong direction derives a
+        // 5-byte ADU instead of the correct 8 -- a different boundary from
+        // the same bytes.
+        let expected = adu.get(..5).expect("adu is 8 bytes").to_vec();
+        assert_eq!(wrong.recv_adu().await, Ok(expected));
+    }
+
+    #[tokio::test]
+    /// TR-R-080 — after a boundary failure on a self-locating framing (ASCII,
+    /// `Delimited`: an ADU that never finds its terminator, the same fixture
+    /// as `ascii_tests::ut_oversized_adu_does_not_grow_buffer` above), the
+    /// reader recovers on the next call rather than staying desynchronized
+    /// (TR-R-044). Note this is a boundary failure, not a decode failure:
+    /// `recv_adu` never decodes (TR-R-079), so a merely-malformed-but-
+    /// delimited frame (e.g. odd hex count) would be returned successfully
+    /// as raw bytes, not exercise this path — the failure has to come from
+    /// the boundary rule itself.
+    async fn ut_reader_recovers_after_self_locating_boundary_failure() {
+        use crate::frame::{Ascii, UnitId};
+
+        let (mut peer, server) = tokio::io::duplex(1024);
+        let mut reader = AduReader::<_, Ascii>::new(server, Direction::Request);
+
+        // ':' followed by MAX_ADU_LEN - 1 bytes that never contain CR LF: the
+        // terminator is never found, so the boundary itself fails.
+        let mut bytes = vec![b':'];
+        bytes.extend(core::iter::repeat_n(b'0', Ascii::MAX_ADU_LEN - 1));
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &bytes)
+            .await
+            .expect("writes");
+        assert_eq!(
+            reader.recv_adu().await,
+            Err(Error::AduTooLarge {
+                len: Ascii::MAX_ADU_LEN,
+                max: Ascii::MAX_ADU_LEN,
+            })
+        );
+
+        let good = b":1103006B00037E\r\n";
+        tokio::io::AsyncWriteExt::write_all(&mut peer, good)
+            .await
+            .expect("writes a good frame");
+        let adu = reader.recv_adu().await.expect("recovers");
+        assert_eq!(adu, good);
+        let (header, _pdu) = Ascii::decode_request(&adu).expect("decodes");
+        assert_eq!(header, UnitId(0x11));
+    }
+
+    #[tokio::test]
+    /// TR-R-080 — after a boundary failure on a non-self-locating framing
+    /// (RtuOverTcp, `ContentLength`), the failure is terminal: the next call
+    /// fails too, matching `FrameTransport`'s
+    /// `ut_rtu_over_tcp_failed_derivation_retains_the_attempt` counterpart
+    /// (TR-R-046).
+    async fn ut_reader_is_terminal_after_content_length_boundary_failure() {
+        use crate::frame::RtuOverTcp;
+        let (mut peer, server) = tokio::io::duplex(64);
+        let mut reader = AduReader::<_, RtuOverTcp>::new(server, Direction::Request);
+
+        // FC 8 (Diagnostics) has indeterminate length under RTU-over-stream
+        // (FR-R-148): the derivation itself fails, not just the decode.
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &[0x11, 0x08, 0x00, 0x00])
+            .await
+            .expect("writes");
+        assert!(
+            reader.recv_adu().await.is_err(),
+            "indeterminate length errors"
+        );
+
+        // A good frame afterward still fails: the earlier bytes were
+        // retained, not discarded, so they still lead every later read.
+        let good = crate::frame::RtuOverTcp::encode_request(
+            &crate::frame::UnitId(0x11),
+            &crate::frame::RequestPdu::ReadHoldingRegisters {
+                address: crate::frame::Address(0x006B),
+                quantity: crate::frame::Quantity(3),
+            },
+        )
+        .expect("encodes");
+        tokio::io::AsyncWriteExt::write_all(&mut peer, &good)
+            .await
+            .expect("writes");
+        assert!(
+            reader.recv_adu().await.is_err(),
+            "terminal: the retained bytes from the failed attempt lead every later read"
         );
     }
 }

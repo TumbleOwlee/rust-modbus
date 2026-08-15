@@ -67,7 +67,36 @@ The interval lives on `SerialConfig` as well as on `TransportConfig`, so the
 off and no port present. `open_serial` derives one from the other, so a port and
 its timing cannot disagree.
 
-## 2. TCP configuration
+## 2. Read-only ADU reader
+
+For a stream offering only `AsyncRead` — a listen-only serial port, or bytes
+replayed from a capture — `FrameTransport` cannot be used, since it requires
+`AsyncWrite` too (TR-R-077).
+
+```rust
+pub struct AduReader<S, F> { /* stream, read buffer, config, direction */ }
+
+impl<S, F> AduReader<S, F>
+where
+    S: AsyncRead + Unpin + Send,
+    F: Framing,
+{
+    pub fn new(stream: S, direction: Direction) -> Self;
+    pub fn with_config(stream: S, direction: Direction, config: TransportConfig) -> Self;
+    pub async fn recv_adu(&mut self) -> Result<Vec<u8>>;
+    pub fn into_inner(self) -> S;
+}
+```
+
+`recv_adu` applies the same boundary rule as `FrameTransport::recv_request`/
+`recv_response` (TR-R-010..012, TR-R-045) and the same TR-R-044/TR-R-046
+recovery-vs-terminal behavior on failure (TR-R-080), but returns the ADU's raw
+bytes rather than a decoded `(Header, Pdu)` pair (TR-R-079): the caller decodes
+via `F::decode_request`/`F::decode_response`. `direction` is consulted only by
+a `ContentLength` boundary (RTU-over-stream); `Prefixed`, `Delimited`, and
+`Silence` boundaries ignore it (TR-R-078).
+
+## 3. TCP configuration
 
 ```rust
 pub type TcpTransport = FrameTransport<TcpStream, Tcp>;
@@ -105,7 +134,7 @@ establishing the socket differs, only what is read off it.
 `local_addr` exists so a test can bind port 0 and read the assigned port back,
 which the testing conventions require of every listener.
 
-## 3. RTU serial configuration
+## 4. RTU serial configuration
 
 ```rust
 pub struct SerialConfig {
@@ -148,7 +177,7 @@ name it would not keep the backend out of the API, only out of reach (TR-R-034).
 `open_serial` is generic over the framing because a serial line carries RTU or
 ASCII framing at the operator's choice, over identical port settings.
 
-## 4. RS-485 kernel direction control
+## 5. RS-485 kernel direction control
 
 ```rust
 #[cfg(feature = "rs485")]
@@ -179,7 +208,7 @@ flag bits; TR-R-057 fixes after-send as the complement.
 Per NF-R-017 these types are exhaustive, so the new `SerialConfig` field and the
 new `Error` variant below are both breaking changes.
 
-## 5. Feature flags
+## 6. Feature flags
 
 | Feature | Default | Gates |
 |---|---|---|
@@ -192,7 +221,7 @@ new `Error` variant below are both breaking changes.
 gated: encoding an RTU ADU is pure computation and stays available on `no_std`.
 Only opening a physical port, and configuring its RS-485 mode, is gated.
 
-## 6. Error variants
+## 7. Error variants
 
 Added by this area, all gated on `std`:
 
@@ -210,7 +239,7 @@ derives `PartialEq`, which `io::Error` does not implement; the kind is the part 
 caller matches on, and preserving the OS message would cost every existing
 equality assertion in the crate.
 
-## 7. TLS
+## 8. TLS
 
 Behind the `tls` feature. Client and server each build a `rustls` config
 per-call via `builder_with_provider` with the `ring` crypto provider — never

@@ -164,8 +164,9 @@ fn wrap_into(
 }
 
 /// The LRC: the two's complement of the 8-bit sum of the decoded bytes
-/// (FR-R-114).
-fn lrc(bytes: &[u8]) -> u8 {
+/// (FR-R-114). Public so a caller can validate a captured frame's integrity
+/// independently of decoding it (FR-ADU-R-002).
+pub fn lrc(bytes: &[u8]) -> u8 {
     bytes
         .iter()
         .fold(0u8, |sum, byte| sum.wrapping_add(*byte))
@@ -230,6 +231,14 @@ mod tests {
             address: Address(0x006B),
             quantity: Quantity(3),
         }
+    }
+
+    #[test]
+    /// FR-ADU-R-002 — LRC is public, reachable from the crate root, checked
+    /// against the same worked example as `READ_HOLDING_REQUEST` above
+    /// (`:1103006B00037E\r\n`): LRC 0x7E over `11 03 00 6B 00 03`.
+    fn ut_lrc_is_public() {
+        assert_eq!(crate::lrc(&[0x11, 0x03, 0x00, 0x6B, 0x00, 0x03]), 0x7E);
     }
 
     #[test]

@@ -53,6 +53,14 @@ behavior, stated limitations).
 
 **TR-R-014** — A stream that ends cleanly between two ADUs shall report end-of-stream; one that ends part-way through an ADU shall report a distinct connection-closed error.
 
+**TR-R-077** — A read-only frame reader shall be available for a stream that offers only `AsyncRead` (no `AsyncWrite`), for a listen-only serial port or bytes replayed from a capture. It shall apply the same per-framing boundary rule as `FrameTransport` (TR-R-010..012, TR-R-045) and shall never require a write half.
+
+**TR-R-078** — The read-only frame reader shall take a direction (FR-R-005) at construction, consulted only by a boundary derivation that needs it (RTU-over-stream, FR-R-146/TR-R-045); a boundary that does not depend on direction (TCP, RTU, ASCII) shall ignore it.
+
+**TR-R-079** — The read-only frame reader shall yield the raw bytes of one complete ADU per call, undecoded — header/PDU split and request-vs-response decoding remain the caller's job via the existing `Framing::decode_request`/`decode_response`. It shall perform no direction guessing of its own.
+
+**TR-R-080** — After a boundary failure, the read-only frame reader's behavior shall match `FrameTransport`'s: a self-locating boundary (FR-R-144) recovers on the next call; a non-self-locating boundary (RTU-over-stream) is terminal for that reader, on the same terms as TR-R-046.
+
 ---
 
 ## 3. TCP

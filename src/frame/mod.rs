@@ -15,7 +15,7 @@ mod rtu;
 mod tcp;
 mod value;
 
-pub use ascii::Ascii;
+pub use ascii::{Ascii, lrc};
 pub use diagnostics::DiagnosticSubFunction;
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use file::{FileRecordRead, FileRecordReadResponse, FileRecordWrite};
@@ -23,7 +23,7 @@ pub use framing::{AduBoundary, Direction, Extent, Framing};
 pub use function::FunctionCode;
 pub use mei::{DeviceIdObject, MeiRequest, MeiResponse, ReadDeviceIdCode};
 pub use pdu::{MAX_PDU_LEN, RequestPdu, ResponsePdu, mask_write_result};
-pub use rtu::{Rtu, RtuOverTcp};
+pub use rtu::{Rtu, RtuOverTcp, crc16};
 pub use tcp::{MbapHeader, Tcp};
 #[cfg(feature = "std")]
 pub(crate) use value::BROADCAST_UNIT;
