@@ -137,6 +137,7 @@ rustls::Error`, which has no `Eq`, so `Error`'s `Eq` derive is conditional on
 | `Error`, `Result<T>` | enum, alias | §7; `Result<T> = core::result::Result<T, Error>` |
 | `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-045) |
 | `crc16` | fn | `(bytes: &[u8]) -> u16`, the RTU/RTU-over-stream CRC of §5, computable independently of decoding (FR-ADU-R-001) |
+| `lrc` | fn | `(bytes: &[u8]) -> u8`, the ASCII checksum of §5, computable independently of decoding (FR-ADU-R-002) |
 
 ### Domain value types (FR-R-007)
 

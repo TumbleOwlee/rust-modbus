@@ -15,7 +15,7 @@ mod rtu;
 mod tcp;
 mod value;
 
-pub use ascii::Ascii;
+pub use ascii::{Ascii, lrc};
 pub use diagnostics::DiagnosticSubFunction;
 pub use exception::{ExceptionCode, ExceptionResponse};
 pub use file::{FileRecordRead, FileRecordReadResponse, FileRecordWrite};
