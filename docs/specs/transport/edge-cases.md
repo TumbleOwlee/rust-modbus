@@ -119,6 +119,12 @@ owns the desynchronization that TR-R-041 describes.
   `on_error` — it reaches `Service::on_tls_handshake_failed(peer, &error)`
   instead, the notification dedicated to a handshake that fails before any
   `Connection` exists (SV-R-055, SV-R-056, TR-R-066).
+- **A client cert accepted under `ClientCertPolicy::AllowAny`** is never
+  chain-validated; `accept`/`accept_framed`'s returned `peer_cert` is `Some`
+  with whatever certificate was presented, without any trust decision behind
+  it. A handshake with no cert presented at all still fails exactly as under
+  `Require` (TR-R-069's `peer_cert: None` case), since the cert is still
+  mandatory — only chain validation is skipped.
 - **The connect timeout bounds the whole `connect_tls` call.** `TcpConfig`'s
   `connect_timeout` (TR-R-021) covers the TCP connect and the TLS handshake
   together — there is no second, TLS-specific timeout knob. Expiry is always

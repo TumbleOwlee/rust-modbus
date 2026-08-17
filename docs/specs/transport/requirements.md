@@ -143,7 +143,7 @@ behavior, stated limitations).
 
 **TR-R-065** — `TlsClientConfig` shall carry a `ServerCertVerification` policy — `Verify(RootStore)` (defaultable to platform-native roots) or the explicitly-named `DangerousDisableVerification` — plus an optional client cert/key for client auth. No boolean/`Option` spelling shall reach "skip verification" silently.
 
-**TR-R-066** — `TlsServerConfig` shall carry the server's cert/key and a `ClientCertPolicy`: `Require(RootStore)` or `None` (encryption-only, no client cert requested). No policy shall accept an unverified client cert as authenticated.
+**TR-R-066** — `TlsServerConfig` shall carry the server's cert/key and a `ClientCertPolicy`: `Require(RootStore)` (validates the client cert chain against `RootStore`), `AllowAny` (requires a client cert be presented but performs no chain/identity validation, mirroring TR-R-065's `DangerousDisableVerification`), or `None` (encryption-only, no client cert requested). No boolean/`Option` spelling shall reach "skip verification" silently — only the explicitly-named `AllowAny` variant may do so.
 
 **TR-R-067** — TLS handshake failure shall surface as a distinct `Error::TlsHandshake { source: rustls::Error, peer_cert: Option<CertificateDer<'static>> }` variant, separate from `Io` and `Timeout`. `source` carries the underlying `rustls` error. Because `rustls::Error` has no `Eq`, `Error` derives `Eq` only when the `tls` feature is disabled; `PartialEq`/`Clone`/`Debug` hold unconditionally.
 
