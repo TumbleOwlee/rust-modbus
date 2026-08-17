@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rust_modbus::{
-    Address, ClientCertPolicy, Error, MbapHeader, Quantity, RegisterValue, RequestPdu, ResponsePdu,
-    RootStore, ServerCertVerification, TcpConfig, TlsClientConfig, TlsServerConfig, TransactionId,
-    UnitId, connect_tls, load_pem_cert_chain, load_pem_private_key,
+    Address, ClientCertPolicy, ClientIdentity, Error, MbapHeader, Quantity, RegisterValue,
+    RequestPdu, ResponsePdu, RootStore, ServerCertVerification, TcpConfig, TlsClientConfig,
+    TlsServerConfig, TransactionId, UnitId, connect_tls, load_pem_cert_chain, load_pem_private_key,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -155,11 +155,11 @@ async fn it_connect_tls_timeout_covers_the_whole_handshake() {
     stalling.abort();
 }
 
-fn server_config() -> TlsServerConfig {
+fn server_config(client_certs: ClientCertPolicy) -> TlsServerConfig {
     TlsServerConfig {
         cert_chain: load_pem_cert_chain(&fixture("server.crt")).expect("parses"),
         key: load_pem_private_key(&fixture("server.key")).expect("parses"),
-        client_certs: ClientCertPolicy::None,
+        client_certs,
     }
 }
 
@@ -167,9 +167,10 @@ fn server_config() -> TlsServerConfig {
 /// TR-R-063 — `TlsListener` accepts a connection and yields a
 /// `FrameTransport` that exchanges an ADU.
 async fn it_tls_listener_accepts_and_yields_a_frame_transport() {
-    let listener = rust_modbus::TlsListener::bind(ephemeral(), server_config())
-        .await
-        .expect("binds");
+    let listener =
+        rust_modbus::TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::None))
+            .await
+            .expect("binds");
     let addr = listener.local_addr().expect("reports its address");
 
     let serving = tokio::spawn(async move {
@@ -197,4 +198,35 @@ async fn it_tls_listener_accepts_and_yields_a_frame_transport() {
         serving.await.expect("the server task finishes"),
         (header(), request())
     );
+}
+
+#[tokio::test]
+/// TR-R-066 -- `AllowAny` accepts a client certificate no root store
+/// trusts; `accept`'s returned `peer_cert` is `Some` with whatever
+/// certificate was presented, with no trust decision behind it.
+async fn it_allow_any_accept_returns_the_untrusted_client_cert() {
+    let listener =
+        rust_modbus::TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::AllowAny))
+            .await
+            .expect("binds");
+    let addr = listener.local_addr().expect("reports its address");
+
+    let serving = tokio::spawn(async move {
+        let (_transport, _peer, cert) = listener.accept().await.expect("accepts");
+        cert
+    });
+
+    let cert_chain = load_pem_cert_chain(&fixture("unrelated-client.crt")).expect("parses");
+    let key = load_pem_private_key(&fixture("unrelated-client.key")).expect("parses");
+    let mut client_config = trusting_ca();
+    client_config.client_identity = Some(ClientIdentity { cert_chain, key });
+    let _client = connect_tls(addr, TcpConfig::default(), client_config)
+        .await
+        .expect("connects and handshakes despite an untrusted client cert");
+
+    let expected = load_pem_cert_chain(&fixture("unrelated-client.crt"))
+        .expect("parses")
+        .first()
+        .cloned();
+    assert_eq!(serving.await.expect("the server task finishes"), expected);
 }

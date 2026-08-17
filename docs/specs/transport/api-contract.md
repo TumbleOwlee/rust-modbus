@@ -275,6 +275,7 @@ pub struct TlsClientConfig {                          // Debug, Default
 
 pub enum ClientCertPolicy {
     Require(RootStore),
+    AllowAny,
     None,
 }
 
@@ -304,7 +305,7 @@ impl TlsListener {
     pub async fn accept(&self) -> Result<(
         FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, Tcp>,
         SocketAddr,
-        Option<CertificateDer<'static>>,               // Some under ClientCertPolicy::Require
+        Option<CertificateDer<'static>>,               // Some under ClientCertPolicy::Require or AllowAny
     )>;
     pub async fn accept_framed<F: Framing>(&self) -> Result<(
         FrameTransport<tokio_rustls::server::TlsStream<TcpStream>, F>,

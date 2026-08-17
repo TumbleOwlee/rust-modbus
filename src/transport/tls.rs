@@ -314,6 +314,12 @@ pub enum ClientCertPolicy {
     /// Require a client certificate, verified against a trusted root store.
     /// A handshake presenting none, or one the store does not trust, fails.
     Require(RootStore),
+    /// Require a client certificate be presented, but perform no
+    /// chain/identity validation — mirrors
+    /// [`ServerCertVerification::DangerousDisableVerification`] on the
+    /// server side. A handshake presenting none still fails, same as
+    /// `Require` (TR-R-066, TR-R-069).
+    AllowAny,
     /// Encryption only; no client certificate is requested.
     None,
 }
@@ -406,6 +412,71 @@ impl ClientCertVerifier for CapturingClientCertVerifier {
     }
 }
 
+/// A verifier that requires a client certificate be presented but
+/// performs no chain/identity validation (`ClientCertPolicy::AllowAny`,
+/// TR-R-066's mirror of TR-R-065's `DangerousDisableVerification`).
+#[derive(Debug)]
+struct AllowAnyClientCertVerifier {
+    provider: Arc<CryptoProvider>,
+}
+
+impl AllowAnyClientCertVerifier {
+    fn new() -> Self {
+        Self {
+            provider: provider(),
+        }
+    }
+}
+
+impl ClientCertVerifier for AllowAnyClientCertVerifier {
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> core::result::Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> core::result::Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::ServerConfig, Error> {
     let builder = rustls::ServerConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
@@ -427,6 +498,9 @@ fn server_config(config: TlsServerConfig) -> core::result::Result<rustls::Server
             builder.with_client_cert_verifier(Arc::new(CapturingClientCertVerifier {
                 inner: verifier,
             }))
+        }
+        ClientCertPolicy::AllowAny => {
+            builder.with_client_cert_verifier(Arc::new(AllowAnyClientCertVerifier::new()))
         }
         ClientCertPolicy::None => builder.with_no_client_auth(),
     };
@@ -771,6 +845,34 @@ mod tests {
             .await
             .expect("the server task finishes")
             .expect("the server accepts a trusted client cert");
+    }
+
+    #[tokio::test]
+    /// TR-R-066 — `AllowAny` accepts a client certificate issued by an
+    /// untrusted CA: no chain validation happens, only presence is checked.
+    async fn ut_allow_any_accepts_a_cert_from_an_untrusted_issuer() {
+        let (server_end, client_end) = duplex(4096);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(
+            ClientCertPolicy::AllowAny,
+        )));
+        let serving = tokio::spawn(async move { acceptor.accept(server_end).await });
+
+        let cert_chain = load_pem_cert_chain(&fixture("unrelated-client.crt")).expect("parses");
+        let key = load_pem_private_key(&fixture("unrelated-client.key")).expect("parses");
+        let config = client_config(TlsClientConfig {
+            server_cert: ServerCertVerification::Verify(roots("ca.crt")),
+            client_identity: Some(ClientIdentity { cert_chain, key }),
+        })
+        .expect("builds");
+        let connector = TlsConnector::from(Arc::new(config));
+        let _client_stream = connector
+            .connect(server_name(), client_end)
+            .await
+            .expect("handshakes");
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("the server accepts an unverified client cert");
     }
 
     #[tokio::test]
