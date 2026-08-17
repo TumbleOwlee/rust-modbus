@@ -774,6 +774,33 @@ mod tests {
     }
 
     #[tokio::test]
+    /// TR-R-066 — `AllowAny` accepts a client certificate issued by an
+    /// untrusted CA: no chain validation happens, only presence is checked.
+    async fn ut_allow_any_accepts_a_cert_from_an_untrusted_issuer() {
+        let (server_end, client_end) = duplex(4096);
+        let acceptor =
+            tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config(ClientCertPolicy::AllowAny)));
+        let serving = tokio::spawn(async move { acceptor.accept(server_end).await });
+
+        let cert_chain = load_pem_cert_chain(&fixture("unrelated-client.crt")).expect("parses");
+        let key = load_pem_private_key(&fixture("unrelated-client.key")).expect("parses");
+        let config = client_config(TlsClientConfig {
+            server_cert: ServerCertVerification::Verify(roots("ca.crt")),
+            client_identity: Some(ClientIdentity { cert_chain, key }),
+        })
+        .expect("builds");
+        let connector = TlsConnector::from(Arc::new(config));
+        let _client_stream = connector
+            .connect(server_name(), client_end)
+            .await
+            .expect("handshakes");
+        serving
+            .await
+            .expect("the server task finishes")
+            .expect("the server accepts an unverified client cert");
+    }
+
+    #[tokio::test]
     /// TR-R-069 — `CapturingClientCertVerifier::verify_client_cert` clones
     /// the offered end-entity certificate into `REJECTED_CLIENT_CERT`,
     /// readable inside the same task-local scope after the call.

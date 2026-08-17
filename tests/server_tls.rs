@@ -203,6 +203,53 @@ async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established()
 }
 
 #[tokio::test]
+/// TR-R-069 -- `AllowAny` still requires a client certificate be
+/// presented: a handshake offering none fails exactly as under `Require`,
+/// `peer_cert: None`, and never reaches `on_connect`.
+async fn it_on_tls_handshake_failed_under_allow_any_when_no_cert_is_offered() {
+    let listener = TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::AllowAny))
+        .await
+        .expect("binds");
+    let address = listener.local_addr().expect("reports its address");
+    let service = Recorder::default();
+    let server = Server::new(service.clone());
+    let handle = server.handle();
+    let serving = tokio::spawn(server.serve_tls::<rust_modbus::Tcp>(listener));
+
+    // No client identity presented, though AllowAny still requires one.
+    let _ = connect_tls(address, TcpConfig::default(), trusting_ca()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while service.events().is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let events = service.events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::HandshakeFailed(
+                _,
+                Error::TlsHandshake {
+                    peer_cert: None,
+                    ..
+                }
+            )
+        )),
+        "the service must be notified of the failed handshake, with no cert offered: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Connect(_))),
+        "a failed handshake must never reach on_connect: {events:?}"
+    );
+
+    handle.shutdown().await;
+    let _ = serving.await.expect("the task finishes");
+}
+
+#[tokio::test]
 /// TR-R-069 -- a client certificate offered and rejected under
 /// `ClientCertPolicy::Require` (untrusted issuer) reaches
 /// `on_tls_handshake_failed` as `Error::TlsHandshake.peer_cert`, `Some`
