@@ -11,8 +11,7 @@ use std::time::Duration;
 use rust_modbus::{
     Address, ClientCertPolicy, ClientIdentity, Error, MbapHeader, Quantity, RegisterValue,
     RequestPdu, ResponsePdu, RootStore, ServerCertVerification, TcpConfig, TlsClientConfig,
-    TlsServerConfig, TransactionId, UnitId, connect_tls, load_pem_cert_chain,
-    load_pem_private_key,
+    TlsServerConfig, TransactionId, UnitId, connect_tls, load_pem_cert_chain, load_pem_private_key,
 };
 
 /// An ephemeral loopback address: port 0, so the kernel assigns one.
@@ -168,9 +167,10 @@ fn server_config(client_certs: ClientCertPolicy) -> TlsServerConfig {
 /// TR-R-063 — `TlsListener` accepts a connection and yields a
 /// `FrameTransport` that exchanges an ADU.
 async fn it_tls_listener_accepts_and_yields_a_frame_transport() {
-    let listener = rust_modbus::TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::None))
-        .await
-        .expect("binds");
+    let listener =
+        rust_modbus::TlsListener::bind(ephemeral(), server_config(ClientCertPolicy::None))
+            .await
+            .expect("binds");
     let addr = listener.local_addr().expect("reports its address");
 
     let serving = tokio::spawn(async move {
@@ -228,8 +228,5 @@ async fn it_allow_any_accept_returns_the_untrusted_client_cert() {
         .expect("parses")
         .first()
         .cloned();
-    assert_eq!(
-        serving.await.expect("the server task finishes"),
-        expected
-    );
+    assert_eq!(serving.await.expect("the server task finishes"), expected);
 }
