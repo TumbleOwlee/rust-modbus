@@ -1,6 +1,6 @@
 [package]
 name = "rust-modbus"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # NF-R-005. Verified by the `msrv` CI job, not merely declared. The floor is set
 # by `let` chains in the frame layer, stable since 1.88; edition 2024 alone would
