@@ -380,23 +380,19 @@ fn register_width(quantity: usize) -> usize {
 /// Distinct from `registers_from_bytes`: a diagnostic data word is opaque,
 /// whose meaning its sub-function decides, so it is not a `RegisterValue`.
 fn words_from_bytes(data: &[u8]) -> Vec<u16> {
-    data.chunks_exact(2)
-        .map(|pair| match pair {
-            [hi, lo] => u16::from_be_bytes([*hi, *lo]),
-            // Unreachable: `chunks_exact(2)` yields only two-element slices.
-            _ => 0,
-        })
+    data.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[hi, lo]| u16::from_be_bytes([hi, lo]))
         .collect()
 }
 
 /// Interpret `data` as big-endian registers (FR-R-003).
 pub(super) fn registers_from_bytes(data: &[u8]) -> Vec<RegisterValue> {
-    data.chunks_exact(2)
-        .map(|pair| match pair {
-            [hi, lo] => RegisterValue(u16::from_be_bytes([*hi, *lo])),
-            // Unreachable: `chunks_exact(2)` yields only two-element slices.
-            _ => RegisterValue(0),
-        })
+    data.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[hi, lo]| RegisterValue(u16::from_be_bytes([hi, lo])))
         .collect()
 }
 
