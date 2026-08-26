@@ -176,12 +176,7 @@ pub fn lrc(bytes: &[u8]) -> u8 {
 /// Decode hexadecimal character pairs into bytes (FR-R-111, FR-R-112).
 fn decode_hex(chars: &[u8]) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(chars.len() / 2);
-    for pair in chars.chunks_exact(2) {
-        let (high, low) = match *pair {
-            [high, low] => (high, low),
-            // `chunks_exact(2)` yields nothing else.
-            _ => return Err(Error::Malformed),
-        };
+    for &[high, low] in chars.as_chunks::<2>().0 {
         bytes.push((nibble(high)? << 4) | nibble(low)?);
     }
     Ok(bytes)
