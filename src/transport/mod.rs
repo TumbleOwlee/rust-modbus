@@ -677,40 +677,39 @@ mod shared {
 ///
 /// Declared with an explicit `-> impl Future` return rather than `async fn`
 /// (`async fn` in a public trait is a clippy/rustc lint, `async_fn_in_trait`:
-/// auto-trait bounds on the future cannot be named). No `+ Send` is added,
-/// unlike `Service` (`src/server/service.rs`): `Service` futures are spawned
-/// per connection and so must be `Send`, but nothing in this crate spawns a
-/// `Client`'s own future — `Client::call` (and every typed method built on it)
-/// is always awaited inline, including from `SyncClient::call`'s
-/// `runtime.block_on`. A `+ Send` bound here would force `F: Send` and
-/// `F::Header: Sync` onto every generic-over-`F` caller (`SyncClient<S, F>`
-/// among them) for no consumer that needs it.
+/// auto-trait bounds on the future cannot be named). `+ Send` is added, as on
+/// `Service` (`src/server/service.rs`), so a future awaiting `Client::call`
+/// inside a function generic over `T: ClientTransport<F>` and `F: Framing`
+/// can be handed to a multi-threaded spawner (e.g. `tokio::spawn`) without
+/// naming a concrete transport or framing (TR-R-081). Every in-crate
+/// transport satisfies it trivially — see `docs/specs/transport/edge-cases.md`.
 pub trait ClientTransport<F: Framing> {
     /// Send a request (TR-R-075).
     fn send_request(
         &mut self,
         header: &F::Header,
         pdu: &RequestPdu,
-    ) -> impl Future<Output = Result<()>>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Receive a response (TR-R-075).
-    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>>;
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;
 }
 
 impl<S, F> ClientTransport<F> for FrameTransport<S, F>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
-    F: Framing,
+    F: Framing + Send,
+    F::Header: Sync,
 {
     fn send_request(
         &mut self,
         header: &F::Header,
         pdu: &RequestPdu,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + Send {
         FrameTransport::send_request(self, header, pdu)
     }
 
-    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> {
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send {
         FrameTransport::recv_response(self)
     }
 }

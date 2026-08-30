@@ -229,16 +229,19 @@ impl<F: Framing> UdpTransportWriter<F> {
     }
 }
 
-impl<F: Framing> ClientTransport<F> for UdpTransport<F> {
+impl<F: Framing + Send> ClientTransport<F> for UdpTransport<F>
+where
+    F::Header: Sync,
+{
     fn send_request(
         &mut self,
         header: &F::Header,
         pdu: &RequestPdu,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + Send {
         UdpTransport::send_request(self, header, pdu)
     }
 
-    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> {
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send {
         UdpTransport::recv_response(self)
     }
 }

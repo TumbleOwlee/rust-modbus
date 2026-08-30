@@ -76,7 +76,10 @@ fn build_runtime() -> Result<Runtime> {
         .map_err(|error| Error::Io { kind: error.kind() })
 }
 
-impl<F: ClientFraming> SyncClient<TcpStream, F> {
+impl<F: ClientFraming + Send> SyncClient<TcpStream, F>
+where
+    F::Header: Sync,
+{
     /// Connect to a Modbus server over TCP and wrap it in a blocking client
     /// (CL-R-076).
     ///
@@ -104,7 +107,10 @@ impl<F: ClientFraming> SyncClient<TcpStream, F> {
 }
 
 #[cfg(feature = "rtu")]
-impl<F: ClientFraming> SyncClient<crate::transport::SerialStream, F> {
+impl<F: ClientFraming + Send> SyncClient<crate::transport::SerialStream, F>
+where
+    F::Header: Sync,
+{
     /// Open a serial port and wrap it in a blocking client (CL-R-076).
     ///
     /// # Errors
@@ -136,7 +142,8 @@ impl<F: ClientFraming> SyncClient<crate::transport::SerialStream, F> {
 impl<S, F> SyncClient<S, F>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
-    F: ClientFraming,
+    F: ClientFraming + Send,
+    F::Header: Sync,
 {
     /// Issue a request and yield the response as received (CL-R-061, CL-R-071).
     ///
