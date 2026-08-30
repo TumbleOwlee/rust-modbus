@@ -19,8 +19,8 @@ established (CL-R-002).
 pub struct Client<T, F> { /* transport, config, next transaction id, state */ }
 
 pub trait ClientTransport<F: Framing> {
-    fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>>;
-    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>>;
+    fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>> + Send; // TR-R-081
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;                 // TR-R-081
 }
 
 impl<T, F> Client<T, F>
@@ -238,12 +238,12 @@ pub type SyncAsciiClient = SyncClient<SerialStream, Ascii>;
 Constructors (CL-R-076), since a caller with no runtime cannot build a transport:
 
 ```rust
-impl<F: ClientFraming> SyncClient<TcpStream, F> {
+impl<F: ClientFraming + Send> SyncClient<TcpStream, F> where F::Header: Sync {      // TR-R-081
     pub fn connect(addr: SocketAddr, tcp: TcpConfig, client: ClientConfig) -> Result<Self>;
 }
 
 #[cfg(feature = "rtu")]
-impl<F: ClientFraming> SyncClient<SerialStream, F> {
+impl<F: ClientFraming + Send> SyncClient<SerialStream, F> where F::Header: Sync {   // TR-R-081
     pub fn open(path: &str, serial: SerialConfig, client: ClientConfig) -> Result<Self>;
 }
 ```

@@ -107,6 +107,8 @@ owns the desynchronization that TR-R-041 describes.
   TR-R-046/FR-R-150 describe for a live transport. This is the existing risk,
   reached through a new door, not a new one.
 
+- **`ClientTransport` futures are `Send` (TR-R-081).** An implementor whose future is not `Send` no longer compiles; the in-crate impls require `F: Send` and `F::Header: Sync`, and a caller spawning `Client::call` generically needs `F::Header: Send` as well. Every in-crate transport is tokio I/O or plain data, so these hold trivially — the cost lands only on exotic external implementors. Tightening a public trait bound is breaking for external implementors: minor-version bump under 0.x.
+
 ## 6. TLS
 
 - **A server cert rejected by `Verify`** (untrusted issuer, expired, wrong name)

@@ -58,12 +58,12 @@ impl From<ClientConfig> for PipelineConfig {
 }
 
 /// The transport interface the pipeline's background task needs, distinct
-/// from [`crate::transport::ClientTransport`]: that trait's futures carry no
-/// `Send` bound on purpose (`Client::call` is always awaited inline, never
-/// spawned — see its doc comment, `src/transport/mod.rs`), but this trait's
-/// futures are, since the background task is `tokio::spawn`ed (CL-R-084).
-/// Crate-private — nothing in CL-R-082 … CL-R-095 asks for a third transport
-/// to plug in here.
+/// from [`crate::transport::ClientTransport`] (both are `Send`, TR-R-081):
+/// the background task holds one never-cancelled receive future across every
+/// loop iteration live at the same time as writes, which needs independent
+/// read/write halves — `ClientTransport`'s single `&mut self` cannot express
+/// that. Crate-private — nothing in CL-R-082 … CL-R-095 asks for a third
+/// transport to plug in here.
 ///
 /// Split into independent read/write halves rather than one `&mut self`:
 /// `run`'s background task holds one never-cancelled receive future across

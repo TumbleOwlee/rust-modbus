@@ -35,6 +35,8 @@ behavior, stated limitations).
 
 **TR-R-075** — The crate shall provide a `ClientTransport<F>` trait, exposing `send_request`/`recv_response` for a client-side exchange over framing `F`. It shall be implemented by `FrameTransport<S, F>` for any `S: AsyncRead + AsyncWrite + Unpin + Send` and by `UdpTransport<F>` (TR-R-070), so a client-side consumer can be written generically over either transport.
 
+**TR-R-081** — The futures returned by `ClientTransport::send_request` and `ClientTransport::recv_response` shall be `Send`, so that a future awaiting `Client::call` inside a function generic over `T: ClientTransport<F>` and `F: Framing` can be handed to a multi-threaded spawner (e.g. `tokio::spawn`) without naming a concrete transport or framing.
+
 ---
 
 ## 2. Framing boundaries

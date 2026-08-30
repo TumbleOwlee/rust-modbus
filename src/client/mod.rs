@@ -872,6 +872,38 @@ mod tests {
     }
 
     #[tokio::test]
+    /// TR-R-081 — a `Client::call` future, awaited inside a function generic
+    /// over `T: ClientTransport<F> + Send + 'static` and `F: ClientFraming +
+    /// Send + 'static`, can be handed to `tokio::spawn` without naming a
+    /// concrete transport or framing.
+    async fn ut_generic_client_call_future_is_send() {
+        async fn call_generically<T, F>(mut client: Client<T, F>, unit: UnitId, request: RequestPdu)
+        where
+            T: ClientTransport<F> + Send + 'static,
+            F: ClientFraming + Send + 'static,
+            F::Header: Send,
+        {
+            tokio::spawn(async move { client.call(unit, request).await })
+                .await
+                .expect("the spawned task finishes")
+                .expect("the call succeeds");
+        }
+
+        let (client, mut server) = pair();
+        let answering = tokio::spawn(async move {
+            let (header, request) = server.recv_request().await.expect("receives");
+            assert_eq!(request, read_holding());
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("responds");
+        });
+
+        call_generically(client, UnitId(0x11), read_holding()).await;
+        answering.await.expect("the server task finishes");
+    }
+
+    #[tokio::test]
     /// CL-R-010, CL-R-061 — a raw call writes the request and yields the
     /// response as received.
     async fn ut_call_round_trips_a_request() {
