@@ -19,8 +19,8 @@ established (CL-R-002).
 pub struct Client<T, F> { /* transport, config, next transaction id, state */ }
 
 pub trait ClientTransport<F: Framing> {
-    fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>>;
-    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>>;
+    fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>> + Send; // TR-R-081
+    fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;                 // TR-R-081
 }
 
 impl<T, F> Client<T, F>
