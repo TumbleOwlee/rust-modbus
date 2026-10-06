@@ -254,8 +254,10 @@ where
     ///
     /// # Errors
     ///
-    /// Fails if the listener does. Connections already running are finished
-    /// before the failure is returned.
+    /// Fails if the listener's TCP accept does and the service answers
+    /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
+    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// failure is returned.
     #[cfg(feature = "tls")]
     pub async fn serve_tls<F>(self, listener: crate::transport::TlsListener) -> Result<()>
     where
@@ -266,16 +268,12 @@ where
         let mut connections: JoinSet<()> = JoinSet::new();
         let mut signal = self.shutdown.subscribe();
         loop {
-            let accepted = tokio::select! {
-                biased;
-                () = shutdown_requested(&mut signal) => {
-                    while connections.join_next().await.is_some() {}
-                    return Ok(());
-                }
-                accepted = listener.accept_tcp_only() => accepted,
-            };
+            let accepted = self
+                .next_accept(&mut connections, &mut signal, || listener.accept_tcp_only())
+                .await;
             match accepted {
-                Ok((stream, peer)) => {
+                Accepted::Done(result) => return result,
+                Accepted::Got((stream, peer)) => {
                     let listener = Arc::clone(&listener);
                     let service = Arc::clone(&self.service);
                     let config = self.config;
@@ -299,12 +297,6 @@ where
                             }
                         }
                     });
-                }
-                Err(error) => {
-                    // The listener is gone, but the connections it accepted
-                    // are still owed their end (SV-R-033).
-                    while connections.join_next().await.is_some() {}
-                    return Err(error);
                 }
             }
         }
