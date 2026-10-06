@@ -1158,9 +1158,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-050, SV-R-051 — over TCP an undecodable request is reported and
-    /// ends the connection, but serving itself succeeds: the failure was the
-    /// peer's. The MBAP length was trusted to read the ADU, so once its
+    /// SV-R-050 — over TCP an undecodable request is reported and ends the
+    /// connection, and `serve_link` returns that failure (SV-R-062). The MBAP length was trusted to read the ADU, so once its
     /// contents turn out to be nonsense there is no way to find the next one.
     async fn ut_undecodable_request_ends_the_connection_on_tcp() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1507,6 +1506,33 @@ mod tests {
             .expect("writes a request");
         assert_eq!(sound.recv_response().await, Ok((header(1, 1), registers())));
         serving.abort();
+    }
+
+    #[tokio::test]
+    /// SV-R-051 — a failure confined to one connection does not propagate out
+    /// of serving a listener: `serve` still returns `Ok(())` after shutdown.
+    async fn ut_connection_failure_does_not_fail_serving_a_listener() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let listener = TcpListener::bind(ephemeral()).await.expect("binds");
+        let address = listener.local_addr().expect("reports its address");
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve(listener));
+
+        let mut broken = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        tokio::io::AsyncWriteExt::write_all(&mut broken, &[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("writes a malformed request");
+        service.awaited_a_disconnect().await;
+        assert!(matches!(
+            service.events().last(),
+            Some(Event::Disconnect(Disconnect::Failed(_)))
+        ));
+
+        handle.shutdown().await;
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
     }
 
     #[tokio::test]
