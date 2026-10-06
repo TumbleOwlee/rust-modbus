@@ -81,14 +81,14 @@ where
     /// Serve one already-established transport, such as a serial link
     /// (SV-R-007).
     ///
-    /// Returns when the link ends. A failure of the link itself is the
-    /// connection's, not the server's, so it is reported to the service rather
-    /// than returned (SV-R-051).
+    /// Returns when the link ends, once `on_disconnect` has completed. The
+    /// result is that of the link's end (SV-R-062).
     ///
     /// # Errors
     ///
-    /// Currently infallible; the result is part of the signature so that a
-    /// future serving failure needs no API change.
+    /// The error the link failed with, when it ends with
+    /// [`Disconnect::Failed`]. Every other end (`Closed`, `Rejected`,
+    /// `ShuttingDown`) is `Ok(())`.
     pub async fn serve_link<T, F>(self, mut transport: FrameTransport<T, F>) -> Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send,
@@ -103,8 +103,7 @@ where
             &mut transport,
             &mut signal,
         )
-        .await;
-        Ok(())
+        .await
     }
 
     /// Serve a listening socket, handling every connection it accepts
@@ -160,7 +159,9 @@ where
                     // A task each, so one connection's handler never delays
                     // another's (SV-R-030).
                     connections.spawn(async move {
-                        serve_connection(
+                        // A connection's failure is the service's, not
+                        // serving's (SV-R-051).
+                        let _ = serve_connection(
                             service.as_ref(),
                             &config,
                             &conn,
@@ -284,7 +285,9 @@ where
                         match listener.handshake_framed::<F>(stream).await {
                             Ok((mut transport, cert)) => {
                                 let conn = Connection::new(id, Some(peer)).with_peer_cert(cert);
-                                serve_connection(
+                                // A connection's failure is the service's, not
+                                // serving's (SV-R-051).
+                                let _ = serve_connection(
                                     service.as_ref(),
                                     &config,
                                     &conn,
@@ -378,14 +381,15 @@ enum Accepted<T> {
 const UDP_CONNECTION: ConnectionId = ConnectionId(0);
 
 /// Run one connection from its first notification to its last (SV-R-032,
-/// SV-R-033).
+/// SV-R-033), returning how it ended (SV-R-062).
 async fn serve_connection<S, T, F>(
     service: &S,
     config: &ServerConfig,
     conn: &Connection,
     transport: &mut FrameTransport<T, F>,
     signal: &mut watch::Receiver<bool>,
-) where
+) -> Result<()>
+where
     S: Service,
     T: AsyncRead + AsyncWrite + Unpin + Send,
     F: ServerFraming,
@@ -393,10 +397,17 @@ async fn serve_connection<S, T, F>(
     if service.on_connect(conn).await == Acceptance::Reject {
         // Refused before a request is read (SV-R-032).
         service.on_disconnect(conn, Disconnect::Rejected).await;
-        return;
+        return Ok(());
     }
     let reason = exchange(service, config, conn, transport, signal).await;
+    // Derived from the very reason `on_disconnect` receives, so the two cannot
+    // disagree (SV-R-062).
+    let outcome = match &reason {
+        Disconnect::Failed(error) => Err(error.clone()),
+        _ => Ok(()),
+    };
     service.on_disconnect(conn, reason).await;
+    outcome
 }
 
 /// Answer requests until the connection ends, and say why it did (SV-R-015).
@@ -586,6 +597,8 @@ mod tests {
         overlap: Option<Arc<tokio::sync::Barrier>>,
         /// Holds every request until the test releases a permit (SV-R-042).
         hold: Option<Arc<tokio::sync::Semaphore>>,
+        /// Holds `on_disconnect` open until the test adds a permit (SV-R-062).
+        disconnect_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     impl Recorder {
@@ -601,6 +614,7 @@ mod tests {
                 accept: Acceptance::Accept,
                 overlap: None,
                 hold: None,
+                disconnect_gate: None,
             })
         }
 
@@ -613,6 +627,7 @@ mod tests {
                 accept: Acceptance::Accept,
                 overlap: Some(Arc::new(tokio::sync::Barrier::new(at_once))),
                 hold: None,
+                disconnect_gate: None,
             })
         }
 
@@ -625,6 +640,7 @@ mod tests {
                 accept: Acceptance::Accept,
                 overlap: None,
                 hold: Some(Arc::new(tokio::sync::Semaphore::new(0))),
+                disconnect_gate: None,
             })
         }
 
@@ -647,6 +663,37 @@ mod tests {
             }
         }
 
+        /// A service whose `on_disconnect` does not complete until
+        /// `release_disconnect` (SV-R-062).
+        fn gated_disconnect() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+                reply: Box::new(|_| Ok(registers())),
+                accept: Acceptance::Accept,
+                overlap: None,
+                hold: None,
+                disconnect_gate: Some(Arc::new(tokio::sync::Semaphore::new(0))),
+            })
+        }
+
+        fn release_disconnect(&self) {
+            self.disconnect_gate
+                .as_ref()
+                .expect("only a gated recorder is released")
+                .add_permits(1);
+        }
+
+        /// Wait until `on_disconnect` has been entered.
+        async fn awaited_a_disconnect(&self) {
+            while !self
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Disconnect(_)))
+            {
+                tokio::task::yield_now().await;
+            }
+        }
+
         /// A service that refuses every connection (SV-R-032).
         fn refusing() -> Arc<Self> {
             Arc::new(Self {
@@ -655,6 +702,7 @@ mod tests {
                 accept: Acceptance::Reject,
                 overlap: None,
                 hold: None,
+                disconnect_gate: None,
             })
         }
 
@@ -704,6 +752,12 @@ mod tests {
         async fn on_disconnect(&self, conn: &Connection, reason: Disconnect) {
             let _ = conn;
             self.push(Event::Disconnect(reason));
+            if let Some(gate) = self.disconnect_gate.as_ref() {
+                gate.acquire()
+                    .await
+                    .expect("the test never closes it")
+                    .forget();
+            }
         }
 
         async fn on_error(&self, conn: &Connection, error: &Error) {
@@ -955,6 +1009,132 @@ mod tests {
     }
 
     #[tokio::test]
+    /// SV-R-062 — a link that fails returns the error it ended with.
+    async fn ut_serve_link_returns_the_error_of_a_failed_link() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        let mut stream = client.into_inner();
+        // An MBAP header promising six more bytes, three of them, and a close.
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 6, 1, 3, 0])
+            .await
+            .expect("writes half a request");
+        drop(stream);
+
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Err(Error::ConnectionClosed)
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-062 — a link its peer closes cleanly returns `Ok(())`.
+    async fn ut_serve_link_returns_ok_when_closed() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+        drop(client);
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+        assert_eq!(
+            service.events().last(),
+            Some(&Event::Disconnect(Disconnect::Closed))
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-062 — a rejected link returns `Ok(())`.
+    async fn ut_serve_link_returns_ok_when_rejected() {
+        let service = Recorder::refusing();
+        let (serving, _client) = link(Arc::clone(&service));
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+        assert_eq!(
+            service.events().last(),
+            Some(&Event::Disconnect(Disconnect::Rejected))
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-062 — a link ended by shutdown returns `Ok(())`.
+    async fn ut_serve_link_returns_ok_when_shutting_down() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (server_end, _client_end) = duplex(1024);
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end)));
+        handle.shutdown().await;
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+        assert_eq!(
+            service.events().last(),
+            Some(&Event::Disconnect(Disconnect::ShuttingDown))
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-062 — `serve_link` returns only once `on_disconnect` has completed,
+    /// for a failure as for a clean end.
+    async fn ut_serve_link_returns_after_on_disconnect_completes() {
+        let service = Recorder::gated_disconnect();
+        let (serving, client) = link(Arc::clone(&service));
+
+        let mut stream = client.into_inner();
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 6, 1, 3, 0])
+            .await
+            .expect("writes half a request");
+        drop(stream);
+
+        service.awaited_a_disconnect().await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !serving.is_finished(),
+            "serve_link returned while on_disconnect was pending"
+        );
+        service.release_disconnect();
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Err(Error::ConnectionClosed)
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-062 — a shutdown that arrives while a failed link's `on_disconnect`
+    /// is pending does not change the result: it follows the reason the service
+    /// received.
+    async fn ut_serve_link_result_follows_the_reason_on_disconnect_received() {
+        let service = Recorder::gated_disconnect();
+        let (server_end, client_end) = duplex(1024);
+        let server = Server::new(Arc::clone(&service));
+        let handle = server.handle();
+        let serving = tokio::spawn(server.serve_link(FrameTransport::<_, Tcp>::new(server_end)));
+
+        let mut stream = client_end;
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 6, 1, 3, 0])
+            .await
+            .expect("writes half a request");
+        drop(stream);
+        service.awaited_a_disconnect().await;
+
+        let shutdown = tokio::spawn(async move { handle.shutdown().await });
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        service.release_disconnect();
+
+        let result = serving.await.expect("the server task finishes");
+        shutdown.await.expect("shutdown finishes");
+        let reason = service
+            .events()
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Disconnect(reason) => Some(reason),
+                _ => None,
+            })
+            .expect("on_disconnect ran");
+        assert_eq!(reason, Disconnect::Failed(Error::ConnectionClosed));
+        assert_eq!(result, Err(Error::ConnectionClosed));
+    }
+
+    #[tokio::test]
     /// SV-R-033, SV-R-052 — a peer that closes between two ADUs ends the
     /// connection cleanly, not as a failure, and is notified once.
     async fn ut_clean_close_ends_the_connection_cleanly() {
@@ -992,10 +1172,10 @@ mod tests {
         tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 1, 0, 0, 0, 2, 1, 0])
             .await
             .expect("writes a malformed request");
-        serving
-            .await
-            .expect("the server task finishes")
-            .expect("ok");
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Err(Error::InvalidFunctionCode(0))
+        );
 
         let events = service.events();
         assert!(
@@ -1478,10 +1658,10 @@ mod tests {
             .await
             .expect("writes half a request");
         drop(stream);
-        serving
-            .await
-            .expect("the server task finishes")
-            .expect("serving succeeds");
+        assert_eq!(
+            serving.await.expect("the server task finishes"),
+            Err(Error::ConnectionClosed)
+        );
 
         let events = service.events();
         assert_eq!(
