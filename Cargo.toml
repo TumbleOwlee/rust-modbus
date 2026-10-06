@@ -59,7 +59,7 @@ pipeline = ["std", "dep:tokio-util"]
 # requirement is enforced; there is no Rust test that can state it.
 [dependencies]
 crc = { version = "3.4.0", default-features = false }
-thiserror = { version = "2.0.19", default-features = false }
+thiserror = { version = "2.0.21", default-features = false }
 winnow = { version = "1.0.4", default-features = false, features = ["alloc", "ascii", "binary"] }
 # The async runtime (ARCHITECTURE.md). Optional so the bare-metal build of
 # NF-R-003 keeps it out entirely.
@@ -86,8 +86,8 @@ serde = { version = "1", optional = true, default-features = false, features = [
 # process-global default (`CryptoProvider::install_default`) -- built
 # per-config via `builder_with_provider` -- so embedding this crate alongside a
 # consumer's own rustls usage cannot collide.
-rustls = { version = "0.23.43", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
-tokio-rustls = { version = "0.26.4", optional = true, default-features = false, features = ["ring"] }
+rustls = { version = "0.23.45", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
+tokio-rustls = { version = "0.26.6", optional = true, default-features = false, features = ["ring"] }
 # PEM parsing via `PemObject` (its `alloc`-gated `from_pem_slice`/`pem_slice_iter`):
 # rustls-pemfile is unmaintained (RUSTSEC-2025-0134) and is itself a thin
 # wrapper around this same code, per the advisory's own migration guidance.
