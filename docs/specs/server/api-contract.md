@@ -71,6 +71,8 @@ let serving = tokio::spawn(server.serve(listener));
 handle.shutdown().await;      // returns once every handler has finished
 ```
 
+`serve_link`'s result is its link's end (SV-R-062): `Err(error)` for `Disconnect::Failed(error)`, `Ok(())` for every other reason, returned only after `on_disconnect` has completed. Unlike a listener, a link is not one connection among many — once it fails nothing is served, and the caller awaiting `serve_link` is the one that decides whether to reopen the port. The listener entry points are unaffected (SV-R-051).
+
 The address a listener is bound to is read back through the transport area's
 `TcpListener::local_addr`, not through the server: the server never binds, so it
 never owns the address.

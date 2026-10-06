@@ -47,6 +47,9 @@ itself and serving continues (SV-R-050, FR-R-144).
 | Shutdown while on_accept_error is pending | Notification future dropped; shutdown proceeds as during accept (SV-R-061) |
 | A request in flight at shutdown | Runs to completion and its response is sent (SV-R-042) |
 | An idle connection at shutdown | Closed without waiting for a request, `Disconnect::ShuttingDown` (SV-R-043) |
+| serve_link's link fails (I/O error, e.g. a serial adapter unplugged) | on_error, then on_disconnect with Disconnect::Failed(error); serve_link then returns Err(error) (SV-R-062) |
+| serve_link over a non-self-locating framing receives an undecodable request | Disconnect::Failed, so serve_link returns Err (SV-R-050, SV-R-062); on RTU/ASCII the frame is dropped and serving continues |
+| Shutdown races a link failure under serve_link | serve_link's result matches whichever reason on_disconnect received (SV-R-062) |
 
 ## 3. Known limitations
 
