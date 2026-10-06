@@ -99,6 +99,9 @@ pub trait Service: Send + Sync + 'static {
     fn on_error(&self, conn: &Connection, error: &Error)
         -> impl Future<Output = ()> + Send { async {} }
 
+    fn on_accept_error(&self, error: &Error)
+        -> impl Future<Output = AcceptErrorAction> + Send { async { AcceptErrorAction::Stop } }
+
     #[cfg(feature = "tls")]
     fn on_tls_handshake_failed(&self, peer: SocketAddr, error: &Error)
         -> impl Future<Output = ()> + Send { async {} }
@@ -109,6 +112,8 @@ pub trait Service: Send + Sync + 'static {
 when a TLS handshake fails before any `Connection` exists — no
 `ConnectionId` was ever assigned, so a peer address is all there is to name
 the attempt with. Default no-op, like the other notifications.
+
+`on_accept_error` (SV-R-059) answers with an `AcceptErrorAction`, not a `bool`, for the same reason `on_connect` answers with an `Acceptance`. It is not feature-gated. The server awaits it before the next `accept`, so back-off lives in the service, which knows which errors are transient (`EMFILE`, `ECONNABORTED`) — the crate cannot pick a delay right for every deployment. Applies to `serve_tls`'s raw TCP accept only; a failed handshake stays on `on_tls_handshake_failed`.
 
 `&self`, not `&mut self`: that is how SV-R-003 is enforced in the type system —
 concurrent connections hold the same service, so mutable state lives behind the
@@ -156,6 +161,11 @@ pub struct ConnectionId(pub u64);   // a domain value type, per FR-R-007
 pub enum Acceptance {
     Accept,           // serve the connection
     Reject,           // close it unread (SV-R-032)
+}
+
+pub enum AcceptErrorAction {
+    Continue,         // keep live connections, accept again (SV-R-060)
+    Stop,             // drain and return the error — the default (SV-R-051)
 }
 
 pub enum Disconnect {

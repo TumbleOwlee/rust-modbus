@@ -105,6 +105,18 @@ pub enum Acceptance {
     Reject,
 }
 
+/// What to do after accepting from a listener fails (SV-R-059).
+///
+/// A named choice rather than a `bool`, for the same reason as [`Acceptance`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptErrorAction {
+    /// Keep every live connection and accept again, once
+    /// [`on_accept_error`](Service::on_accept_error) has completed (SV-R-060).
+    Continue,
+    /// Drain live connections and return the error; the default (SV-R-051).
+    Stop,
+}
+
 /// Why a connection ended (SV-R-033).
 ///
 /// `Eq` conditional on `tls` being off, following `Error` (TR-R-067): this
@@ -185,6 +197,20 @@ pub trait Service: Send + Sync + 'static {
         async {}
     }
 
+    /// Accepting from a listener failed (SV-R-059).
+    ///
+    /// Answer [`AcceptErrorAction::Continue`] to keep serving or
+    /// [`AcceptErrorAction::Stop`] to drain and return the error (SV-R-060). The
+    /// server awaits this before the next accept, so a service backs off by
+    /// awaiting inside it; a shutdown requested meanwhile drops the future
+    /// (SV-R-061). No [`Connection`]/[`ConnectionId`] exists, since no peer was
+    /// accepted (SV-R-031). A TLS handshake failure is not reported here
+    /// (SV-R-056). The default answers `Stop`.
+    fn on_accept_error(&self, error: &Error) -> impl Future<Output = AcceptErrorAction> + Send {
+        let _ = error;
+        async { AcceptErrorAction::Stop }
+    }
+
     /// A TLS handshake failed before any connection was established (SV-R-056).
     ///
     /// No [`Connection`]/[`ConnectionId`] names the peer here: it was never
@@ -224,6 +250,19 @@ mod tests {
 
     fn connection() -> Connection {
         Connection::new(ConnectionId(3), None)
+    }
+
+    #[tokio::test]
+    /// SV-R-059 — the default `on_accept_error` answers `Stop`, so an existing
+    /// implementor is unaffected.
+    async fn ut_default_on_accept_error_answers_stop() {
+        let error = Error::Io {
+            kind: std::io::ErrorKind::OutOfMemory,
+        };
+        assert_eq!(
+            Minimal.on_accept_error(&error).await,
+            AcceptErrorAction::Stop
+        );
     }
 
     #[tokio::test]

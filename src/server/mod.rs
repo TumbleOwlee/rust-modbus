@@ -5,6 +5,7 @@ mod handle;
 mod service;
 
 use alloc::sync::Arc;
+use core::future::Future;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -18,7 +19,7 @@ use crate::transport::{recv_datagram_request, send_datagram_response_into};
 
 pub use framing::ServerFraming;
 pub use handle::ServerHandle;
-pub use service::{Acceptance, Connection, ConnectionId, Disconnect, Service};
+pub use service::{AcceptErrorAction, Acceptance, Connection, ConnectionId, Disconnect, Service};
 
 /// How a server answers (SV-R-008).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,13 +110,16 @@ where
     /// Serve a listening socket, handling every connection it accepts
     /// concurrently (SV-R-007, SV-R-030).
     ///
-    /// Returns when accepting fails. A failure confined to one connection is
-    /// reported to the service and never returned (SV-R-035, SV-R-051).
+    /// Returns when accepting fails and the service answers `Stop`. A failure
+    /// confined to one connection is reported to the service and never returned
+    /// (SV-R-035, SV-R-051).
     ///
     /// # Errors
     ///
-    /// Fails if the listener does. Connections already running are finished
-    /// before the failure is returned.
+    /// Fails if the listener does and the service answers
+    /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
+    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// failure is returned.
     pub async fn serve(self, listener: crate::transport::TcpListener) -> Result<()> {
         self.serve_framed::<Tcp>(listener).await
     }
@@ -129,8 +133,10 @@ where
     ///
     /// # Errors
     ///
-    /// Fails if the listener does. Connections already running are finished
-    /// before the failure is returned.
+    /// Fails if the listener does and the service answers
+    /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
+    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// failure is returned.
     pub async fn serve_framed<F>(self, listener: crate::transport::TcpListener) -> Result<()>
     where
         F: ServerFraming + Send + 'static,
@@ -139,20 +145,14 @@ where
         let mut connections: JoinSet<()> = JoinSet::new();
         let mut signal = self.shutdown.subscribe();
         loop {
-            let accepted = tokio::select! {
-                // Shutdown wins a tie: SV-R-041 forbids taking up another
-                // connection once it has been requested.
-                biased;
-                () = shutdown_requested(&mut signal) => {
-                    // The connections already accepted are owed their end
-                    // (SV-R-043), and the drain of SV-R-044 waits for them.
-                    while connections.join_next().await.is_some() {}
-                    return Ok(());
-                }
-                accepted = listener.accept_framed::<F>() => accepted,
-            };
+            let accepted = self
+                .next_accept(&mut connections, &mut signal, || {
+                    listener.accept_framed::<F>()
+                })
+                .await;
             match accepted {
-                Ok((mut transport, peer)) => {
+                Accepted::Done(result) => return result,
+                Accepted::Got((mut transport, peer)) => {
                     let service = Arc::clone(&self.service);
                     let config = self.config;
                     let conn = Connection::new(self.next_id(), Some(peer));
@@ -169,12 +169,6 @@ where
                         )
                         .await;
                     });
-                }
-                Err(error) => {
-                    // The listener is gone, but the connections it accepted are
-                    // still owed their end (SV-R-033).
-                    while connections.join_next().await.is_some() {}
-                    return Err(error);
                 }
             }
         }
@@ -261,8 +255,10 @@ where
     ///
     /// # Errors
     ///
-    /// Fails if the listener does. Connections already running are finished
-    /// before the failure is returned.
+    /// Fails if the listener's TCP accept does and the service answers
+    /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
+    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// failure is returned.
     #[cfg(feature = "tls")]
     pub async fn serve_tls<F>(self, listener: crate::transport::TlsListener) -> Result<()>
     where
@@ -273,16 +269,12 @@ where
         let mut connections: JoinSet<()> = JoinSet::new();
         let mut signal = self.shutdown.subscribe();
         loop {
-            let accepted = tokio::select! {
-                biased;
-                () = shutdown_requested(&mut signal) => {
-                    while connections.join_next().await.is_some() {}
-                    return Ok(());
-                }
-                accepted = listener.accept_tcp_only() => accepted,
-            };
+            let accepted = self
+                .next_accept(&mut connections, &mut signal, || listener.accept_tcp_only())
+                .await;
             match accepted {
-                Ok((stream, peer)) => {
+                Accepted::Done(result) => return result,
+                Accepted::Got((stream, peer)) => {
                     let listener = Arc::clone(&listener);
                     let service = Arc::clone(&self.service);
                     let config = self.config;
@@ -307,12 +299,57 @@ where
                         }
                     });
                 }
-                Err(error) => {
-                    // The listener is gone, but the connections it accepted
-                    // are still owed their end (SV-R-033).
+            }
+        }
+    }
+
+    /// Wait for the next accepted connection, reporting accept failures to the
+    /// service (SV-R-059).
+    ///
+    /// `Continue` keeps `connections` and accepts again once the hook's future
+    /// has completed (SV-R-060). `Stop` drains them and returns the error
+    /// (SV-R-051). A shutdown while accepting, or while the hook is pending,
+    /// drains and returns `Ok`; the hook's future is dropped, not awaited
+    /// (SV-R-061).
+    async fn next_accept<T, Fut>(
+        &self,
+        connections: &mut JoinSet<()>,
+        signal: &mut watch::Receiver<bool>,
+        mut accept: impl FnMut() -> Fut,
+    ) -> Accepted<T>
+    where
+        Fut: Future<Output = Result<T>>,
+    {
+        loop {
+            let accepted = tokio::select! {
+                // Shutdown wins a tie: SV-R-041 forbids taking up another
+                // connection once it has been requested.
+                biased;
+                () = shutdown_requested(signal) => {
+                    // The connections already accepted are owed their end
+                    // (SV-R-043), and the drain of SV-R-044 waits for them.
                     while connections.join_next().await.is_some() {}
-                    return Err(error);
+                    return Accepted::Done(Ok(()));
                 }
+                accepted = accept() => accepted,
+            };
+            let error = match accepted {
+                Ok(accepted) => return Accepted::Got(accepted),
+                Err(error) => error,
+            };
+            let action = tokio::select! {
+                biased;
+                () = shutdown_requested(signal) => {
+                    while connections.join_next().await.is_some() {}
+                    return Accepted::Done(Ok(()));
+                }
+                action = self.service.on_accept_error(&error) => action,
+            };
+            if action == AcceptErrorAction::Stop {
+                // The listener is gone, but the connections it accepted are
+                // still owed their end (SV-R-033).
+                while connections.join_next().await.is_some() {}
+                return Accepted::Done(Err(error));
             }
         }
     }
@@ -321,6 +358,14 @@ where
     fn next_id(&self) -> ConnectionId {
         ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// Outcome of [`Server::next_accept`].
+enum Accepted<T> {
+    /// A connection was accepted.
+    Got(T),
+    /// Serving is over: shutdown (`Ok`) or a listener failure answered `Stop`.
+    Done(Result<()>),
 }
 
 /// The `ConnectionId` every UDP-dispatched notification carries (SV-R-057).
@@ -1640,5 +1685,319 @@ mod tests {
             serde_json::from_str::<ServerConfig>(&text).expect("deserializes"),
             config
         );
+    }
+
+    /// A service recording accept errors and answering as scripted.
+    struct AcceptWatcher {
+        seen: Mutex<Vec<Error>>,
+        actions: Mutex<std::collections::VecDeque<AcceptErrorAction>>,
+        /// When set, the hook waits for a permit before answering (SV-R-060).
+        gate: Option<Arc<tokio::sync::Semaphore>>,
+        /// When set, the hook never completes; the flag records its drop (SV-R-061).
+        hang: Option<Arc<core::sync::atomic::AtomicBool>>,
+    }
+
+    impl AcceptWatcher {
+        fn new(
+            actions: &[AcceptErrorAction],
+            gate: Option<Arc<tokio::sync::Semaphore>>,
+            hang: Option<Arc<core::sync::atomic::AtomicBool>>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                actions: Mutex::new(actions.iter().copied().collect()),
+                gate,
+                hang,
+            })
+        }
+
+        fn seen(&self) -> Vec<Error> {
+            self.seen.lock().expect("no test panics holding it").clone()
+        }
+    }
+
+    /// Sets its flag when dropped.
+    struct DropFlag(Arc<core::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl Service for Arc<AcceptWatcher> {
+        async fn on_request(
+            &self,
+            _conn: &Connection,
+            _unit: UnitId,
+            _request: RequestPdu,
+        ) -> core::result::Result<Option<ResponsePdu>, ExceptionCode> {
+            Err(ExceptionCode::IllegalFunction)
+        }
+
+        async fn on_accept_error(&self, error: &Error) -> AcceptErrorAction {
+            self.seen
+                .lock()
+                .expect("no test panics holding it")
+                .push(error.clone());
+            if let Some(flag) = &self.hang {
+                let _guard = DropFlag(Arc::clone(flag));
+                core::future::pending::<()>().await;
+            }
+            if let Some(gate) = &self.gate {
+                gate.acquire().await.expect("never closed").forget();
+            }
+            self.actions
+                .lock()
+                .expect("no test panics holding it")
+                .pop_front()
+                .unwrap_or(AcceptErrorAction::Stop)
+        }
+    }
+
+    fn io_error() -> Error {
+        Error::Io {
+            kind: std::io::ErrorKind::OutOfMemory,
+        }
+    }
+
+    /// A scripted accept: yields each result in turn, then never completes.
+    fn scripted(
+        script: Vec<Result<u32>>,
+        calls: Arc<core::sync::atomic::AtomicUsize>,
+    ) -> impl FnMut() -> core::pin::Pin<Box<dyn Future<Output = Result<u32>> + Send>> {
+        let script = Arc::new(Mutex::new(std::collections::VecDeque::from(script)));
+        move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let next = script
+                .lock()
+                .expect("no test panics holding it")
+                .pop_front();
+            Box::pin(async move {
+                match next {
+                    Some(result) => result,
+                    None => core::future::pending().await,
+                }
+            })
+        }
+    }
+
+    /// A live connection that ends after `ms`, recording that it did.
+    fn live_connection(
+        connections: &mut JoinSet<()>,
+        ms: u64,
+    ) -> Arc<core::sync::atomic::AtomicBool> {
+        let ended = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&ended);
+        connections.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+        ended
+    }
+
+    use core::sync::atomic::AtomicUsize;
+
+    /// A live connection that ends only when the returned semaphore is given a
+    /// permit, recording that it did.
+    fn held_connection(
+        connections: &mut JoinSet<()>,
+    ) -> (
+        Arc<core::sync::atomic::AtomicBool>,
+        Arc<tokio::sync::Semaphore>,
+    ) {
+        let ended = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let (flag, held) = (Arc::clone(&ended), Arc::clone(&release));
+        connections.spawn(async move {
+            held.acquire().await.expect("never closed").forget();
+            flag.store(true, Ordering::SeqCst);
+        });
+        (ended, release)
+    }
+
+    #[tokio::test]
+    /// SV-R-059 — the hook receives the accept error, and no connection
+    /// identifier is consumed for it.
+    async fn ut_accept_error_is_reported_with_the_error() {
+        let watcher = AcceptWatcher::new(&[AcceptErrorAction::Continue], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let accepted = server
+            .next_accept(
+                &mut connections,
+                &mut signal,
+                scripted(vec![Err(io_error()), Ok(7)], calls),
+            )
+            .await;
+        assert!(matches!(accepted, Accepted::Got(7)));
+        assert_eq!(watcher.seen(), alloc::vec![io_error()]);
+        assert_eq!(server.next_id(), ConnectionId(1));
+    }
+
+    #[tokio::test]
+    /// SV-R-051 — a listener failure answered `Stop` (the default) returns the
+    /// error, after the live connection has been drained.
+    async fn ut_accept_failure_with_default_stop_returns_error_after_draining() {
+        let watcher = AcceptWatcher::new(&[], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let ended = live_connection(&mut connections, 20);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let accepted = server
+            .next_accept(
+                &mut connections,
+                &mut signal,
+                scripted(vec![Err(io_error())], calls),
+            )
+            .await;
+        assert!(matches!(accepted, Accepted::Done(Err(e)) if e == io_error()));
+        assert!(ended.load(Ordering::SeqCst), "drained before returning");
+    }
+
+    #[tokio::test]
+    /// SV-R-060 — `Continue` keeps the live connection and accepts again.
+    async fn ut_continue_keeps_connections_and_accepts_again() {
+        let watcher = AcceptWatcher::new(&[AcceptErrorAction::Continue], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let (ended, release) = held_connection(&mut connections);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let accepted = server
+            .next_accept(
+                &mut connections,
+                &mut signal,
+                scripted(vec![Err(io_error()), Ok(7)], Arc::clone(&calls)),
+            )
+            .await;
+        assert!(matches!(accepted, Accepted::Got(7)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(connections.len(), 1, "the live connection is kept");
+        assert!(!ended.load(Ordering::SeqCst), "and not waited for");
+        release.add_permits(1);
+        while connections.join_next().await.is_some() {}
+        assert!(ended.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    /// SV-R-060 — accepting resumes only once the hook's future has completed.
+    async fn ut_continue_accepts_only_after_hook_completes() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let watcher = AcceptWatcher::new(
+            &[AcceptErrorAction::Continue],
+            Some(Arc::clone(&gate)),
+            None,
+        );
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let driver = async {
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(observed.load(Ordering::SeqCst), 1, "held by the hook");
+            gate.add_permits(1);
+        };
+        let (accepted, ()) = tokio::join!(
+            server.next_accept(
+                &mut connections,
+                &mut signal,
+                scripted(vec![Err(io_error()), Ok(7)], Arc::clone(&calls)),
+            ),
+            driver
+        );
+        assert!(matches!(accepted, Accepted::Got(7)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    /// SV-R-060 — `Stop` drains live connections, then returns the error.
+    async fn ut_stop_drains_live_connections_then_returns_error() {
+        let watcher = AcceptWatcher::new(&[AcceptErrorAction::Stop], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let ended = live_connection(&mut connections, 20);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let accepted = server
+            .next_accept(
+                &mut connections,
+                &mut signal,
+                scripted(vec![Err(io_error()), Ok(7)], Arc::clone(&calls)),
+            )
+            .await;
+        assert!(matches!(accepted, Accepted::Done(Err(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no accept after Stop");
+        assert!(ended.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    /// SV-R-061 — a shutdown while the hook is pending drops its future and
+    /// proceeds as for one during accept: drained, `Ok`.
+    async fn ut_shutdown_during_pending_hook_drops_it_and_proceeds() {
+        let dropped = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let watcher = AcceptWatcher::new(&[], None, Some(Arc::clone(&dropped)));
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let ended = live_connection(&mut connections, 20);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let driver = async {
+            while watcher.seen().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            server.shutdown.send_replace(true);
+        };
+        let (accepted, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                server.next_accept(
+                    &mut connections,
+                    &mut signal,
+                    scripted(vec![Err(io_error())], calls),
+                ),
+                driver
+            )
+        })
+        .await
+        .expect("finishes rather than hangs");
+        assert!(matches!(accepted, Accepted::Done(Ok(()))));
+        assert!(dropped.load(Ordering::SeqCst), "hook future dropped");
+        assert!(ended.load(Ordering::SeqCst), "connections drained");
+    }
+
+    #[tokio::test]
+    /// SV-R-041 — after `Continue`, a shutdown while accepting stops serving.
+    async fn ut_shutdown_during_accept_after_continue_stops() {
+        let watcher = AcceptWatcher::new(&[AcceptErrorAction::Continue], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut connections = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let driver = async {
+            while observed.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+            server.shutdown.send_replace(true);
+        };
+        let (accepted, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                server.next_accept(
+                    &mut connections,
+                    &mut signal,
+                    scripted(vec![Err(io_error())], Arc::clone(&calls)),
+                ),
+                driver
+            )
+        })
+        .await
+        .expect("finishes rather than hangs");
+        assert!(matches!(accepted, Accepted::Done(Ok(()))));
     }
 }

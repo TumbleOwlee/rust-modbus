@@ -112,7 +112,7 @@ limitations).
 
 **SV-R-050** — A request that cannot be decoded shall be reported to the service (SV-R-034). It shall end the connection only where the framing is not self-locating (FR-R-144); on a self-locating framing the failure shall cost exactly that frame and serving shall continue with the next request. No response shall be sent for a request that could not be decoded, on either framing. This is the responder's counterpart to CL-R-023.
 
-**SV-R-051** — A failure confined to one connection shall not propagate out of serving. Serving shall fail only for a failure of the listener itself.
+**SV-R-051** — A failure confined to one connection shall not propagate out of serving. Serving shall fail only for a failure of the listener itself that the service answers with `AcceptErrorAction::Stop` (SV-R-059, SV-R-060).
 
 **SV-R-052** — A peer that closes the connection between two ADUs shall end the connection with the closed reason of SV-R-033, not as a failure. A close part-way through an ADU is a failure (TR-R-014).
 
@@ -127,3 +127,9 @@ limitations).
 **SV-R-057** — The crate shall provide `Server::serve_udp`, taking an already-bound UDP socket. Each inbound datagram is dispatched to `Service`'s request-handling method (SV-R-003) independently and its response, if any, is sent to that datagram's source address. No connection identity is assigned and no connection lifecycle notification (SV-R-030–036) fires, since a UDP datagram is not part of a connection.
 
 **SV-R-058** — A request-handling failure on one datagram shall not affect handling of any other datagram (per-datagram counterpart to SV-R-035's per-connection isolation).
+
+**SV-R-059** — `Service` shall provide `on_accept_error`, notified when accepting from a listener fails in `serve`, `serve_framed` or `serve_tls`, taking the error that failed the accept and answering with an `AcceptErrorAction` (`Continue` or `Stop`). It shall have default behavior of answering `Stop`, so an existing implementor is unaffected. No `Connection`/`ConnectionId` is assigned, since no peer was accepted (SV-R-031). A TLS handshake failure is not an accept failure (SV-R-056).
+
+**SV-R-060** — On `AcceptErrorAction::Continue`, serving shall keep every live connection and accept again only once `on_accept_error`'s future has completed, so a service backs off by awaiting inside the notification. On `AcceptErrorAction::Stop`, serving shall drain live connections and return the error (SV-R-051).
+
+**SV-R-061** — A shutdown requested while `on_accept_error` is pending shall drop that future without awaiting its completion, and shutdown shall proceed as for one requested while accepting (SV-R-041–SV-R-044).
