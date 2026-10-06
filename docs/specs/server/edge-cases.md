@@ -43,7 +43,8 @@ itself and serving continues (SV-R-050, FR-R-144).
 | A peer that closes mid-ADU | `ConnectionClosed` to `on_error`, `Disconnect::Failed` (TR-R-014, SV-R-051) |
 | `on_connect` returns `Acceptance::Reject` | Closed with no request read, `Disconnect::Rejected` (SV-R-032) |
 | One connection fails | Others unaffected, accepting continues (SV-R-035) |
-| Accept itself fails | Serving returns the error; connections already running are drained first (SV-R-051) |
+| Accept itself fails | Reported to on_accept_error. Stop (default): connections already running are drained, serving returns the error. Continue: connections kept, accept retried once the notification completes (SV-R-059, SV-R-060) |
+| Shutdown while on_accept_error is pending | Notification future dropped; shutdown proceeds as during accept (SV-R-061) |
 | A request in flight at shutdown | Runs to completion and its response is sent (SV-R-042) |
 | An idle connection at shutdown | Closed without waiting for a request, `Disconnect::ShuttingDown` (SV-R-043) |
 
@@ -87,3 +88,4 @@ itself and serving continues (SV-R-050, FR-R-144).
 - **Shutdown is cooperative, not immediate.** SV-R-044 waits for handlers. A
   service whose `on_request` never returns keeps `shutdown()` pending forever; the
   bound belongs to the handler, as above.
+- **No built-in accept back-off.** A service answering `Continue` to a persistent error (`EMFILE`) without awaiting inside `on_accept_error` makes the accept loop spin. The delay belongs in the notification, where the service knows its tolerance; a fixed crate-chosen delay would be wrong for some deployment.
