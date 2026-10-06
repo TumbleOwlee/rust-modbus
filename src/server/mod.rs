@@ -110,8 +110,9 @@ where
     /// Serve a listening socket, handling every connection it accepts
     /// concurrently (SV-R-007, SV-R-030).
     ///
-    /// Returns when accepting fails and the service answers `Stop`. A failure confined to one connection is
-    /// reported to the service and never returned (SV-R-035, SV-R-051).
+    /// Returns when accepting fails and the service answers `Stop`. A failure
+    /// confined to one connection is reported to the service and never returned
+    /// (SV-R-035, SV-R-051).
     ///
     /// # Errors
     ///
@@ -1797,6 +1798,24 @@ mod tests {
 
     use core::sync::atomic::AtomicUsize;
 
+    /// A live connection that ends only when the returned semaphore is given a
+    /// permit, recording that it did.
+    fn held_connection(
+        connections: &mut JoinSet<()>,
+    ) -> (
+        Arc<core::sync::atomic::AtomicBool>,
+        Arc<tokio::sync::Semaphore>,
+    ) {
+        let ended = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let (flag, held) = (Arc::clone(&ended), Arc::clone(&release));
+        connections.spawn(async move {
+            held.acquire().await.expect("never closed").forget();
+            flag.store(true, Ordering::SeqCst);
+        });
+        (ended, release)
+    }
+
     #[tokio::test]
     /// SV-R-059 — the hook receives the accept error, and no connection
     /// identifier is consumed for it.
@@ -1846,7 +1865,7 @@ mod tests {
         let server = Server::new(Arc::clone(&watcher));
         let mut connections = JoinSet::new();
         let mut signal = server.shutdown.subscribe();
-        let ended = live_connection(&mut connections, 20);
+        let (ended, release) = held_connection(&mut connections);
         let calls = Arc::new(AtomicUsize::new(0));
         let accepted = server
             .next_accept(
@@ -1859,6 +1878,9 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(connections.len(), 1, "the live connection is kept");
         assert!(!ended.load(Ordering::SeqCst), "and not waited for");
+        release.add_permits(1);
+        while connections.join_next().await.is_some() {}
+        assert!(ended.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -1932,14 +1954,18 @@ mod tests {
             }
             server.shutdown.send_replace(true);
         };
-        let (accepted, ()) = tokio::join!(
-            server.next_accept(
-                &mut connections,
-                &mut signal,
-                scripted(vec![Err(io_error())], calls),
-            ),
-            driver
-        );
+        let (accepted, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                server.next_accept(
+                    &mut connections,
+                    &mut signal,
+                    scripted(vec![Err(io_error())], calls),
+                ),
+                driver
+            )
+        })
+        .await
+        .expect("finishes rather than hangs");
         assert!(matches!(accepted, Accepted::Done(Ok(()))));
         assert!(dropped.load(Ordering::SeqCst), "hook future dropped");
         assert!(ended.load(Ordering::SeqCst), "connections drained");
@@ -1960,14 +1986,18 @@ mod tests {
             }
             server.shutdown.send_replace(true);
         };
-        let (accepted, ()) = tokio::join!(
-            server.next_accept(
-                &mut connections,
-                &mut signal,
-                scripted(vec![Err(io_error())], Arc::clone(&calls)),
-            ),
-            driver
-        );
+        let (accepted, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                server.next_accept(
+                    &mut connections,
+                    &mut signal,
+                    scripted(vec![Err(io_error())], Arc::clone(&calls)),
+                ),
+                driver
+            )
+        })
+        .await
+        .expect("finishes rather than hangs");
         assert!(matches!(accepted, Accepted::Done(Ok(()))));
     }
 }
