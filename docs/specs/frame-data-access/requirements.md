@@ -86,7 +86,7 @@ Companion documents (shared with `frame/` and [`../frame-adu/`](../frame-adu/)):
 
 **FR-DA-R-003** — The response to a Write File Record request (FR-R-053) is byte-for-byte identical to the request.
 
-**FR-R-054** — The request data length of a Write File Record request is in the range 9–251 (`0x09`–`0xFB`) inclusive; a value outside it fails to decode with a byte-count error.
+**FR-R-054** — The request data length of a Write File Record request is in the range 9–251 (`0x09`–`0xFB`) inclusive; a value outside it fails to decode with an out-of-range error.
 
 **FR-R-055** — The reference type in every file record sub-request and sub-response is 6; decoding any other value fails with a reference-type error.
 

@@ -30,7 +30,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-043** — A transport encodes each outgoing ADU into a single buffer that it owns and reuses across frames, clearing its contents but retaining its capacity between sends, so that sending in steady state performs no allocation.
 
-**TR-R-084** — The outgoing buffer of TR-R-043 never exceeds the framing's maximum ADU length.
+**TR-R-084** — The length of the outgoing buffer of TR-R-043 never exceeds the framing's maximum ADU length.
 
 **TR-R-075** — The crate provides a `ClientTransport<F>` trait, exposing `send_request`/`recv_response` for a client-side exchange over framing `F`. It is implemented by `FrameTransport<S, F>` for any `S: AsyncRead + AsyncWrite + Unpin + Send` and by `UdpTransport<F>` (TR-R-070), so a client-side consumer can be written generically over either transport.
 
@@ -50,7 +50,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-012** — Over ASCII, an ADU begins at a `:` and ends at the first CR LF following it.
 
-**TR-R-087** — Over ASCII, bytes preceding a `:` (TR-R-012) are discarded, and the discard is bounded by the framing's maximum ADU length.
+**TR-R-087** — Over ASCII, bytes preceding a `:` (TR-R-012) are discarded without error, however many there are, and are never held in memory beyond the framing's maximum ADU length.
 
 **TR-R-013** — Receiving never buffers more than the framing's `MAX_ADU_LEN` bytes for a single ADU. Input exceeding it fails with the oversized-ADU error rather than growing the buffer.
 

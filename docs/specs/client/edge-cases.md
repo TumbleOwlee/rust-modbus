@@ -17,7 +17,7 @@ Boundary behavior, error semantics, and the constraints that are **intentional**
 | **CL-E-007** | Response undecodable, RTU or ASCII | The frame area's error unaltered; the client stays usable and the next request proceeds (CL-R-023, CL-R-098) |
 | **CL-E-008** | A frame split in two by a spurious gap on RTU | Both halves fail their checksum, one per receive; each costs one frame and the link stays usable |
 | **CL-E-009** | A late response to a timed-out request arrives during the next request | Discarded by CL-R-021 if it does not correspond — but on RTU/ASCII to the same unit it *does* correspond, which is why CL-R-031 refuses the next request outright |
-| **CL-E-010** | Server replies to a broadcast (contrary to the protocol) | The reply is never read by the broadcast request; it is left in the stream and desynchronizes the next exchange |
+| **CL-E-010** | Server replies to a broadcast (contrary to the protocol) | The reply is never read by the broadcast request; it is left in the stream. A reply carrying the next request's unit id desynchronizes that exchange; one carrying unit 0 does not correspond and is discarded (CL-R-021) |
 | **CL-E-011** | `PipelinedClient`/`PipelinedUdpClient`: response transaction id belongs to a request already resolved by timeout or desync | Discarded, no effect on any other in-flight request (CL-R-088) |
 | **CL-E-012** | `PipelinedClient`/`PipelinedUdpClient`: response transaction id was never issued | Connection desynchronized, on both transports (CL-R-089) |
 

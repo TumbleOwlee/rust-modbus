@@ -19,7 +19,7 @@ Everything in `## Known limitations` is working as specified; it is recorded her
 | **FR-ADU-E-007** | ASCII LRC mismatch | checksum error; PDU not decoded (FR-R-115) |
 | **FR-ADU-E-008** | Lowercase ASCII hexadecimal input | accepted; re-encodes uppercase (FR-ADU-R-003, FR-R-112, FR-R-119) |
 | **FR-ADU-E-009** | MBAP protocol identifier ≠ 0 | protocol-identifier error (FR-R-102) |
-| **FR-ADU-E-010** | MBAP length field 0, or > 254 | length error, raised before any sizing allocation (FR-R-105) |
+| **FR-ADU-E-010** | MBAP length field 0, or > 254 | out-of-range error, raised before any sizing allocation (FR-R-105) |
 | **FR-ADU-E-011** | MBAP length field disagreeing with the bytes supplied | length error (FR-R-106) |
 | **FR-ADU-E-012** | Any ADU exceeding its framing's maximum | size error (FR-R-091, FR-R-104, FR-R-113) |
 | **FR-ADU-E-013** | RTU-over-stream ADU, function code 8, 43 with MEI ≠ 14, or a custom code | indeterminate-length error naming the function code; the extent is not guessed (FR-R-148) |

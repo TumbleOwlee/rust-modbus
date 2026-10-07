@@ -40,7 +40,7 @@ Companion documents (shared with `frame/` and [`../frame-data-access/`](../frame
 
 **FR-R-104** — A TCP ADU is at most 260 bytes.
 
-**FR-R-105** — Decoding a TCP ADU whose MBAP length field is 0, or exceeds 254, fails with a length error before any allocation proportional to that field is made.
+**FR-R-105** — Decoding a TCP ADU whose MBAP length field is 0, or exceeds 254, fails with an out-of-range error before any allocation proportional to that field is made.
 
 **FR-R-106** — Decoding a TCP ADU fails with a length error if the MBAP length field does not match the number of bytes actually supplied after it.
 

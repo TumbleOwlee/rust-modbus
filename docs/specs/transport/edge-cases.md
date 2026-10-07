@@ -12,7 +12,7 @@ Boundary behavior, error semantics, and the constraints that are **intentional**
 | **TR-E-002** | A read splits a TCP ADU anywhere | Reading resumes until the ADU is complete; a split MBAP header is not an error (TR-R-010) |
 | **TR-E-003** | An RTU frame contains gaps shorter than 3.5 character times | Treated as one frame. The t1.5 intra-character rule is **not** enforced — see TR-E-035 |
 | **TR-E-004** | An RTU idle gap on an in-memory pair | Detected exactly as on a real port: the rule is implemented as a read timeout, not as a UART property (TR-R-011) |
-| **TR-E-005** | Bytes before an ASCII `:` | Discarded silently, up to the maximum ADU length, then an oversized-ADU error (TR-R-087, TR-R-013) |
+| **TR-E-005** | Bytes before an ASCII `:` | Discarded silently and without limit on their count; no error is raised, and memory held stays within the maximum ADU length (TR-R-087, TR-R-013) |
 | **TR-E-006** | An ASCII frame with no terminator, followed by silence past the inter-character timeout | Abandoned: the timeout error (TR-R-076), the gathered bytes discarded (TR-R-044) |
 | **TR-E-007** | A frame fails to decode | Exactly that frame's bytes are consumed, the error surfaces, and the transport stays usable (TR-R-005) |
 | **TR-E-008** | An ADU claims or occupies more than `MAX_ADU_LEN` | Oversized-ADU error; the read buffer never grows past that bound (TR-R-013) |
@@ -23,7 +23,7 @@ Boundary behavior, error semantics, and the constraints that are **intentional**
 | **TR-E-013** | An RTU-over-TCP frame whose extent cannot be derived | Indeterminate-length error; the gathered bytes are retained and the failure is terminal for the stream (TR-R-046, FR-R-148) |
 | **TR-E-014** | An idle gap in an RTU-over-TCP stream | Ignored entirely; the inter-frame interval has no effect over a socket (TR-R-048) |
 | **TR-E-015** | A transport that only ever receives | Never allocates a write buffer at all; the cost is paid on the first send (TR-R-043) |
-| **TR-E-016** | An idle transport between sends | Keeps its write buffer's capacity — up to `MAX_ADU_LEN` — resident on purpose; that retention *is* the reuse (TR-R-043) |
+| **TR-E-016** | An idle transport between sends | Keeps its write buffer's capacity resident on purpose; that retention *is* the reuse (TR-R-043). Normally `MAX_ADU_LEN`; a failed oversized encode may leave it larger, while the buffer's length stays within `MAX_ADU_LEN` (TR-R-084) |
 | **TR-E-017** | A send that fails mid-write | The write buffer is cleared before the next frame, so no fragment of the abandoned ADU is ever re-sent (TR-R-043, FR-R-142) |
 
 ## Connection lifecycle
