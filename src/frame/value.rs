@@ -83,7 +83,7 @@ value! {
 }
 
 value! {
-    /// An AND or OR mask of Mask Write Register (FR-R-044).
+    /// An AND or OR mask of Mask Write Register (FR-R-035).
     Mask(u16)
 }
 

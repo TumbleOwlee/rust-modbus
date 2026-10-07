@@ -32,12 +32,13 @@ pub enum Error {
     InvalidFunctionCode(u8),
 
     /// A custom or general value was given a code the crate already names, which
-    /// would give one wire byte two representations (FR-R-013, FR-R-084).
+    /// would give one wire byte two representations (FR-R-013, FR-DA-R-005,
+    /// FR-R-084).
     #[error("code {0} is named and must not be carried as a custom value")]
     ReservedCode(u8),
 
     /// A field or PDU whose length is fixed by its layout did not have it
-    /// (FR-R-085, FR-R-105, FR-R-106).
+    /// (FR-R-085, FR-R-106).
     #[error("invalid length: expected {expected}, got {actual}")]
     InvalidLength {
         /// Bytes the layout fixes.
@@ -47,8 +48,8 @@ pub enum Error {
     },
 
     /// A field fell outside the range its function code fixes (FR-R-021,
-    /// FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-051, FR-R-056, FR-R-074,
-    /// FR-DA-R-006).
+    /// FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-051, FR-R-054, FR-R-056,
+    /// FR-R-058, FR-R-074, FR-R-105, FR-DA-R-006).
     #[error("{field} is {value}, outside the permitted range {min}..={max}")]
     OutOfRange {
         /// The field that was out of range.
@@ -88,7 +89,7 @@ pub enum Error {
     ProtocolIdentifier(u16),
 
     /// An ADU exceeded the maximum its framing permits (FR-R-091, FR-R-104,
-    /// FR-R-113).
+    /// FR-R-113, FR-R-149).
     #[error("ADU of {len} bytes exceeds the maximum of {max}")]
     AduTooLarge {
         /// The oversized length.
@@ -112,7 +113,7 @@ pub enum Error {
     },
 
     /// A byte-count field disagreed with the data present or with the value its
-    /// quantity field implies (FR-R-043, FR-R-054, FR-R-077).
+    /// quantity field implies (FR-R-043, FR-R-077).
     #[error("byte count mismatch: expected {expected}, got {actual}")]
     ByteCountMismatch {
         /// The byte count the layout implies.
