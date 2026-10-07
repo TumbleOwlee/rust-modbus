@@ -1249,6 +1249,126 @@ mod tests {
     }
 
     #[tokio::test]
+    /// SV-E-002 — a function code the frame area names reaches the service
+    /// even when the service does not support it; the refusal is the
+    /// service's, sent as an Illegal Function exception.
+    async fn ut_unsupported_named_function_is_dispatched() {
+        let service = Recorder::new(|_| Err(ExceptionCode::IllegalFunction));
+        let (serving, client) = link(Arc::clone(&service));
+
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut stream = client.into_inner();
+        // Report Server ID (0x11) to unit 0x11, transaction 9.
+        stream
+            .write_all(&[0, 9, 0, 0, 0, 2, 0x11, 0x11])
+            .await
+            .expect("writes the request");
+        // Exception function 0x80 | 0x11, code 0x01 (Illegal Function).
+        let mut reply = [0u8; 9];
+        stream
+            .read_exact(&mut reply)
+            .await
+            .expect("the refusal is answered");
+        assert_eq!(reply, [0, 9, 0, 0, 0, 3, 0x11, 0x91, 0x01]);
+
+        assert!(
+            service.events().iter().any(|event| matches!(
+                event,
+                Event::Request(_, _, UnitId(0x11), RequestPdu::ReportServerId)
+            )),
+            "the request must be dispatched: {:?}",
+            service.events()
+        );
+        drop(stream);
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+    }
+
+    #[tokio::test]
+    /// SV-E-005 — a quantity outside what the wire format permits (126
+    /// holding registers, above the 125 FR-R-022 fixes) is the frame area's
+    /// decode error, handled as undecodable: reported, never dispatched, and
+    /// on TCP the connection ends.
+    async fn ut_out_of_wire_range_quantity_is_undecodable() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        let mut stream = client.into_inner();
+        tokio::io::AsyncWriteExt::write_all(
+            &mut stream,
+            &[0, 1, 0, 0, 0, 6, 1, 0x03, 0x00, 0x00, 0x00, 0x7E],
+        )
+        .await
+        .expect("writes the request");
+
+        let out_of_range = |error: &Error| {
+            matches!(
+                error,
+                Error::OutOfRange {
+                    value: 126,
+                    min: 1,
+                    max: 125,
+                    ..
+                }
+            )
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("an undecodable request ends a TCP connection")
+            .expect("the server task finishes");
+        assert!(
+            result.as_ref().is_err_and(out_of_range),
+            "serving ends with the decode error: {result:?}"
+        );
+
+        let events = service.events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Failed(error) if out_of_range(error))),
+            "the decode failure must be reported: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Request(..))),
+            "an undecodable request is never dispatched: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(Event::Disconnect(Disconnect::Failed(error))) if out_of_range(error)
+            ),
+            "and must end the connection: {events:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// SV-E-016 — a peer that connects and sends nothing is held open with no
+    /// idle timeout, until it closes.
+    async fn ut_silent_peer_is_held_open() {
+        let service = Recorder::new(|_| Ok(registers()));
+        let (serving, client) = link(Arc::clone(&service));
+
+        // Paused time: an hour passes instantly, firing any timer serving set.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert!(
+            !serving.is_finished(),
+            "a silent peer must not be timed out"
+        );
+        assert_eq!(
+            service.events(),
+            alloc::vec![Event::Connect(ConnectionId(1), None)]
+        );
+
+        drop(client);
+        assert_eq!(serving.await.expect("the server task finishes"), Ok(()));
+        assert_eq!(
+            service.events().last(),
+            Some(&Event::Disconnect(Disconnect::Closed))
+        );
+    }
+
+    #[tokio::test]
     /// SV-R-020, SV-R-021, SV-E-008 — a configured unit answers only itself, and a request
     /// for another unit draws no response without ending the connection.
     async fn ut_configured_unit_ignores_other_units() {
