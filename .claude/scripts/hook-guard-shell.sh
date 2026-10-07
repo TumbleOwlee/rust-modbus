@@ -6,12 +6,13 @@
 #   - unpiped `cat` of a markdown file, or of any file over LARGE_LINES lines
 #   - unpiped `git show`/`git diff` with no --stat and no pathspec
 #   - unpiped `find` with -type f/d and no -name/-path/-iname/-regex
-#   - raw `gh issue view` (Gate 1b: always issue-view.sh)
+#   - raw `gh issue view` (AGENTS.workflow.md gate 1b: always issue-view.sh)
 #   - raw `gh pr view` (always pr-view.sh — same GraphQL projectCards bug)
 #   - `git commit` while the checkout is on `main` (branch off main, never
 #     commit to it — the safety net for an agent that missed the worktree)
 #   - `git push` whose destination is `main`, explicit or (on bare `git
 #     push`) implied by the current branch already being `main`
+# Both git checks honour `git -C <dir>` and a preceding `cd <dir>` segment.
 #
 # Reads a PreToolUse hook payload on stdin, writes a deny-decision JSON
 # object on stdout when it blocks, nothing when it doesn't.
@@ -42,6 +43,32 @@ old_ifs=$IFS
 IFS='
 '
 for seg in $segments; do
+  # A `cd` segment moves the directory later segments resolve against, but only to a
+  # directory that exists: a failed `cd` leaves the shell where it was. Splitting on
+  # `;`/`&` is quote-blind, so a `cd` inside a quoted string is still taken as one.
+  if printf '%s' "$seg" | grep -q '^[[:space:]]*cd\([[:space:]]\|$\)'; then
+    args=$(printf '%s' "$seg" | sed 's/^[[:space:]]*cd[[:space:]]*//; s/[[:space:]]*$//')
+    while :; do
+      case "$args" in
+        --*) args=$(printf '%s' "${args#--}" | sed 's/^[[:space:]]*//'); break ;;
+        -?*) args=$(printf '%s' "$args" | sed 's/^-[^[:space:]]*[[:space:]]*//') ;;
+        *) break ;;
+      esac
+    done
+    case "$args" in
+      \"*) target=$(printf '%s' "$args" | sed -n 's/^"\([^"]*\)".*/\1/p') ;;
+      \'*) target=$(printf '%s' "$args" | sed -n "s/^'\([^']*\)'.*/\1/p") ;;
+      *) target=$(printf '%s' "$args" | sed 's/[[:space:]].*//') ;;
+    esac
+    case "$target" in
+      '') ;;
+      /*) ;;
+      '~'*) target="$HOME${target#\~}" ;;
+      *) target="$cwd/$target" ;;
+    esac
+    [ -n "$target" ] && [ -d "$target" ] && cwd="$target"
+    continue
+  fi
   case "$seg" in
     *cat\ *)
       rest=$(printf '%s' "$seg" | sed -n 's/^[[:space:]]*cat[[:space:]]\{1,\}//p')
@@ -50,17 +77,18 @@ for seg in $segments; do
         case "$tok" in
           -*) continue ;;
         esac
+        case "$tok" in /*) ;; *) tok="$cwd/$tok" ;; esac
         [ -f "$tok" ] || continue
         case "$tok" in
           *.md)
             offender="$tok"
-            reason="Whole-file cat of a .md file bypasses this repo's extract-section.sh convention (AGENTS.md Conventions). Run: sh .claude/scripts/list-sections.sh $tok to see headings, then sh .claude/scripts/extract-section.sh '<heading>' $tok for just what's needed. Genuinely need the whole document (rewrite/restructure)? Use the Read tool instead of Bash cat."
+            reason="Whole-file cat of a .md file bypasses this repo's extract-section.sh convention (AGENTS.md Conventions — reading). Run: sh .claude/scripts/list-sections.sh $tok to see headings, then sh .claude/scripts/extract-section.sh '<heading>' $tok for just what's needed. Genuinely need the whole document (rewrite/restructure)? Use the Read tool instead of Bash cat."
             ;;
           *)
             lines=$(wc -l < "$tok" 2>/dev/null || echo 0)
             if [ "$lines" -gt "$LARGE_LINES" ]; then
               offender="$tok"
-              reason="Whole-file cat of a $lines-line file bypasses this repo's Conventions (AGENTS.md: filter shell output, use Read/sed -n for a range instead of a full Bash cat). Use the Read tool (with offset/limit if only part is needed) or 'sed -n START,ENDp' $tok."
+              reason="Whole-file cat of a $lines-line file bypasses this repo's Conventions (AGENTS.md Conventions — reading: filter shell output, use Read/sed -n for a range instead of a full Bash cat). Use the Read tool (with offset/limit if only part is needed) or 'sed -n START,ENDp' $tok."
             fi
             ;;
         esac
@@ -78,7 +106,7 @@ for seg in $segments; do
         *:*) ;;        # git show <ref>:<path> blob form
         *)
           offender="$seg"
-          reason="Unfiltered 'git show'/'git diff' bypasses this repo's Conventions (AGENTS.md: filter shell output before it lands in context). Add --stat first, or scope with a pathspec ('-- <path>'), or pipe through head/grep — rather than dumping the full diff/show."
+          reason="Unfiltered 'git show'/'git diff' bypasses this repo's Conventions (AGENTS.md Conventions — reading: filter shell output before it lands in context). Add --stat first, or scope with a pathspec ('-- <path>'), or pipe through head/grep — rather than dumping the full diff/show."
           ;;
       esac
       ;;
@@ -91,7 +119,7 @@ for seg in $segments; do
         *-name*|*-path*|*-iname*|*-regex*) ;;  # already narrowed
         *)
           offender="$seg"
-          reason="Unfiltered 'find -type f/d' bypasses this repo's Conventions (AGENTS.md: filter shell output before it lands in context). Narrow with -name/-path/-iname/-regex, or pipe through head/grep — rather than listing every match."
+          reason="Unfiltered 'find -type f/d' bypasses this repo's Conventions (AGENTS.md Conventions — reading: filter shell output before it lands in context). Narrow with -name/-path/-iname/-regex, or pipe through head/grep — rather than listing every match."
           ;;
       esac
       ;;
@@ -101,7 +129,7 @@ for seg in $segments; do
   case "$seg" in
     *gh\ issue\ view*)
       offender="$seg"
-      reason="Raw 'gh issue view' bypasses this repo's issue-view.sh convention (AGENTS.md Gate 1b: read any issue with 'sh .claude/scripts/issue-view.sh <number|url>', never raw 'gh issue view' — it also sidesteps a GitHub Projects-Classic API bug that crashes the raw form on some repos). Use: sh .claude/scripts/issue-view.sh <number>"
+      reason="Raw 'gh issue view' bypasses this repo's issue-view.sh convention (AGENTS.workflow.md Gate 1b: read any issue with 'bash .claude/scripts/issue-view.sh <number|url>', never raw 'gh issue view' — it also sidesteps a GitHub Projects-Classic API bug that crashes the raw form on some repos). Use: bash .claude/scripts/issue-view.sh <number>"
       ;;
   esac
   [ -z "$offender" ] || break
@@ -109,13 +137,13 @@ for seg in $segments; do
   case "$seg" in
     *gh\ pr\ view*)
       offender="$seg"
-      reason="Raw 'gh pr view' bypasses this repo's pr-view.sh convention — it also sidesteps a GitHub Projects-Classic API bug ('repository.pullRequest.projectCards') that crashes the raw form on some repos, with or without --comments. Use: sh .claude/scripts/pr-view.sh <number>"
+      reason="Raw 'gh pr view' bypasses this repo's pr-view.sh convention — it also sidesteps a GitHub Projects-Classic API bug ('repository.pullRequest.projectCards') that crashes the raw form on some repos, with or without --comments. Use: bash .claude/scripts/pr-view.sh <number>"
       ;;
   esac
   [ -z "$offender" ] || break
 
   case "$seg" in
-    *git\ commit*)
+    *git\ commit*|*git\ -C\ *\ commit*)
       case "$seg" in
         *--dry-run*) ;;  # doesn't create a commit
         *)
@@ -123,10 +151,11 @@ for seg in $segments; do
           case "$seg" in
             *-C\ *) dir=$(printf '%s' "$seg" | sed -n 's/.*-C[[:space:]]*\([^[:space:]]*\).*/\1/p') ;;
           esac
+          case "$dir" in /*) ;; *) dir="$cwd/$dir" ;; esac
           branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
           if [ "$branch" = "$PROTECTED_BRANCH" ]; then
             offender="$seg"
-            reason="'git commit' while the checkout in $dir is on '$PROTECTED_BRANCH' (AGENTS.md: branch off main, never commit to main). Create/use a git worktree first: git worktree add .claude/worktrees/<slug> -b <type>/<slug> $PROTECTED_BRANCH — this looks like the worktree step was missed."
+            reason="'git commit' while the checkout in $dir is on '$PROTECTED_BRANCH' (AGENTS.workflow.md: branch off main, never commit to main). Create/use a git worktree first: git worktree add .claude/worktrees/<slug> -b <type>/<slug> $PROTECTED_BRANCH — this looks like the worktree step was missed."
           fi
           ;;
       esac
@@ -135,21 +164,22 @@ for seg in $segments; do
   [ -z "$offender" ] || break
 
   case "$seg" in
-    *git\ push*)
+    *git\ push*|*git\ -C\ *\ push*)
       dir="$cwd"
       case "$seg" in
         *-C\ *) dir=$(printf '%s' "$seg" | sed -n 's/.*-C[[:space:]]*\([^[:space:]]*\).*/\1/p') ;;
       esac
+      case "$dir" in /*) ;; *) dir="$cwd/$dir" ;; esac
       case "$seg" in
         *" $PROTECTED_BRANCH"|*":$PROTECTED_BRANCH")
           offender="$seg"
-          reason="'git push' targeting '$PROTECTED_BRANCH' directly (AGENTS.md: squash merge to main via PR only, never a direct push). Push the feature branch and open a PR instead."
+          reason="'git push' targeting '$PROTECTED_BRANCH' directly (AGENTS.workflow.md: squash merge to main via PR only, never a direct push). Push the feature branch and open a PR instead."
           ;;
         *)
           branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
           if [ "$branch" = "$PROTECTED_BRANCH" ]; then
             offender="$seg"
-            reason="Bare 'git push' while the checkout in $dir is on '$PROTECTED_BRANCH' would push straight to it (AGENTS.md: branch off main, never commit to main). Create/use a git worktree first: git worktree add .claude/worktrees/<slug> -b <type>/<slug> $PROTECTED_BRANCH — this looks like the worktree step was missed."
+            reason="Bare 'git push' while the checkout in $dir is on '$PROTECTED_BRANCH' would push straight to it (AGENTS.workflow.md: branch off main, never commit to main). Create/use a git worktree first: git worktree add .claude/worktrees/<slug> -b <type>/<slug> $PROTECTED_BRANCH — this looks like the worktree step was missed."
           fi
           ;;
       esac
