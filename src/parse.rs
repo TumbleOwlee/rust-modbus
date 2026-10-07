@@ -187,4 +187,12 @@ mod tests {
         };
         assert_eq!(run(&[0x00], parser), Err(Error::Malformed));
     }
+
+    #[test]
+    /// FR-R-159 — a failure carrying no domain error, cut mid-way through a
+    /// multi-item region, falls through to the residual `Error::Malformed`.
+    fn ut_residual_decode_failure_is_malformed() {
+        let parser = |_: &mut Input<'_>| Err::<u8, _>(ErrMode::Cut(ParseFailure::default()));
+        assert_eq!(run_all(&[0x00, 0x01], parser), Err(Error::Malformed));
+    }
 }

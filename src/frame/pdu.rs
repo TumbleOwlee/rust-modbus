@@ -1326,6 +1326,85 @@ mod tests {
     use crate::frame::mei::{DeviceIdObject, ReadDeviceIdCode};
     use crate::frame::value::{FileNumber, Mask, RecordLength, RecordNumber};
 
+    #[test]
+    /// FR-R-160 — the boundary start addresses 0 and 65535 are valid in all
+    /// four data tables: each read and write request at either address encodes
+    /// to function code, big-endian 16-bit address, then its quantity/value
+    /// field (MODBUS Application Protocol v1.1b3 §6.1–§6.6, §6.11, §6.12), and
+    /// decodes back unchanged.
+    fn ut_boundary_addresses_valid_in_every_table() {
+        for (raw, hi, lo) in [(0u16, 0x00u8, 0x00u8), (0xFFFF, 0xFF, 0xFF)] {
+            let address = Address(raw);
+            let one = Quantity(1);
+            let cases: Vec<(RequestPdu, Vec<u8>)> = vec![
+                (
+                    RequestPdu::ReadCoils {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x01, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadDiscreteInputs {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x02, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadHoldingRegisters {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x03, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadInputRegisters {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x04, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::WriteSingleCoil {
+                        address,
+                        value: true,
+                    },
+                    vec![0x05, hi, lo, 0xFF, 0x00],
+                ),
+                (
+                    RequestPdu::WriteSingleRegister {
+                        address,
+                        value: RegisterValue(0x1234),
+                    },
+                    vec![0x06, hi, lo, 0x12, 0x34],
+                ),
+                (
+                    RequestPdu::WriteMultipleCoils {
+                        address,
+                        coils: vec![true],
+                    },
+                    vec![0x0F, hi, lo, 0x00, 0x01, 0x01, 0x01],
+                ),
+                (
+                    RequestPdu::WriteMultipleRegisters {
+                        address,
+                        registers: vec![RegisterValue(0x1234)],
+                    },
+                    vec![0x10, hi, lo, 0x00, 0x01, 0x02, 0x12, 0x34],
+                ),
+            ];
+            for (request, bytes) in cases {
+                assert_eq!(request.encode(), Ok(bytes.clone()), "encode {request:?}");
+                assert_eq!(
+                    RequestPdu::decode(&bytes),
+                    Ok(request),
+                    "decode {bytes:02X?}"
+                );
+            }
+        }
+    }
+
     /// Coil states of the Read Coils response in the specification's worked
     /// example: bytes `CD 6B 05`, least significant bit first (§6.1).
     fn spec_example_coils() -> Vec<bool> {
