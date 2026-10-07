@@ -32,6 +32,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 
 **SV-R-069** — The server area's API is identical with and without the `rtu` feature; serial transports come from the transport area (TR-R-032).
 
+**SV-R-070** — The server never binds a socket: every serving entry point takes a listener, socket or link the caller has already opened, so the bound address is read from the caller's own handle, never from the server.
+
 ---
 
 ## The exchange
@@ -86,6 +88,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 
 **SV-R-056** — Behind the `tls` feature, `Service` provides `on_tls_handshake_failed`, notified when a TLS handshake fails before any `Connection` is established, taking the peer's socket address and the error that failed the handshake. It has default behavior of ignoring the notification, so an existing implementor is unaffected. No `Connection`/ `ConnectionId` is ever assigned to a connection whose handshake failed, since the peer was never accepted as a connection (SV-R-031).
 
+**SV-R-071** — `Connection` implements `Clone` and not `Copy`, in every feature combination.
+
 ---
 
 ## Shutdown
@@ -117,6 +121,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 **SV-R-053** — Serving a TCP listener is available for any framing, so that a listener accepting gateway-framed connections runs the same per-connection behavior as one accepting MBAP-framed connections (SV-R-007).
 
 **SV-R-054** — Behind the crate's `serde` feature, `ServerConfig` implements `serde::Serialize` and `serde::Deserialize` with no validation beyond its field types'.
+
+**SV-R-072** — The server area defines no `Error` variant of its own.
 
 ---
 

@@ -118,7 +118,7 @@ Each is a transparent tuple struct with a public field, deriving `Debug`, `Clone
 |---|---|---|---|
 | `UnitId` | `u8` | the RTU/ASCII server address (FR-R-096, FR-R-117), the MBAP unit id (FR-R-101) | FR-R-007, FR-R-155 |
 | `TransactionId` | `u16` | the MBAP transaction identifier (FR-R-101) | FR-R-007, FR-R-155 |
-| `Address` | `u16` | every starting or single data address (`frame-data-access/requirements.md` `## Bit and register data access`) | FR-R-007, FR-R-155 |
+| `Address` | `u16` | every starting or single data address (`frame-data-access/requirements.md` `## Bit and register data access`, `## Encapsulated Interface Transport`) | FR-R-007, FR-R-155 |
 | `Quantity` | `u16` | every count of coils, inputs, or registers (`frame-data-access/requirements.md` `## Bit and register data access`) | FR-R-007, FR-R-155 |
 | `RegisterValue` | `u16` | register contents, FIFO contents, file record contents (FR-R-004) | FR-R-007, FR-R-155 |
 | `Mask` | `u16` | the AND and OR masks of Mask Write Register (FR-R-035) | FR-R-007, FR-R-155 |

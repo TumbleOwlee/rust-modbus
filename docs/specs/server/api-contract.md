@@ -56,7 +56,7 @@ handle.shutdown().await;      // returns once every handler has finished
 
 `serve_link`'s result is its link's end (SV-R-062): `Err(error)` for `Disconnect::Failed(error)`, `Ok(())` for every other reason, returned only after `on_disconnect` has completed (SV-R-068). Unlike a listener, a link is not one connection among many — once it fails nothing is served, and the caller awaiting `serve_link` is the one that decides whether to reopen the port. The listener entry points are unaffected (SV-R-051).
 
-The address a listener is bound to is read back through the transport area's `TcpListener::local_addr`, not through the server: the server never binds, so it never owns the address.
+The address a listener is bound to is read back through the transport area's `TcpListener::local_addr`, not through the server: the server never binds, so it never owns the address (SV-R-070).
 
 ## The service trait
 
@@ -139,7 +139,7 @@ pub enum Disconnect {
 
 `Disconnect` derives `Eq` only when `tls` is off, following `Error` (TR-R-067): it embeds `Error` via `Failed`, and `Error` itself is `Eq` only without `tls`.
 
-`Connection` derives `Clone`, never `Copy`, in every feature combination including with `tls` off: behind `tls` it carries an owned `CertificateDer<'static>`, which is not `Copy`, and the derive list does not change shape between builds.
+`Connection` derives `Clone`, never `Copy`, in every feature combination including with `tls` off: behind `tls` it carries an owned `CertificateDer<'static>`, which is not `Copy`, and the derive list does not change shape between builds (SV-R-071).
 
 ## What this area does not expose
 
@@ -176,8 +176,8 @@ pub struct ServerConfig {
 | `rtu` | off | nothing in this area | SV-R-069 |
 | `tls` | off | `Server::serve_tls`, `Connection::peer_cert`, `Service::on_tls_handshake_failed` | TR-R-063, SV-R-055, SV-R-056 |
 
-`serve_link` is generic over the stream, so a server over an in-memory duplex pair or over `Rtu` framing needs no feature beyond `std`; only opening a real serial port is gated.
+`serve_link` is generic over the stream, so a server over an in-memory duplex pair or over `Rtu` framing needs no feature beyond `std`; only opening a real serial port is gated (SV-R-006, SV-R-069, TR-R-033).
 
 ## Error variants
 
-This area adds none. A service refusal is an `ExceptionCode`, not an `Error`; connection failures surface as the frame and transport areas' existing variants, carried to the consumer through `on_error` and `Disconnect::Failed`.
+This area adds none (SV-R-072). A service refusal is an `ExceptionCode`, not an `Error`; connection failures surface as the frame and transport areas' existing variants, carried to the consumer through `on_error` and `Disconnect::Failed` (SV-R-033, SV-R-034).

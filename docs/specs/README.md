@@ -56,6 +56,10 @@ Every non-functional requirement except `NF-R-009`, `NF-R-012` and `NF-R-014`, w
 | `NF-R-022` | The `coverage` CI job |
 | `NF-R-025` | The `serde` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` and `no-std` CI jobs |
 | `CL-R-039` | Design posture: an API that does not exist. Enforced by the absence of a probe method in `client/api-contract.md` and by review |
+| `CL-R-079` | Design posture: an API that does not exist. Enforced by the absence of a blocking server in `client/api-contract.md` and `server/api-contract.md`, and by review |
+| `SV-R-063` | Structural: every `ServerConfig` field's default is listed in `server/api-contract.md`; checked at review |
+| `SV-R-070` | Design posture: no bind method exists in `server/api-contract.md`; checked at review |
+| `SV-R-072` | Structural: no server-owned variant in the `Error` enum (`frame/api-contract.md` `## Error variants`); checked at review |
 | `TR-R-061` | `deny.toml`'s `[bans]` `deny` list (`native-tls`, `openssl`, `openssl-sys`, `boring`, `boring-sys`) and the `deny` CI job |
 | `SV-R-069` | The `features` CI job (`cargo check` with and without `rtu`); the server module carries no `rtu` gate, checked at review |
 | `TR-R-064` | Structural claim about *when* the TLS handshake runs relative to `FrameTransport` construction; verified by code inspection at review, not a runtime assertion |
@@ -69,6 +73,8 @@ Every non-functional requirement except `NF-R-009`, `NF-R-012` and `NF-R-014`, w
 | `SV-R-005` | Structural: nothing to test is the point. Recorded in `server/data-contract.md`, and a shipped data model would be a visible addition to `server/api-contract.md` |
 | `SV-R-006` | The `std` gate on the server module, checked by the bare-metal CI job, whose comment cites it |
 | `TR-R-032` | The `rtu` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
+| `CL-R-094` | The `pipeline` feature declaration in `Cargo.toml`, whose comment cites it; built by the `check` and `clippy` CI jobs (`--all-features`) |
+| `TR-R-060` | The `tls` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 | `TR-R-051` | The `rs485` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 | `TR-R-055` | The `cfg_attr` pair in `src/lib.rs` and the `#[allow(unsafe_code)]` block in `src/transport/rs485.rs`, both commented; verified manually per the RS-485 implementation plan that a second, unrelated unsafe block is still rejected with `rs485` enabled |
 

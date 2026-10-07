@@ -16,6 +16,24 @@ use crate::frame::{ExceptionCode, RequestPdu, ResponsePdu, UnitId};
 /// `tls` off): behind `tls` this carries an owned
 /// [`CertificateDer`](rustls_pki_types::CertificateDer), which is not `Copy`,
 /// and the derive list does not change shape between builds.
+///
+/// SV-R-071 — a `Connection` is cloned explicitly:
+///
+/// ```
+/// use rust_modbus::Connection;
+/// fn duplicate(conn: &Connection) -> (Connection, Connection) {
+///     (conn.clone(), conn.clone())
+/// }
+/// ```
+///
+/// SV-R-071 — and is not `Copy`, so a moved one cannot be used again:
+///
+/// ```compile_fail
+/// use rust_modbus::Connection;
+/// fn duplicate(conn: Connection) -> (Connection, Connection) {
+///     (conn, conn)
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
     /// Unique for the lifetime of the server that issued it.
