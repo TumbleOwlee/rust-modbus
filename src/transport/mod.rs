@@ -1644,3 +1644,180 @@ mod reader_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod failure_tests {
+    use super::tests::read_holding;
+    use super::*;
+    use crate::TransactionId;
+    use crate::client::{Client, ClientState, UnusableReason};
+    use crate::error::Error;
+    use crate::frame::{MbapHeader, Rtu, Tcp, UnitId};
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use std::io;
+    use tokio::io::{AsyncWriteExt, ReadBuf, duplex};
+
+    /// A stream standing in for a device whose I/O fails on cue: reads fail
+    /// with `read_failure` (or wait forever when `None`), and writes accept
+    /// `write_budget` bytes, then fail once with `BrokenPipe`, then accept
+    /// everything. Every accepted byte is recorded in `written`.
+    struct Faulty {
+        read_failure: Option<io::ErrorKind>,
+        write_budget: Option<usize>,
+        written: Vec<u8>,
+    }
+
+    impl AsyncRead for Faulty {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            match self.read_failure {
+                Some(kind) => Poll::Ready(Err(io::Error::from(kind))),
+                None => Poll::Pending,
+            }
+        }
+    }
+
+    impl AsyncWrite for Faulty {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let accepted = match self.write_budget {
+                Some(0) => {
+                    self.write_budget = None;
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+                }
+                Some(budget) => {
+                    let accepted = budget.min(buf.len()).min(1);
+                    self.write_budget = Some(budget - accepted);
+                    accepted
+                }
+                None => buf.len(),
+            };
+            let accepted = buf.get(..accepted).expect("accepted never exceeds buf");
+            self.written.extend_from_slice(accepted);
+            Poll::Ready(Ok(accepted.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    /// TR-E-015 — a transport that only ever receives never allocates a write
+    /// buffer: after a receive its outgoing buffer still has no capacity.
+    async fn ut_receive_only_transport_never_allocates_a_write_buffer() {
+        const REQUEST_ADU: [u8; 12] = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
+        ];
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Tcp>::new(server);
+        assert_eq!(server.outgoing.capacity(), 0);
+
+        peer.write_all(&REQUEST_ADU).await.expect("writes");
+        server.recv_request().await.expect("receives");
+        assert_eq!(server.outgoing.capacity(), 0);
+    }
+
+    #[tokio::test]
+    /// TR-E-017 — a send that fails part-way through the ADU leaves nothing of
+    /// it behind: the next send puts exactly its own ADU on the wire, with no
+    /// fragment of the abandoned one before it.
+    async fn ut_send_failed_mid_write_is_not_resent() {
+        let stream = Faulty {
+            read_failure: None,
+            write_budget: Some(5),
+            written: Vec::new(),
+        };
+        let mut transport = FrameTransport::<_, Tcp>::new(stream);
+        let first = MbapHeader {
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
+        };
+        let second = MbapHeader {
+            transaction_id: TransactionId(2),
+            unit_id: UnitId(0x11),
+        };
+
+        assert_eq!(
+            transport.send_request(&first, &read_holding()).await,
+            Err(Error::Io {
+                kind: io::ErrorKind::BrokenPipe,
+            })
+        );
+        let abandoned_len = transport.stream.written.len();
+        assert_eq!(abandoned_len, 5);
+
+        transport
+            .send_request(&second, &read_holding())
+            .await
+            .expect("sends");
+        // Transaction 2, protocol 0, length 6, unit 0x11, then FC 3 for three
+        // registers from 0x006B (FR-R-100, FR-R-103).
+        assert_eq!(
+            transport.stream.written.get(abandoned_len..),
+            Some(
+                &[
+                    0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03
+                ][..]
+            )
+        );
+    }
+
+    #[tokio::test]
+    /// TR-E-022 — a serial peer that closes right after a complete RTU frame
+    /// does not sever it: the frame is delivered.
+    async fn ut_rtu_close_after_a_whole_frame_delivers_it() {
+        // FR-R-092's Read Holding Registers request to 0x11, with its CRC.
+        const REQUEST_ADU: [u8; 8] = [0x11, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x76, 0x87];
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        peer.write_all(&REQUEST_ADU).await.expect("writes");
+        drop(peer);
+
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+    }
+
+    #[tokio::test]
+    /// TR-E-025 — a serial device that disappears mid-session surfaces
+    /// whatever kind the platform reported, through the I/O error, and the
+    /// client over it is unusable afterwards rather than retrying the link.
+    async fn ut_vanished_serial_device_surfaces_its_kind_and_ends_the_link() {
+        // Linux reports an unplugged USB adapter as EIO, which carries no
+        // dedicated kind; any kind must come through unchanged.
+        let kind = io::ErrorKind::Other;
+        let stream = Faulty {
+            read_failure: Some(kind),
+            write_budget: None,
+            written: Vec::new(),
+        };
+        let mut client = Client::new(FrameTransport::<_, Rtu>::new(stream));
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Io { kind })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Io { kind })
+        );
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
+    }
+}
