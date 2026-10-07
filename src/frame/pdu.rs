@@ -2508,13 +2508,22 @@ mod tests {
 
     #[test]
     /// FR-R-054 — a Write File Record data length below 9 cannot hold a
-    /// sub-request with any data at all.
+    /// sub-request with any data at all, and one above 251 cannot fit a PDU.
     fn ut_write_file_record_data_length_out_of_range() {
         assert_eq!(
             RequestPdu::decode(&[0x15, 0x07, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x00]),
             Err(Error::OutOfRange {
                 field: "request data length",
                 value: 7,
+                min: 9,
+                max: 251,
+            })
+        );
+        assert_eq!(
+            RequestPdu::decode(&[0x15, 0xFC]),
+            Err(Error::OutOfRange {
+                field: "request data length",
+                value: 252,
                 min: 9,
                 max: 251,
             })

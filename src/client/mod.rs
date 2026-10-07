@@ -2368,6 +2368,52 @@ mod tests {
         let _ = answering.await;
     }
 
+    #[tokio::test(start_paused = true)]
+    /// CL-E-010 — a reply a server sends to a broadcast under unit 0 is left
+    /// in the stream, but it does not correspond to the next exchange's
+    /// request, so that exchange discards it and takes the real answer.
+    async fn ut_unit_zero_reply_to_a_broadcast_is_discarded_by_the_next_exchange() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        client
+            .write_single_register(UnitId(0), Address(0x0001), RegisterValue(0x0003))
+            .await
+            .expect("the broadcast returns without reading a reply");
+
+        let stale = ResponsePdu::WriteSingleRegister {
+            address: Address(0x0001),
+            value: RegisterValue(0x0003),
+        };
+        let answering = tokio::spawn(async move {
+            let (unit, _) = server.recv_request().await.expect("the broadcast arrives");
+            assert_eq!(unit, UnitId(0));
+            // The misbehaving server echoes the broadcast address back.
+            server
+                .send_response(&UnitId(0), &stale)
+                .await
+                .expect("writes the stale reply");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server.recv_request().await.expect("the read arrives");
+            server
+                .send_response(&UnitId(0x11), &registers())
+                .await
+                .expect("writes the real reply");
+            server
+        });
+        // Let the stale reply land before the next exchange starts, with
+        // silence on both sides so every ADU is a frame of its own.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(registers())),
+            "the unit-0 reply was taken as the next exchange's answer"
+        );
+        let _ = answering.await;
+    }
+
     #[tokio::test]
     /// CL-E-014 — the peer closes cleanly before any response byte: the
     /// transport's end-of-stream `Io { kind: UnexpectedEof }` reaches the

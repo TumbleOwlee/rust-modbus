@@ -851,6 +851,48 @@ mod tests {
     }
 
     #[tokio::test]
+    /// TR-R-084, TR-E-016 — the outgoing buffer's length never exceeds the framing's
+    /// maximum ADU length: not after the largest legal ADU (260 bytes over
+    /// TCP), and not after an encode that failed for being oversized.
+    async fn ut_outgoing_buffer_length_stays_within_the_maximum_adu() {
+        let (client, mut peer) = duplex(1024);
+        let mut client = FrameTransport::<_, Tcp>::new(client);
+
+        // One sub-request of 122 registers: data length 7 + 244 = 251, the
+        // most FR-R-054 allows, so a 253-byte PDU and a 260-byte ADU.
+        let largest = RequestPdu::WriteFileRecord {
+            records: vec![crate::FileRecordWrite {
+                file_number: crate::FileNumber(4),
+                record_number: crate::RecordNumber(7),
+                values: vec![RegisterValue(0); 122],
+            }],
+        };
+        client
+            .send_request(&header(), &largest)
+            .await
+            .expect("the largest legal ADU sends");
+        assert!(client.outgoing.len() <= Tcp::MAX_ADU_LEN);
+        let mut sent = vec![0u8; Tcp::MAX_ADU_LEN];
+        peer.read_exact(&mut sent)
+            .await
+            .expect("a whole 260-byte ADU");
+
+        // 126 registers would be a 254-byte PDU, one past the maximum of 253.
+        let oversized = ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0); 126],
+        };
+        assert_eq!(
+            client.send_response(&header(), &oversized).await,
+            Err(Error::PduTooLarge { len: 254, max: 253 })
+        );
+        assert!(
+            client.outgoing.len() <= Tcp::MAX_ADU_LEN,
+            "a failed encode left {} bytes buffered",
+            client.outgoing.len()
+        );
+    }
+
+    #[tokio::test]
     /// TR-R-001 — the transport is generic over the stream: an in-memory duplex
     /// pair serves exactly as a socket does, which is what makes every rule
     /// below testable without a network.
@@ -1036,6 +1078,34 @@ mod ascii_tests {
             server.recv_request().await,
             Ok((UnitId(0x11), read_holding()))
         );
+    }
+
+    #[tokio::test]
+    /// TR-R-087, TR-E-005 — leading bytes before `:` are discarded however
+    /// many there are: three maximum ADUs' worth raise no error, the frame
+    /// after them is received, and the receive buffer never held more than
+    /// one maximum ADU.
+    async fn ut_ascii_unbounded_leading_garbage_is_discarded() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let writing = tokio::spawn(async move {
+            let mut bytes = vec![b'x'; 3 * Ascii::MAX_ADU_LEN];
+            bytes.extend_from_slice(REQUEST_ADU);
+            peer.write_all(&bytes).await.expect("writes");
+            peer
+        });
+
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+        assert!(
+            server.buffer.capacity() <= Ascii::MAX_ADU_LEN,
+            "held {} bytes of garbage",
+            server.buffer.capacity()
+        );
+        let _ = writing.await;
     }
 
     #[tokio::test(start_paused = true)]
