@@ -73,7 +73,7 @@ Every non-functional requirement except `NF-R-009`, `NF-R-012` and `NF-R-014`, w
 | `SV-R-005` | Structural: nothing to test is the point. Recorded in `server/data-contract.md`, and a shipped data model would be a visible addition to `server/api-contract.md` |
 | `SV-R-006` | The `std` gate on the server module, checked by the bare-metal CI job, whose comment cites it |
 | `TR-R-032` | The `rtu` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
-| `CL-R-094` | The `pipeline` feature declaration in `Cargo.toml`, whose comment cites it; built by the `check` and `clippy` CI jobs (`--all-features`) |
+| `CL-R-094` | The `pipeline` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 | `TR-R-060` | The `tls` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 | `TR-R-051` | The `rs485` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` CI job |
 | `TR-R-055` | The `cfg_attr` pair in `src/lib.rs` and the `#[allow(unsafe_code)]` block in `src/transport/rs485.rs`, both commented; verified manually per the RS-485 implementation plan that a second, unrelated unsafe block is still rejected with `rs485` enabled |

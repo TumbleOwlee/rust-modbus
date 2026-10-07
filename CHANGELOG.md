@@ -2,175 +2,55 @@
 
 All notable changes to `rust-modbus` are recorded here.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
-this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-(NF-R-016). While the major version is 0, a breaking change bumps the *minor*
-version and an additive or fixing change bumps the *patch* version.
-
-This file is required by **NF-R-019**: every release records its added, changed,
-and removed public API, every breaking change, and every MSRV change. What counts
-as breaking is enumerated in NF-R-017 — note that this crate's public enums and
-structs are exhaustive, so adding an error variant or a configuration field is a
-breaking change, not an additive one.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is 0, a breaking change bumps the *minor* version and an additive or fixing change bumps the *patch* version. Public enums and structs are exhaustive, so adding an error variant, an enum variant, or a configuration field is a breaking change.
 
 ## [Unreleased]
 
+### Added
+
+- `Service::on_accept_error` and `AcceptErrorAction` (`Continue` / `Stop`): a service can now keep `serve`, `serve_framed` and `serve_tls` running after a failed `accept()`. On `Continue`, live connections are kept and accepting resumes once the hook's future completes, so the hook can back off by awaiting. The default answer is `Stop`, which drains live connections and returns the error as before.
+
 ### Changed
 
-- Specification (`docs/specs/`): edge-case entries carry their own `-E-` IDs,
-  multi-rule requirements are split into one ID per rule (the original ID keeps
-  its first rule), and requirements are stated in the indicative. No behavior
-  change.
+- **Breaking:** the futures returned by `ClientTransport::send_request` and `recv_response` are now `Send`, so a `Client::call` future awaited generically over `T: ClientTransport<F>` can be handed to `tokio::spawn`. The `FrameTransport`, `UdpTransport` and `SyncClient` implementations require `F: Send` and `F::Header: Sync` where needed; a custom `ClientTransport` implementation must return `Send` futures.
+- **Breaking:** `Server::serve_link` returns `Err(error)` when its link ends with `Disconnect::Failed(error)`, instead of `Ok(())`. It still returns `Ok(())` when the link is closed by the peer, refused, or shut down, and returns only after `on_disconnect` has completed.
 
-## [0.1.0] - 2026-08-08
+## [0.2.0] - 2026-08-26
 
 ### Added
 
-- Frame layer (`FR-R-*`): PDU and ADU encode/decode for the supported function
-  codes, exception responses, RTU CRC-16, the TCP MBAP header, and Modbus ASCII
-  framing. `core` + `alloc` only, so it builds for `no_std` targets.
-- Async client (`CL-R-*`) over TCP, RTU, and ASCII framing, with response
-  matching, configurable timeouts, and typed data-access methods.
-- Async server (`SV-R-*`): a `Service` trait, per-connection tasks, unit-id
-  filtering, broadcast handling, and a shutdown handle with a drain. The crate
-  ships no register tables — the data model is the consumer's (SV-R-005).
-- Transport layer (`TR-R-*`): TCP sockets and RTU serial ports behind a common
-  framing-aware transport seam, with ADU-bounded read buffering.
-- Feature flags `std` (default, NF-R-002) and `rtu` (optional, TR-R-032).
-- Declared MSRV of 1.88.0 (`rust-version`, NF-R-005), verified by CI on that
-  exact toolchain rather than merely asserted.
-- Supply-chain and licence audit in CI via `cargo-deny` (NF-R-015); the
-  permissive allow-list and the reasoning for each non-standard licence in the
-  tree live in `deny.toml`.
-
-- `Client::state`, `ClientState`, and `UnusableReason`: what a client knows about
-  its own usability, including why it became unusable (CL-R-034 … CL-R-038).
-
-- A `README.md`, crate-level documentation with runnable doctests, and three
-  examples: `tcp_client`, `rtu_client` (needs the `rtu` feature and hardware),
-  and `interop_server`.
-
-- Appending encode throughout the frame layer: `RequestPdu::encode_into`,
-  `ResponsePdu::encode_into`, and `Framing::{encode_request_into,
-  encode_response_into}` write into a caller-supplied buffer instead of
-  returning a new one (FR-R-140 … FR-R-143). The allocating `encode` forms
-  remain, defined in terms of the appending ones. A transport now owns and
-  reuses a single outgoing buffer (TR-R-043), so sending in steady state
-  performs no allocation at all (NF-R-009) — asserted by counting allocator
-  calls in `tests/allocation.rs`, not merely stated.
-
-- Modbus RTU framing over a TCP socket, for transparent serial gateways
-  (FR-R-145 … FR-R-150, TR-R-024, TR-R-033, TR-R-045, TR-R-046, TR-R-048,
-  SV-R-053). `RtuOverTcp` carries the RTU ADU byte for byte and differs only in
-  where a frame ends: the extent is derived from the direction, the function
-  code, and the frame's own byte-count fields, since a socket has no inter-frame
-  silence to observe. New public items: `RtuOverTcp`, `Direction`, `Extent`,
-  `Error::IndeterminateLength`, `AduBoundary::ContentLength`,
-  `RtuOverTcpTransport`, `RtuOverTcpClient`, `connect_tcp_framed`,
-  `TcpListener::accept_framed`, and `Server::serve_framed`. Function code 8,
-  function code 43 outside MEI type 14, and custom codes are refused with
-  `IndeterminateLength` rather than misdelimited, and the boundary is not
-  self-locating, so a bad frame costs the connection (FR-R-150).
-
-- RS-485 kernel direction control on Linux, behind the off-by-default `rs485`
-  feature (implies `rtu`): `SerialConfig.rs485: Option<Rs485Config>`,
-  `Rs485Config`, `RtsPolarity`, and `Error::Rs485Unsupported` (TR-R-050 …
-  TR-R-057). `open_serial` issues the `TIOCSRS485` ioctl after the port opens
-  and before the transport is returned, so a caller never holds a transport
-  whose direction control silently failed to apply; off Linux, or when the
-  driver refuses the ioctl, `open_serial` fails with `Rs485Unsupported` rather
-  than the port. No application-driven GPIO hook — direction control is
-  delegated entirely to the kernel driver, and the after-send RTS level is
-  always the on-send level's complement. This is the crate's only unsafe
-  code, admitted by narrowing `forbid(unsafe_code)` to `deny(unsafe_code)`
-  when `rs485` is enabled (NF-R-011); every other build configuration still
-  forbids it outright.
-
-- `core::fmt::Display` for the ten domain value types of FR-R-007 (unadorned
-  wrapped value, e.g. `UnitId(17)` renders `"17"`), for `FunctionCode` (English
-  name, e.g. `"Read Holding Registers"`, or `"Custom function <n>"`), and for
-  `ExceptionCode` (English name, or `"Other exception <n>"`) — unconditional,
-  not feature-gated (FR-R-152, FR-R-153, FR-R-154).
-
-- An off-by-default `serde` feature (NF-R-025), `default-features = false`
-  with only `derive` and `alloc`. `Serialize`/`Deserialize` for the ten domain
-  value types as `#[serde(transparent)]` (FR-R-151), and for `ClientConfig`,
-  `ServerConfig`, `SerialConfig`, `TcpConfig`, `TransportConfig`,
-  `Rs485Config` (with `rs485`), and the serial enums `DataBits`, `Parity`,
-  `StopBits`, `FlowControl`, `RtsPolarity` (CL-R-065, SV-R-054, TR-R-058,
-  TR-R-059). `Duration` fields keep `Duration`'s own representation
-  (`{secs, nanos}`) rather than a count in one unit, so every value a caller
-  can construct round-trips exactly: the 19200-8E1 default interval of
-  2,005,208 ns, a sub-millisecond timeout, and a duration whose nanosecond
-  count would overflow an integer field alike. A single-unit representation
-  would have been tidier in a config file at the cost of rounding the first
-  two and failing on the third. The field names are a compatibility surface
-  from here on. A deserialized `SerialConfig` with a zero baud rate is
-  accepted exactly as direct construction accepts it — the configuration error
-  fires on first use, not at deserialize time.
-
-- `SerialStream`, re-exported under the `rtu` feature (TR-R-034). It is the
-  stream type already standing in the signatures of `SerialTransport`,
-  `RtuClient` and `AsciiClient`, so naming any of those in a consumer's own
-  signature no longer requires declaring the serial backend as a direct
-  dependency and keeping its version in step with this crate's.
-
-- An off-by-default `tls` feature (NF-R-027, implies `std`, absent from
-  `no_std`/bare-metal builds): TLS transport over TCP only, via `rustls` +
-  `tokio-rustls` (TR-R-060, TR-R-061). New public items: `TlsClientConfig`,
-  `ServerCertVerification` (`Verify(RootStore)` / `DangerousDisableVerification`,
-  no boolean spelling for "skip verification"), `RootStore`, `ClientIdentity`,
-  `connect_tls`/`connect_tls_framed` (TR-R-062), `TlsServerConfig`,
-  `ClientCertPolicy` (`Require(RootStore)` / `None`), `TlsListener` and
-  `Server::serve_tls` (TR-R-063), `MODBUS_TLS_PORT: u16 = 802` (documentation
-  constant only, never applied implicitly, TR-R-068), `Error::TlsHandshake`
-  (distinct from `Io`/`Timeout`, TR-R-067), `Connection::peer_cert` (`Some` on
-  a TLS connection under `ClientCertPolicy::Require` that accepted a client
-  cert, `None` otherwise, SV-R-055), `Service::on_tls_handshake_failed`
-  (default no-op, notified when a handshake fails before any `Connection`
-  exists, SV-R-056), and the PEM-loading helpers `load_pem_cert_chain`/
-  `load_pem_private_key`.
+- ASCII as a full serial operating mode: `TransportConfig::ascii_inter_character_timeout` (default 1 s, not derived from the baud rate). A frame stalled mid-way fails with `Error::Timeout { what: "ascii inter-character" }` and the next receive starts clean.
+- Pipelined clients behind the off-by-default `pipeline` feature (implies `std`): `PipelinedClient` (TCP) and `PipelinedUdpClient` (UDP) keep several requests in flight on one connection, matched by MBAP transaction id. The handle is cloneable; the transport closes when the last handle is dropped. `PipelineConfig` (convertible from `ClientConfig`) sets the in-flight limit; `send` waits for a free slot, `try_send` fails at once with the new `Error::TooManyInFlight`. RTU and ASCII are served only by `Client`.
+- `Service::on_request` may answer `Ok(None)` for any unit id: no response is sent and the connection continues, as for a broadcast.
+- `AduReader`: a read-only frame reader for a stream offering only `AsyncRead` (a listen-only serial port, or bytes replayed from a capture), yielding one undecoded ADU per call.
+- `crc16` and `lrc` as public functions, to validate a captured RTU or ASCII frame independently of decoding it.
+- `ClientCertPolicy::AllowAny`: require a TLS client certificate without validating its chain or identity.
 
 ### Changed
 
-- `Connection` drops `Copy` (`Clone` only) unconditionally, in every feature
-  combination, not only under `tls` — needed so it can carry an optional,
-  non-`Copy` client certificate (SV-R-055). Breaking per NF-R-017; affects
-  builds without the `tls` feature too.
+- **Breaking:** `Service::on_request` returns `Result<Option<ResponsePdu>, ExceptionCode>` instead of `Result<ResponsePdu, ExceptionCode>`.
+- **Breaking:** `TransportConfig` gained the `ascii_inter_character_timeout` field, `Error` the `TooManyInFlight` variant (with `pipeline`), and `ClientCertPolicy` the `AllowAny` variant.
 
-- `AduBoundary` gained a `ContentLength` variant. The enum is exhaustive, so a
-  `match` on it outside this crate must handle the new variant (NF-R-017).
+## [0.1.0] - 2026-08-08
 
-- `Framing`'s required methods are now `encode_request_into` and
-  `encode_response_into`; `encode_request` and `encode_response` became provided
-  methods. An implementor of the trait outside this crate must implement the
-  appending pair instead of the allocating one.
+First release.
 
-- A corrupted RTU or ASCII frame now costs exactly one frame instead of the
-  link. Both framings delimit their frames on the wire — RTU by silence, ASCII
-  by `:` and CRLF — so the next boundary survives a frame that fails to decode,
-  and a client stays synchronized while a server stays on the bus (FR-R-144,
-  CL-R-023, SV-R-050, TR-R-044). TCP is unchanged: its length prefix is carried
-  by the frame itself, so a frame that cannot be decoded takes the stream's
-  alignment with it. `AduBoundary::is_self_locating` reports which of the two a
-  framing is.
+### Added
 
-### Fixed
+- Frame layer: PDU and ADU encode/decode for function codes 1–8, 11, 12, 15–17, 20–24 and 43 (MEI 14), custom function codes, and exception responses; RTU with CRC-16, TCP with the MBAP header, and ASCII with LRC. Builds for `no_std` targets with `core` + `alloc`.
+- Typed domain values (`UnitId`, `Address`, `Quantity`, `RegisterValue`, `TransactionId`, and others) that cannot be mixed up at compile time, with `Display` showing the bare value. `FunctionCode` and `ExceptionCode` display their English names.
+- Allocation-free sending: `encode_into` on PDUs and `Framing` writes into a caller-supplied buffer, and a transport reuses one outgoing buffer.
+- Async client over TCP, RTU, ASCII and UDP (`TcpClient`, `RtuClient`, `AsciiClient`, `RtuOverTcpClient`, `UdpClient`), generic over any `ClientTransport`: response matching, configurable timeouts, typed data-access methods, broadcast handling, and `Client::state` reporting whether the client is still usable and why not.
+- Blocking client behind the `sync` feature: `SyncClient` and the `SyncTcpClient`, `SyncRtuOverTcpClient`, `SyncRtuClient` and `SyncAsciiClient` aliases, with no runtime needed by the caller.
+- Async server: a `Service` trait, a task per connection, unit-id filtering, broadcast handling, connection lifecycle notifications with `Acceptance` and `Disconnect`, and a `ServerHandle` that shuts down with a drain. The crate ships no register tables; the data model is yours.
+- Transports: TCP (`connect_tcp`, `TcpListener`), serial RTU and ASCII behind the `rtu` feature (`open_serial`, `SerialConfig`, `SerialStream` re-exported), UDP (`connect_udp`, `Server::serve_udp`), and RTU framing over TCP for transparent serial gateways (`RtuOverTcp`, `connect_tcp_framed`, `TcpListener::accept_framed`, `Server::serve_framed`).
+- A corrupted RTU or ASCII frame costs one frame, not the link; on TCP a frame that cannot be decoded ends the connection.
+- RS-485 kernel direction control on Linux behind the `rs485` feature: `SerialConfig::rs485`, `Rs485Config`, `RtsPolarity`, and `Error::Rs485Unsupported` when the platform or driver refuses it.
+- Modbus/TCP Security behind the `tls` feature (`rustls`): `connect_tls`, `TlsListener`, `Server::serve_tls`, server and client certificate verification (`ServerCertVerification`, `ClientCertPolicy`), `Connection::peer_cert`, `Service::on_tls_handshake_failed`, PEM-loading helpers, and `Error::TlsHandshake` carrying the `rustls` error and any rejected client certificate.
+- `serde` support behind the `serde` feature for the domain values and every configuration type.
+- Minimum supported Rust version 1.88.
+- Hostile, truncated or oversized peer input produces a typed error, never a panic or unbounded allocation. No `unsafe` code outside the `rs485` ioctl.
 
-- The `tokio` dependency now declares the `sync`, `rt`, and `macros` features the
-  server uses. Without them a consumer that depended on the library alone could
-  not compile it; every local test command masked the omission, because
-  `[dev-dependencies]` enabled those features and Cargo unifies them across
-  targets.
-
-### Security
-
-- No `unsafe` code anywhere in the crate, enforced by `forbid(unsafe_code)`
-  (NF-R-011).
-- Malformed, truncated, oversized, or hostile peer input produces a typed error
-  and never a panic, an out-of-bounds access, or an unbounded allocation
-  (NF-R-012), pinned by a property-based suite over generated byte sequences and
-  every truncation prefix of a valid ADU (NF-R-014).
-
-[Unreleased]: https://github.com/TumbleOwlee/rust-modbus/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TumbleOwlee/rust-modbus/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TumbleOwlee/rust-modbus/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TumbleOwlee/rust-modbus/releases/tag/v0.1.0
