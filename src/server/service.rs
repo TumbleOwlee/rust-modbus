@@ -113,7 +113,7 @@ pub enum AcceptErrorAction {
     /// Keep every live connection and accept again, once
     /// [`on_accept_error`](Service::on_accept_error) has completed (SV-R-060).
     Continue,
-    /// Drain live connections and return the error; the default (SV-R-051).
+    /// Drain live connections and return the error; the default (SV-R-059, SV-R-067).
     Stop,
 }
 
