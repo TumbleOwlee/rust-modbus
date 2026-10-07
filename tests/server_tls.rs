@@ -203,7 +203,7 @@ async fn it_on_tls_handshake_failed_is_notified_with_no_connection_established()
 }
 
 #[tokio::test]
-/// TR-R-069 -- `AllowAny` still requires a client certificate be
+/// TR-R-069, TR-E-044 -- `AllowAny` still requires a client certificate be
 /// presented: a handshake offering none fails exactly as under `Require`,
 /// `peer_cert: None`, and never reaches `on_connect`.
 async fn it_on_tls_handshake_failed_under_allow_any_when_no_cert_is_offered() {
@@ -250,7 +250,7 @@ async fn it_on_tls_handshake_failed_under_allow_any_when_no_cert_is_offered() {
 }
 
 #[tokio::test]
-/// TR-R-069 -- a client certificate offered and rejected under
+/// TR-R-069, TR-E-043 -- a client certificate offered and rejected under
 /// `ClientCertPolicy::Require` (untrusted issuer) reaches
 /// `on_tls_handshake_failed` as `Error::TlsHandshake.peer_cert`, `Some`
 /// with the offered certificate.

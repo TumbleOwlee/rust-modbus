@@ -1,4 +1,5 @@
-//! ASCII framing: `:`, hexadecimal pairs, LRC, CR LF (FR-R-110 … FR-R-119).
+//! ASCII framing: `:`, hexadecimal pairs, LRC, CR LF (FR-R-110 … FR-R-119, FR-ADU-R-003,
+//! FR-ADU-R-004).
 
 use alloc::vec::Vec;
 
@@ -65,7 +66,7 @@ impl Framing for Ascii {
 }
 
 /// Unframe an ASCII ADU into its address and its decoded PDU bytes
-/// (FR-R-110 … FR-R-116).
+/// (FR-R-110 … FR-R-116, FR-ADU-R-003, FR-ADU-R-004).
 ///
 /// The LRC is verified before the PDU is looked at, so a corrupted frame never
 /// reaches the PDU decoder (FR-R-115).
@@ -173,7 +174,7 @@ pub fn lrc(bytes: &[u8]) -> u8 {
         .wrapping_neg()
 }
 
-/// Decode hexadecimal character pairs into bytes (FR-R-111, FR-R-112).
+/// Decode hexadecimal character pairs into bytes (FR-R-111, FR-ADU-R-003).
 fn decode_hex(chars: &[u8]) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(chars.len() / 2);
     for &[high, low] in chars.as_chunks::<2>().0 {
@@ -182,7 +183,7 @@ fn decode_hex(chars: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// One hexadecimal character, either case (FR-R-112).
+/// One hexadecimal character, either case (FR-ADU-R-003, FR-ADU-R-004).
 fn nibble(character: u8) -> Result<u8> {
     match character {
         b'0'..=b'9' => Ok(character - b'0'),
@@ -272,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-112, FR-R-119 — lowercase input decodes, and re-encodes to the
+    /// FR-R-112, FR-R-119, FR-ADU-R-003, FR-ADU-E-008 — lowercase input decodes, and re-encodes to the
     /// uppercase form of the same ADU.
     fn ut_ascii_lowercase_reencodes_uppercase() {
         let lowercase = b":1103006b00037e\r\n";
@@ -310,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-114, FR-R-115 — the LRC covers the decoded bytes, so an ADU whose
+    /// FR-R-114, FR-R-115, FR-ADU-E-007 — the LRC covers the decoded bytes, so an ADU whose
     /// LRC does not match them fails and the PDU is not decoded.
     fn ut_ascii_lrc_mismatch_rejected() {
         assert_eq!(
@@ -323,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-112 — a character outside `0`-`9`, `A`-`F`, `a`-`f` in a
+    /// FR-ADU-R-004, FR-ADU-E-006 — a character outside `0`-`9`, `A`-`F`, `a`-`f` in a
     /// hexadecimal position names the offending byte.
     fn ut_ascii_invalid_hexadecimal_character() {
         assert_eq!(
@@ -333,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-116 — the three ways an ADU can be misframed: no start character,
+    /// FR-R-116, FR-ADU-E-004, FR-ADU-E-005 — the three ways an ADU can be misframed: no start character,
     /// no CR LF terminator, an odd number of hexadecimal characters.
     fn ut_ascii_framing_errors() {
         assert_eq!(
@@ -357,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-113 — an ASCII ADU is at most 513 characters.
+    /// FR-R-113, FR-ADU-E-012 — an ASCII ADU is at most 513 characters.
     fn ut_ascii_adu_too_large() {
         let bytes = vec![b'0'; 514];
         assert_eq!(

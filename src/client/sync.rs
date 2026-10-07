@@ -1,4 +1,4 @@
-//! Blocking client (CL-R-070 … CL-R-079).
+//! Blocking client (CL-R-070 … CL-R-079, CL-R-104, CL-R-105).
 //!
 //! A thin facade over [`Client`]: it owns a runtime and drives the async client
 //! on it. Every guarantee lives in the async client and is reached from here by
@@ -33,7 +33,7 @@ pub struct SyncClient<S, F> {
     /// The async client every method delegates to (CL-R-072).
     client: Client<FrameTransport<S, F>, F>,
     /// The runtime that drives it (CL-R-073). Owned, so a caller never supplies
-    /// one and no runtime type appears in a signature (CL-R-074).
+    /// one and no runtime type appears in a signature (CL-R-104, CL-R-074).
     runtime: Runtime,
 }
 

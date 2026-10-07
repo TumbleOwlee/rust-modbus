@@ -62,7 +62,7 @@ pub(crate) struct KernelRs485 {
 /// # Errors
 ///
 /// Fails with [`Error::Configuration`] if either delay's millisecond count
-/// does not fit in a `u32` (TR-R-056).
+/// does not fit in a `u32` (TR-R-093).
 pub(crate) fn build(config: &Rs485Config) -> Result<KernelRs485> {
     let mut flags = SER_RS485_ENABLED;
     // TR-R-057: the after-send level is always the complement of the
@@ -138,7 +138,7 @@ fn issue_ioctl(fd: std::os::unix::io::RawFd, kernel: &KernelRs485) -> Result<()>
 /// # Errors
 ///
 /// Fails with [`Error::Configuration`] if a delay does not fit in the
-/// kernel's field (TR-R-056), or with [`Error::Rs485Unsupported`] if the
+/// kernel's field (TR-R-093), or with [`Error::Rs485Unsupported`] if the
 /// driver refuses the ioctl (TR-R-054).
 #[cfg(target_os = "linux")]
 pub(crate) fn apply(port: &tokio_serial::SerialStream, config: &Rs485Config) -> Result<()> {
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    /// TR-R-056 — a delay finer than a millisecond truncates to whole
+    /// TR-R-056, TR-E-030 — a delay finer than a millisecond truncates to whole
     /// milliseconds at the ioctl boundary, since the kernel field has no finer
     /// resolution.
     fn ut_rs485_delay_truncated_to_milliseconds() {
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    /// TR-R-056 — a `Duration` whose millisecond count does not fit in a
+    /// TR-R-093 — a `Duration` whose millisecond count does not fit in a
     /// `u32` is a configuration error, not a silent wraparound.
     fn ut_rs485_delay_overflow_is_configuration_error() {
         let too_long = Duration::from_millis(u64::from(u32::MAX) + 1);
@@ -273,7 +273,7 @@ mod tests {
 
     #[cfg(not(target_os = "linux"))]
     #[test]
-    /// TR-R-054 — off Linux the stub reports unsupported without touching
+    /// TR-R-054, TR-E-028 — off Linux the stub reports unsupported without touching
     /// `libc` at all, so this is the only build where an actual RS-485 device
     /// is unreachable regardless of a driver's own support.
     fn ut_rs485_unsupported_stub_on_non_linux() {

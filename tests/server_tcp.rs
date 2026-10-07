@@ -122,7 +122,7 @@ async fn connect(
             .await
             .expect("connects"),
         ClientConfig {
-            // Shorter than the 1 s default (CL-R-030): one test deliberately
+            // Shorter than the 1 s default (CL-R-100): one test deliberately
             // waits for a response that never comes.
             response_timeout: Duration::from_millis(200),
         },
@@ -157,7 +157,7 @@ async fn it_client_and_server_complete_an_exchange() {
 }
 
 #[tokio::test]
-/// SV-R-012 — a service's refusal arrives at the client as a typed exception,
+/// SV-R-012, SV-E-001 — a service's refusal arrives at the client as a typed exception,
 /// and the connection stays usable (CL-R-042).
 async fn it_service_refusal_reaches_the_client_as_an_exception() {
     let running = start(ServerConfig::default()).await;
@@ -235,7 +235,7 @@ async fn it_many_clients_share_one_service() {
 }
 
 #[tokio::test]
-/// SV-R-020, SV-R-021 — a server configured for one unit leaves another unit's
+/// SV-R-020, SV-R-021, SV-E-008 — a server configured for one unit leaves another unit's
 /// request unanswered, and the client's own timeout is what ends the wait.
 async fn it_configured_unit_answers_only_itself() {
     let running = start(ServerConfig {
@@ -267,12 +267,12 @@ async fn it_configured_unit_answers_only_itself() {
 }
 
 #[tokio::test]
-/// SV-R-024 — a service withholding its own answer for a matched,
+/// SV-R-024, SV-E-009 — a service withholding its own answer for a matched,
 /// non-broadcast unit draws no response, and the connection keeps serving.
 ///
 /// Driven over a raw `FrameTransport`, not this crate's own `Client`: a
 /// `recv_response` call cancelled by an outer timeout latches the transport's
-/// `receiving` flag and fails every later receive immediately (TR-R-041), so
+/// `receiving` flag and fails every later receive immediately (TR-R-090), so
 /// this pipelines both requests first and takes exactly one response — proof
 /// that only the second draws one, without ever cancelling a receive.
 async fn it_service_withholding_draws_no_response_and_connection_continues() {

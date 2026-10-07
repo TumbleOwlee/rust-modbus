@@ -16,6 +16,24 @@ use crate::frame::{ExceptionCode, RequestPdu, ResponsePdu, UnitId};
 /// `tls` off): behind `tls` this carries an owned
 /// [`CertificateDer`](rustls_pki_types::CertificateDer), which is not `Copy`,
 /// and the derive list does not change shape between builds.
+///
+/// SV-R-071 — a `Connection` is cloned explicitly:
+///
+/// ```
+/// use rust_modbus::Connection;
+/// fn duplicate(conn: &Connection) -> (Connection, Connection) {
+///     (conn.clone(), conn.clone())
+/// }
+/// ```
+///
+/// SV-R-071 — and is not `Copy`, so a moved one cannot be used again:
+///
+/// ```compile_fail
+/// use rust_modbus::Connection;
+/// fn duplicate(conn: Connection) -> (Connection, Connection) {
+///     (conn, conn)
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
     /// Unique for the lifetime of the server that issued it.
@@ -93,7 +111,7 @@ impl From<ConnectionId> for u64 {
     }
 }
 
-/// Whether a connection is served or closed unread (SV-R-032).
+/// Whether a connection is served or closed unread (SV-R-032, SV-R-064).
 ///
 /// A named choice rather than a `bool`: at the call site neither the implementor
 /// nor the reader has to remember which way `true` points.
@@ -113,7 +131,7 @@ pub enum AcceptErrorAction {
     /// Keep every live connection and accept again, once
     /// [`on_accept_error`](Service::on_accept_error) has completed (SV-R-060).
     Continue,
-    /// Drain live connections and return the error; the default (SV-R-051).
+    /// Drain live connections and return the error; the default (SV-R-059, SV-R-067).
     Stop,
 }
 
@@ -200,7 +218,7 @@ pub trait Service: Send + Sync + 'static {
     /// Accepting from a listener failed (SV-R-059).
     ///
     /// Answer [`AcceptErrorAction::Continue`] to keep serving or
-    /// [`AcceptErrorAction::Stop`] to drain and return the error (SV-R-060). The
+    /// [`AcceptErrorAction::Stop`] to drain and return the error (SV-R-067). The
     /// server awaits this before the next accept, so a service backs off by
     /// awaiting inside it; a shutdown requested meanwhile drops the future
     /// (SV-R-061). No [`Connection`]/[`ConnectionId`] exists, since no peer was

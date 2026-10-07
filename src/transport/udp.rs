@@ -1,5 +1,5 @@
 //! A UDP transport carrying one MBAP-framed ADU per datagram (TR-R-070 …
-//! TR-R-074).
+//! TR-R-074, TR-R-097, TR-R-098).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -66,8 +66,8 @@ impl<F: Framing> UdpTransport<F> {
     /// # Errors
     ///
     /// Fails if the PDU does not encode, if the encoded ADU exceeds the
-    /// framing's [`Framing::MAX_ADU_LEN`] (refused before any I/O), or if the
-    /// socket does.
+    /// framing's [`Framing::MAX_ADU_LEN`] (refused before any I/O, TR-R-097),
+    /// or if the socket does.
     pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
         self.outgoing.clear();
         F::encode_request_into(header, pdu, &mut self.outgoing)?;
@@ -284,7 +284,7 @@ pub async fn connect_udp(
 /// # Errors
 ///
 /// Fails if the socket does, or if the datagram does not decode. Either
-/// failure leaves the socket fully usable for the next receive (TR-R-074).
+/// failure leaves the socket fully usable for the next receive (TR-R-098).
 /// The source address is not reported on failure — only on a successful
 /// decode.
 pub async fn recv_datagram_request<F: Framing>(
@@ -309,8 +309,8 @@ pub async fn recv_datagram_request<F: Framing>(
 /// # Errors
 ///
 /// Fails if the PDU does not encode, if the encoded ADU exceeds
-/// `F::MAX_ADU_LEN` (refused before `send_to` — see Shared in the plan), or if
-/// the socket does.
+/// `F::MAX_ADU_LEN` (refused before `send_to`, TR-R-097), or if the socket
+/// does.
 pub async fn send_datagram_response_into<F: Framing>(
     socket: &UdpSocket,
     peer: SocketAddr,
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-074 — a datagram that fails to decode surfaces as a typed error and
+    /// TR-R-098 — a datagram that fails to decode surfaces as a typed error and
     /// costs nothing beyond itself: the next datagram, however malformed the
     /// first one was, still decodes normally.
     async fn ut_decode_failure_leaves_udp_transport_usable() {
@@ -434,5 +434,97 @@ mod tests {
             .await
             .expect("sends a good request");
         assert_eq!(server_side.recv_request().await, Ok((header, request)));
+    }
+
+    /// A connected pair of UDP transports on loopback, each bound to an
+    /// ephemeral port.
+    async fn pair() -> (UdpTransport<crate::frame::Tcp>, UdpSocket) {
+        let near = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        let far = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        near.connect(far.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+        (UdpTransport::new(near), far)
+    }
+
+    /// 126 registers need a 254-byte PDU, one over the 253 of FR-R-002.
+    fn oversized() -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: alloc::vec![crate::RegisterValue(0); 126],
+        }
+    }
+
+    /// The largest legal answer: 125 registers, a 252-byte PDU.
+    fn largest() -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: alloc::vec![crate::RegisterValue(0); 125],
+        }
+    }
+
+    #[tokio::test]
+    /// TR-R-097 — `UdpTransport` refuses an ADU over the framing maximum before
+    /// any I/O: the send fails with the size error, and the first datagram the
+    /// peer sees is the legal one sent after it.
+    async fn ut_oversized_adu_is_refused_before_any_io() {
+        use crate::error::Error;
+        use crate::{MbapHeader, TransactionId, UnitId};
+
+        let (mut near, far) = pair().await;
+        let header = MbapHeader {
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
+        };
+
+        assert_eq!(
+            near.send_response(&header, &oversized()).await,
+            Err(Error::PduTooLarge { len: 254, max: 253 })
+        );
+        near.send_response(&header, &largest())
+            .await
+            .expect("sends");
+
+        let mut datagram = [0u8; 1024];
+        let received = far.recv(&mut datagram).await.expect("receives");
+        // 7 bytes of MBAP header and the 252-byte PDU (FR-R-104).
+        assert_eq!(received, 259);
+    }
+
+    #[tokio::test]
+    /// TR-R-097 — `send_datagram_response_into` refuses an ADU over the
+    /// framing maximum before `send_to`: the peer's first datagram is the
+    /// legal one sent after it.
+    async fn ut_datagram_response_oversized_adu_is_refused_before_any_io() {
+        use crate::error::Error;
+        use crate::frame::Tcp;
+        use crate::{MbapHeader, TransactionId, UnitId};
+
+        let near = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        let far = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("binds");
+        let to = far.local_addr().expect("has an address");
+        let header = MbapHeader {
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
+        };
+        let mut out = Vec::new();
+
+        assert_eq!(
+            send_datagram_response_into::<Tcp>(&near, to, &header, &oversized(), &mut out).await,
+            Err(Error::PduTooLarge { len: 254, max: 253 })
+        );
+        send_datagram_response_into::<Tcp>(&near, to, &header, &largest(), &mut out)
+            .await
+            .expect("sends");
+
+        let mut datagram = [0u8; 1024];
+        let received = far.recv(&mut datagram).await.expect("receives");
+        assert_eq!(received, 259);
     }
 }

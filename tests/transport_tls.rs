@@ -1,4 +1,4 @@
-//! TLS transport over a real loopback socket (TR-R-060 … TR-R-068).
+//! TLS transport over a real loopback socket (TR-R-060 … TR-R-068, TR-R-096).
 //!
 //! Every listener binds port 0 and reads the assigned port back (NF-R-023).
 
@@ -107,7 +107,7 @@ async fn it_connect_tls_handshakes_then_yields_a_frame_transport() {
 }
 
 #[tokio::test]
-/// TR-R-062 -- a refused TCP connection surfaces as `Error::Io`,
+/// TR-R-096 -- a refused TCP connection surfaces as `Error::Io`,
 /// distinct from a handshake failure.
 async fn it_connect_tls_tcp_refused_is_distinct_from_handshake_failure() {
     let listener = tokio::net::TcpListener::bind(ephemeral())
@@ -127,7 +127,7 @@ async fn it_connect_tls_tcp_refused_is_distinct_from_handshake_failure() {
 }
 
 #[tokio::test(start_paused = true)]
-/// TR-R-021 -- a connect timeout bounds the TCP connect and the TLS
+/// TR-R-021, TR-R-089, TR-E-045 -- a connect timeout bounds the TCP connect and the TLS
 /// handshake as one operation: a peer that completes the TCP accept but never
 /// sends its `ServerHello` still times out as `Error::Timeout`, not
 /// `Error::TlsHandshake`.
@@ -201,7 +201,7 @@ async fn it_tls_listener_accepts_and_yields_a_frame_transport() {
 }
 
 #[tokio::test]
-/// TR-R-066 -- `AllowAny` accepts a client certificate no root store
+/// TR-R-066, TR-E-044 -- `AllowAny` accepts a client certificate no root store
 /// trusts; `accept`'s returned `peer_cert` is `Some` with whatever
 /// certificate was presented, with no trust decision behind it.
 async fn it_allow_any_accept_returns_the_untrusted_client_cert() {

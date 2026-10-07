@@ -1,16 +1,12 @@
 # Server — API Contract
 
-The stable public surface owned by the server area: the server type and its
-constructors, the trait a consumer implements to answer requests, the shutdown
-handle, the configuration fields, and the feature flags that gate them.
+The stable public surface owned by the server area: the server type and its constructors, the trait a consumer implements to answer requests, the shutdown handle, the configuration fields, and the feature flags that gate them.
 
-Per the ownership rule in [`../README.md`](../README.md), server configuration
-fields are specified here; transport-level fields (socket options, baud rate)
-belong to [`../transport/`](../transport/).
+Per the ownership rule in [`../README.md`](../README.md), server configuration fields are specified here; transport-level fields (socket options, baud rate) belong to [`../transport/`](../transport/).
 
 ---
 
-## 1. Server type and construction
+## Server type and construction
 
 One type for every framing (SV-R-001), built from a service (SV-R-002).
 
@@ -35,14 +31,9 @@ impl<S: Service> Server<S> {
 }
 ```
 
-`serve_tls` (TR-R-063) accepts the raw TCP connection first, then runs the TLS
-handshake inside a per-connection task (TR-R-064) — a stalled or hostile
-`ClientHello` blocks only that task, not the shared accept loop (SV-R-030). A
-handshake failure never reaches `Service::on_connect`/`on_error`: it is
-reported through `Service::on_tls_handshake_failed` (SV-R-056) instead.
+`serve_tls` (TR-R-063) accepts the raw TCP connection first, then runs the TLS handshake inside a per-connection task (TR-R-064) — a stalled or hostile `ClientHello` blocks only that task, not the shared accept loop (SV-R-030). A handshake failure never reaches `Service::on_connect`/`on_error`: it is reported through `Service::on_tls_handshake_failed` (SV-R-056) instead.
 
-`ServerFraming` is the seam of SV-R-001 — the mirror of the client's
-`ClientFraming`, since a responder reads a header rather than building one:
+`ServerFraming` is the seam of SV-R-001 — the mirror of the client's `ClientFraming`, since a responder reads a header rather than building one:
 
 ```rust
 pub trait ServerFraming: Framing {
@@ -51,17 +42,9 @@ pub trait ServerFraming: Framing {
 }
 ```
 
-`Rtu`, `RtuOverTcp` and `Ascii` take the header itself as the unit and broadcast
-on unit 0 (FR-R-096, FR-R-117); `Tcp` takes the MBAP header's unit field and
-never broadcasts. Public because it bounds a public method, unsealed because `Framing`
-is.
+`Rtu`, `RtuOverTcp` and `Ascii` take the header itself as the unit and broadcast on unit 0 (FR-R-096, FR-R-117); `Tcp` takes the MBAP header's unit field and never broadcasts. Public because it bounds a public method, unsealed because `Framing` is.
 
-`serve` accepts connections and handles each concurrently (SV-R-030);
-`serve_link` runs one already-established transport, which is how a serial line
-is served (SV-R-007). `serve` is `serve_framed::<Tcp>` under its existing name
-(SV-R-053), so a listener carrying gateway-framed connections is
-`serve_framed::<RtuOverTcp>` and runs the identical per-connection behavior. All
-consume the server, so the handle of SV-R-040 is taken first:
+`serve` accepts connections and handles each concurrently (SV-R-030); `serve_link` runs one already-established transport, which is how a serial line is served (SV-R-007). `serve` is `serve_framed::<Tcp>` under its existing name (SV-R-053), so a listener carrying gateway-framed connections is `serve_framed::<RtuOverTcp>` and runs the identical per-connection behavior. All consume the server, so the handle of SV-R-040 is taken first:
 
 ```rust
 let server = Server::with_config(my_service, ServerConfig { unit: Some(UnitId(1)) });
@@ -71,16 +54,13 @@ let serving = tokio::spawn(server.serve(listener));
 handle.shutdown().await;      // returns once every handler has finished
 ```
 
-`serve_link`'s result is its link's end (SV-R-062): `Err(error)` for `Disconnect::Failed(error)`, `Ok(())` for every other reason, returned only after `on_disconnect` has completed. Unlike a listener, a link is not one connection among many — once it fails nothing is served, and the caller awaiting `serve_link` is the one that decides whether to reopen the port. The listener entry points are unaffected (SV-R-051).
+`serve_link`'s result is its link's end (SV-R-062): `Err(error)` for `Disconnect::Failed(error)`, `Ok(())` for every other reason, returned only after `on_disconnect` has completed (SV-R-068). Unlike a listener, a link is not one connection among many — once it fails nothing is served, and the caller awaiting `serve_link` is the one that decides whether to reopen the port. The listener entry points are unaffected (SV-R-051).
 
-The address a listener is bound to is read back through the transport area's
-`TcpListener::local_addr`, not through the server: the server never binds, so it
-never owns the address.
+The address a listener is bound to is read back through the transport area's `TcpListener::local_addr`, not through the server: the server never binds, so it never owns the address (SV-R-070).
 
-## 2. The service trait
+## The service trait
 
-The one trait a consumer implements (SV-R-003). Only `on_request` is required
-(SV-R-004).
+The one trait a consumer implements (SV-R-003). Only `on_request` is required (SV-R-004).
 
 ```rust
 pub trait Service: Send + Sync + 'static {
@@ -110,40 +90,17 @@ pub trait Service: Send + Sync + 'static {
 }
 ```
 
-`on_tls_handshake_failed` (SV-R-056) fires instead of `on_connect`/`on_error`
-when a TLS handshake fails before any `Connection` exists — no
-`ConnectionId` was ever assigned, so a peer address is all there is to name
-the attempt with. Default no-op, like the other notifications.
+`on_tls_handshake_failed` (SV-R-056) fires instead of `on_connect`/`on_error` when a TLS handshake fails before any `Connection` exists — no `ConnectionId` was ever assigned, so a peer address is all there is to name the attempt with. Default no-op, like the other notifications.
 
 `on_accept_error` (SV-R-059) answers with an `AcceptErrorAction`, not a `bool`, for the same reason `on_connect` answers with an `Acceptance`. It is not feature-gated. The server awaits it before the next `accept`, so back-off lives in the service, which knows which errors are transient (`EMFILE`, `ECONNABORTED`) — the crate cannot pick a delay right for every deployment. Applies to `serve_tls`'s raw TCP accept only; a failed handshake stays on `on_tls_handshake_failed`.
 
-`&self`, not `&mut self`: that is how SV-R-003 is enforced in the type system —
-concurrent connections hold the same service, so mutable state lives behind the
-implementor's own lock. `Send + Sync + 'static` is what lets a connection be
-handled in its own task.
+`&self`, not `&mut self`: that is how SV-R-003 is enforced in the type system — concurrent connections hold the same service, so mutable state lives behind the implementor's own lock. `Send + Sync + 'static` is what lets a connection be handled in its own task.
 
-Returning `impl Future<…> + Send` rather than declaring `async fn` is deliberate:
-an `async fn` in a trait does not promise a `Send` future, and without that
-promise a connection cannot be spawned. The trait is consequently not
-object-safe; `Server<S>` is generic over it, which is what shared, concurrent
-dispatch wants in any case. It is unsealed.
+Returning `impl Future<…> + Send` rather than declaring `async fn` is deliberate: an `async fn` in a trait does not promise a `Send` future, and without that promise a connection cannot be spawned. The trait is consequently not object-safe; `Server<S>` is generic over it, which is what shared, concurrent dispatch wants in any case. It is unsealed.
 
-A server **owns** its service (SV-R-002), and the orphan rule forbids a consumer
-from writing `impl Service for Arc<MyType>` outside this crate. A consumer that
-wants to keep a view of its own state therefore implements `Service` for a type
-that is cheap to clone and *shares* when cloned — state behind `Arc<Mutex<…>>`
-fields — and hands one clone to `Server::new`. That is the shape
-`tests/server_tcp.rs` demonstrates.
+A server **owns** its service (SV-R-002), and the orphan rule forbids a consumer from writing `impl Service for Arc<MyType>` outside this crate. A consumer that wants to keep a view of its own state therefore implements `Service` for a type that is cheap to clone and *shares* when cloned — state behind `Arc<Mutex<…>>` fields — and hands one clone to `Server::new`. That is the shape `tests/server_tcp.rs` demonstrates.
 
-`on_request` returns `Result<Option<ResponsePdu>, ExceptionCode>`: a refusal is
-expressed in the protocol's own vocabulary (SV-R-012), so a service cannot
-accidentally answer a Modbus request with a transport error. `Ok(None)`
-withholds the service's own answer, on the same channel as a broadcast
-(SV-R-023) or a non-matching unit id (SV-R-021) — now available to the service
-for any unit id (SV-R-024). `on_connect` answers with an
-`Acceptance`, not a `bool` (SV-R-032) — `Acceptance::Reject` reads the same way at
-the call site as in the signature, where `false` would have to be remembered. `on_error` is separate from `on_disconnect` because most
-per-request failures do not end the connection (SV-R-034).
+`on_request` returns `Result<Option<ResponsePdu>, ExceptionCode>`: a refusal is expressed in the protocol's own vocabulary (SV-R-012), so a service cannot accidentally answer a Modbus request with a transport error. `Ok(None)` withholds the service's own answer, on the same channel as a broadcast (SV-R-023) or a non-matching unit id (SV-R-021) — now available to the service for any unit id (SV-R-024). `on_connect` answers with an `Acceptance`, not a `bool` (SV-R-064) — `Acceptance::Reject` reads the same way at the call site as in the signature, where `false` would have to be remembered. `on_error` is separate from `on_disconnect` because most per-request failures do not end the connection (SV-R-034).
 
 ```rust
 pub struct Connection { /* id, peer, peer_cert (tls only) */ } // Clone, not Copy — see below
@@ -167,7 +124,7 @@ pub enum Acceptance {
 
 pub enum AcceptErrorAction {
     Continue,         // keep live connections, accept again (SV-R-060)
-    Stop,             // drain and return the error — the default (SV-R-051)
+    Stop,             // drain and return the error — the default (SV-R-051, SV-R-067)
 }
 
 pub enum Disconnect {
@@ -178,23 +135,17 @@ pub enum Disconnect {
 }
 ```
 
-`ConnectionId` is a `u64` and not the peer address: an address is reused as soon
-as a socket closes, and a serial link has none (SV-R-031).
+`ConnectionId` is a `u64` and not the peer address: an address is reused as soon as a socket closes, and a serial link has none (SV-R-031).
 
-`Disconnect` derives `Eq` only when `tls` is off, following `Error` (TR-R-067):
-it embeds `Error` via `Failed`, and `Error` itself is `Eq` only without `tls`.
+`Disconnect` derives `Eq` only when `tls` is off, following `Error` (TR-R-067): it embeds `Error` via `Failed`, and `Error` itself is `Eq` only without `tls`.
 
-`Connection` derives `Clone`, never `Copy`, in every feature combination
-including with `tls` off: behind `tls` it carries an owned
-`CertificateDer<'static>`, which is not `Copy`, and the derive list does not
-change shape between builds.
+`Connection` derives `Clone`, never `Copy`, in every feature combination including with `tls` off: behind `tls` it carries an owned `CertificateDer<'static>`, which is not `Copy`, and the derive list does not change shape between builds (SV-R-071).
 
-## 3. What this area does not expose
+## What this area does not expose
 
-No data store, no register tables, no built-in service (SV-R-005). See
-[`data-contract.md`](./data-contract.md) for why.
+No data store, no register tables, no built-in service (SV-R-005). See [`data-contract.md`](./data-contract.md) for why.
 
-## 4. Shutdown handle
+## Shutdown handle
 
 ```rust
 pub struct ServerHandle { /* … */ }
@@ -207,10 +158,9 @@ impl ServerHandle {
 impl Clone for ServerHandle {}
 ```
 
-`shutdown` is idempotent and awaits the drain of SV-R-044. It is `Clone` so that
-several tasks — a signal handler and a test, say — may hold one.
+`shutdown` is idempotent and awaits the drain of SV-R-044. It is `Clone` so that several tasks — a signal handler and a test, say — may hold one.
 
-## 5. Configuration and feature flags
+## Configuration and feature flags
 
 ```rust
 pub struct ServerConfig {
@@ -218,22 +168,16 @@ pub struct ServerConfig {
 }
 ```
 
-`None` by default: a server that answers only unit 1 is a deliberate
-configuration, and a default of `Some(1)` would silently drop every other unit's
-requests (SV-R-021).
+`None` by default: a server that answers only unit 1 is a deliberate configuration, and a default of `Some(1)` would silently drop every other unit's requests (SV-R-021).
 
-| Feature | Default | Gates |
-|---|---|---|
-| `std` | on | the whole server area (SV-R-006) |
-| `rtu` | off | nothing in this area |
-| `tls` | off | `Server::serve_tls`, `Connection::peer_cert`, `Service::on_tls_handshake_failed` (SV-R-055, SV-R-056) |
+| Feature | Default | Gates | Req |
+|---|---|---|---|
+| `std` | on | the whole server area | SV-R-006 |
+| `rtu` | off | nothing in this area | SV-R-069 |
+| `tls` | off | `Server::serve_tls`, `Connection::peer_cert`, `Service::on_tls_handshake_failed` | TR-R-063, SV-R-055, SV-R-056 |
 
-`serve_link` is generic over the stream, so a server over an in-memory duplex
-pair or over `Rtu` framing needs no feature beyond `std`; only opening a real
-serial port is gated.
+`serve_link` is generic over the stream, so a server over an in-memory duplex pair or over `Rtu` framing needs no feature beyond `std`; only opening a real serial port is gated (SV-R-006, SV-R-069, TR-R-033).
 
-## 6. Error variants
+## Error variants
 
-This area adds none. A service refusal is an `ExceptionCode`, not an `Error`;
-connection failures surface as the frame and transport areas' existing variants,
-carried to the consumer through `on_error` and `Disconnect::Failed`.
+This area adds none (SV-R-072). A service refusal is an `ExceptionCode`, not an `Error`; connection failures surface as the frame and transport areas' existing variants, carried to the consumer through `on_error` and `Disconnect::Failed` (SV-R-033, SV-R-034).

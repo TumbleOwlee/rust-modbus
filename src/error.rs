@@ -32,12 +32,13 @@ pub enum Error {
     InvalidFunctionCode(u8),
 
     /// A custom or general value was given a code the crate already names, which
-    /// would give one wire byte two representations (FR-R-013, FR-R-084).
+    /// would give one wire byte two representations (FR-R-013, FR-DA-R-005,
+    /// FR-R-084).
     #[error("code {0} is named and must not be carried as a custom value")]
     ReservedCode(u8),
 
     /// A field or PDU whose length is fixed by its layout did not have it
-    /// (FR-R-085, FR-R-105, FR-R-106).
+    /// (FR-R-085, FR-R-106).
     #[error("invalid length: expected {expected}, got {actual}")]
     InvalidLength {
         /// Bytes the layout fixes.
@@ -47,7 +48,8 @@ pub enum Error {
     },
 
     /// A field fell outside the range its function code fixes (FR-R-021,
-    /// FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-056, FR-R-074).
+    /// FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-051, FR-R-054, FR-R-056,
+    /// FR-R-058, FR-R-074, FR-R-105, FR-DA-R-006).
     #[error("{field} is {value}, outside the permitted range {min}..={max}")]
     OutOfRange {
         /// The field that was out of range.
@@ -78,7 +80,7 @@ pub enum Error {
     },
 
     /// A character outside `0`-`9`, `A`-`F`, `a`-`f` appeared where an ASCII
-    /// ADU requires a hexadecimal digit (FR-R-112).
+    /// ADU requires a hexadecimal digit (FR-ADU-R-004).
     #[error("byte {0:#04x} is not a hexadecimal character")]
     InvalidCharacter(u8),
 
@@ -87,7 +89,7 @@ pub enum Error {
     ProtocolIdentifier(u16),
 
     /// An ADU exceeded the maximum its framing permits (FR-R-091, FR-R-104,
-    /// FR-R-113).
+    /// FR-R-113, FR-R-149).
     #[error("ADU of {len} bytes exceeds the maximum of {max}")]
     AduTooLarge {
         /// The oversized length.
@@ -101,7 +103,7 @@ pub enum Error {
     ReferenceType(u8),
 
     /// A field carried a value its layout does not define (FR-R-027, FR-R-046,
-    /// FR-R-057, FR-R-061, FR-R-076).
+    /// FR-R-057, FR-DA-R-002, FR-DA-R-004, FR-R-076).
     #[error("{field} carries the undefined value {value:#06x}")]
     IllegalValue {
         /// The field that was illegal.
@@ -111,7 +113,7 @@ pub enum Error {
     },
 
     /// A byte-count field disagreed with the data present or with the value its
-    /// quantity field implies (FR-R-043, FR-R-051, FR-R-054, FR-R-077).
+    /// quantity field implies (FR-R-043, FR-R-077).
     #[error("byte count mismatch: expected {expected}, got {actual}")]
     ByteCountMismatch {
         /// The byte count the layout implies.
@@ -145,7 +147,7 @@ pub enum Error {
         kind: std::io::ErrorKind,
     },
 
-    /// An operation did not complete within its time limit (TR-R-021,
+    /// An operation did not complete within its time limit (TR-R-089,
     /// TR-R-041).
     #[cfg(feature = "std")]
     #[error("{what} timed out")]
@@ -154,7 +156,7 @@ pub enum Error {
         what: &'static str,
     },
 
-    /// The peer closed the connection part-way through an ADU (TR-R-014).
+    /// The peer closed the connection part-way through an ADU (TR-R-088).
     ///
     /// A close *between* two ADUs is an ordinary end of stream, not this.
     #[cfg(feature = "std")]
@@ -209,7 +211,7 @@ pub enum Error {
     Desynchronized,
 
     /// `try_send` was called with `max_in_flight` requests already
-    /// outstanding (CL-R-086).
+    /// outstanding (CL-R-108).
     #[cfg(feature = "pipeline")]
     #[error("too many requests already in flight")]
     TooManyInFlight,
@@ -230,7 +232,7 @@ pub enum Error {
     Rs485Unsupported,
 
     /// A TLS handshake failed, distinct from a TCP connect failure (`Io`) or
-    /// an expired timeout (`Timeout`) (TR-R-062, TR-R-067, TR-R-069).
+    /// an expired timeout (`Timeout`) (TR-R-096, TR-R-067, TR-R-069).
     #[cfg(feature = "tls")]
     #[error("TLS handshake failed")]
     TlsHandshake {
@@ -255,7 +257,7 @@ impl Error {
     /// for, whichever framing is in use. Every other variant is a *frame*
     /// failure, and whether it is survivable is then the framing's answer
     /// (FR-R-144) — which is why the client and the server ask this first and
-    /// the boundary rule second (CL-R-023, SV-R-050).
+    /// the boundary rule second (CL-R-098, SV-R-050).
     pub(crate) fn ends_stream(&self) -> bool {
         matches!(
             *self,

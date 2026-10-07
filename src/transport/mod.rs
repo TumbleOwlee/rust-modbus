@@ -65,7 +65,7 @@ impl Default for TransportConfig {
         Self {
             // The interval implied by the default serial line, 19200 8E1.
             inter_frame_interval: Duration::from_nanos(2_005_208),
-            // Fixed by the Modbus spec, not derived from baud rate (TR-R-076).
+            // Fixed by the Modbus spec, not derived from baud rate (TR-R-091).
             ascii_inter_character_timeout: Duration::from_secs(1),
         }
     }
@@ -75,7 +75,7 @@ impl TransportConfig {
     /// Derive the inter-frame interval from a serial line's parameters
     /// (TR-R-011).
     ///
-    /// The ASCII inter-character timeout is not serial-derived (TR-R-076), so
+    /// The ASCII inter-character timeout is not serial-derived (TR-R-091), so
     /// it comes from the default regardless of line speed.
     ///
     /// # Errors
@@ -97,7 +97,7 @@ impl TransportConfig {
 pub struct FrameTransport<S, F> {
     /// The underlying byte stream.
     stream: S,
-    /// Bytes read but not yet consumed by a caller (TR-R-004).
+    /// Bytes read but not yet consumed by a caller (TR-R-082).
     buffer: Vec<u8>,
     /// The one buffer every outgoing ADU is encoded into, cleared between
     /// frames but never shrunk, so sending allocates nothing in steady state
@@ -106,7 +106,7 @@ pub struct FrameTransport<S, F> {
     /// Boundary parameters the framing cannot supply on its own.
     config: TransportConfig,
     /// Set while a receive is in flight; a receive that never returned left the
-    /// buffer in an unknown state (TR-R-041).
+    /// buffer in an unknown state (TR-R-090).
     receiving: bool,
     /// Which framing this transport speaks.
     framing: PhantomData<F>,
@@ -207,7 +207,7 @@ where
     /// on a shared `&mut FrameTransport`: `select!` polls every branch once
     /// per pass even before picking a winner, and a `recv_response` call that
     /// gets polled and then dropped (its branch lost) leaves `receiving`
-    /// latched `true` forever (TR-R-041), so every later receive fails
+    /// latched `true` forever (TR-R-090), so every later receive fails
     /// immediately rather than actually waiting — livelocking the loop. A
     /// [`FrameTransportReader`] held across loop iterations as one
     /// never-cancelled future sidesteps this; its own send-independent
@@ -398,7 +398,7 @@ mod shared {
     };
     use alloc::vec::Vec;
 
-    /// Read exactly one ADU, leaving any surplus buffered (TR-R-004).
+    /// Read exactly one ADU, leaving any surplus buffered (TR-R-004, TR-R-082).
     ///
     /// The ADU's bytes leave the buffer before it is decoded, so a decode
     /// failure costs exactly that frame and no more (TR-R-005).
@@ -415,7 +415,7 @@ mod shared {
     {
         if *receiving {
             // A previous receive was abandoned part-way through an ADU, so the
-            // buffer may hold a fragment of one (TR-R-041).
+            // buffer may hold a fragment of one (TR-R-090).
             return Err(Error::Timeout { what: "receive" });
         }
         *receiving = true;
@@ -472,7 +472,7 @@ mod shared {
         let head = buffer
             .get(..prefix)
             .expect("fill_to returned, so the buffer holds at least prefix bytes");
-        // The length is validated before it sizes anything (TR-R-010).
+        // The length is validated before it sizes anything (TR-R-085).
         let len = total(head)?;
         fill_to::<R, F>(stream, buffer, len).await?;
         Ok(take(buffer, len))
@@ -495,7 +495,7 @@ mod shared {
         loop {
             if let Some(offset) = buffer.iter().position(|byte| *byte == start) {
                 if offset > 0 {
-                    // Bytes before a start byte belong to no ADU (TR-R-012).
+                    // Bytes before a start byte belong to no ADU (TR-R-087).
                     buffer.drain(..offset);
                     searched = 0;
                 }
@@ -626,7 +626,7 @@ mod shared {
 
     /// Read once into the buffer.
     ///
-    /// `mid_adu` distinguishes the two ways a stream can end (TR-R-014): a
+    /// `mid_adu` distinguishes the two ways a stream can end (TR-R-014, TR-R-088): a
     /// close between ADUs ends the stream, one inside an ADU severs a frame.
     async fn read_more<R: AsyncRead + Unpin>(
         stream: &mut R,
@@ -653,7 +653,7 @@ mod shared {
     }
 
     /// Remove and return the first `len` buffered bytes, keeping the rest for
-    /// the next call (TR-R-004).
+    /// the next call (TR-R-082).
     fn take(buffer: &mut Vec<u8>, len: usize) -> Vec<u8> {
         buffer.drain(..len).collect()
     }
@@ -815,7 +815,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-043 — the transport owns one outgoing buffer, reused frame after
+    /// TR-R-043, TR-E-016 — the transport owns one outgoing buffer, reused frame after
     /// frame: its contents are cleared between sends but its capacity, once
     /// grown to the framing maximum, is retained rather than reallocated.
     async fn ut_write_buffer_capacity_is_retained() {
@@ -848,6 +848,48 @@ mod tests {
         );
         assert_eq!(client.outgoing.len(), 0);
         server.recv_request().await.expect("receives");
+    }
+
+    #[tokio::test]
+    /// TR-R-084, TR-E-016 — the outgoing buffer's length never exceeds the framing's
+    /// maximum ADU length: not after the largest legal ADU (260 bytes over
+    /// TCP), and not after an encode that failed for being oversized.
+    async fn ut_outgoing_buffer_length_stays_within_the_maximum_adu() {
+        let (client, mut peer) = duplex(1024);
+        let mut client = FrameTransport::<_, Tcp>::new(client);
+
+        // One sub-request of 122 registers: data length 7 + 244 = 251, the
+        // most FR-R-054 allows, so a 253-byte PDU and a 260-byte ADU.
+        let largest = RequestPdu::WriteFileRecord {
+            records: vec![crate::FileRecordWrite {
+                file_number: crate::FileNumber(4),
+                record_number: crate::RecordNumber(7),
+                values: vec![RegisterValue(0); 122],
+            }],
+        };
+        client
+            .send_request(&header(), &largest)
+            .await
+            .expect("the largest legal ADU sends");
+        assert!(client.outgoing.len() <= Tcp::MAX_ADU_LEN);
+        let mut sent = vec![0u8; Tcp::MAX_ADU_LEN];
+        peer.read_exact(&mut sent)
+            .await
+            .expect("a whole 260-byte ADU");
+
+        // 126 registers would be a 254-byte PDU, one past the maximum of 253.
+        let oversized = ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0); 126],
+        };
+        assert_eq!(
+            client.send_response(&header(), &oversized).await,
+            Err(Error::PduTooLarge { len: 254, max: 253 })
+        );
+        assert!(
+            client.outgoing.len() <= Tcp::MAX_ADU_LEN,
+            "a failed encode left {} bytes buffered",
+            client.outgoing.len()
+        );
     }
 
     #[tokio::test]
@@ -886,7 +928,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-004 — two ADUs arriving in one read are delivered one per call; the
+    /// TR-R-004, TR-R-082, TR-E-001 — two ADUs arriving in one read are delivered one per call; the
     /// surplus is retained rather than discarded.
     async fn ut_two_adus_in_one_read_are_delivered_separately() {
         let (mut peer, server) = duplex(64);
@@ -902,7 +944,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-010 — a read that splits an ADU anywhere is resumed until the
+    /// TR-R-010, TR-E-002 — a read that splits an ADU anywhere is resumed until the
     /// length field, and then the ADU, are complete.
     async fn ut_tcp_boundary_from_mbap_length() {
         let (mut peer, server) = duplex(64);
@@ -920,7 +962,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-005 — a frame that does not decode consumes exactly its own bytes:
+    /// TR-R-005, TR-E-007 — a frame that does not decode consumes exactly its own bytes:
     /// the next ADU behind it still arrives intact.
     async fn ut_decode_failure_leaves_transport_usable() {
         let (mut peer, server) = duplex(64);
@@ -940,7 +982,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-010, FR-R-105 — an MBAP length field outside its permitted range is
+    /// TR-R-010, TR-R-085, FR-R-105 — an MBAP length field outside its permitted range is
     /// rejected before it sizes a read, so a hostile length cannot make the
     /// transport wait for bytes that will never come.
     async fn ut_tcp_invalid_length_is_rejected_before_reading() {
@@ -963,7 +1005,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-014 — a stream that ends between two ADUs is an end of stream; one
+    /// TR-R-014, TR-R-088, TR-E-020, TR-E-021, TR-E-026 — a stream that ends between two ADUs is an end of stream; one
     /// that ends inside an ADU severed a frame, and says so differently.
     async fn ut_eof_between_adus_vs_mid_adu() {
         let (peer, server) = duplex(64);
@@ -987,7 +1029,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// TR-R-058 — `TransportConfig` round-trips through JSON, `Duration`
+    /// TR-R-058, TR-R-094, TR-R-091 — `TransportConfig` round-trips through JSON, `Duration`
     /// fields keeping `Duration`'s own serde representation. The
     /// `inter_frame_interval` default (2,005,208 ns, derived from 19200 8E1)
     /// must survive exactly: a millisecond representation would round it to
@@ -1022,7 +1064,7 @@ mod ascii_tests {
     const REQUEST_ADU: &[u8] = b":1103006B00037E\r\n";
 
     #[tokio::test]
-    /// TR-R-012 — an ASCII ADU opens on `:` and closes on the first CR LF after
+    /// TR-R-012, TR-R-087, TR-E-005 — an ASCII ADU opens on `:` and closes on the first CR LF after
     /// it; bytes arriving before the `:` belong to no ADU and are discarded.
     async fn ut_ascii_boundary_and_leading_garbage() {
         let (mut peer, server) = duplex(64);
@@ -1038,8 +1080,36 @@ mod ascii_tests {
         );
     }
 
+    #[tokio::test]
+    /// TR-R-087, TR-E-005 — leading bytes before `:` are discarded however
+    /// many there are: three maximum ADUs' worth raise no error, the frame
+    /// after them is received, and the receive buffer never held more than
+    /// one maximum ADU.
+    async fn ut_ascii_unbounded_leading_garbage_is_discarded() {
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Ascii>::new(server);
+
+        let writing = tokio::spawn(async move {
+            let mut bytes = vec![b'x'; 3 * Ascii::MAX_ADU_LEN];
+            bytes.extend_from_slice(REQUEST_ADU);
+            peer.write_all(&bytes).await.expect("writes");
+            peer
+        });
+
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+        assert!(
+            server.buffer.capacity() <= Ascii::MAX_ADU_LEN,
+            "held {} bytes of garbage",
+            server.buffer.capacity()
+        );
+        let _ = writing.await;
+    }
+
     #[tokio::test(start_paused = true)]
-    /// TR-R-076 — once the ASCII start byte has begun a frame, a sender that
+    /// TR-R-076, TR-E-006 — once the ASCII start byte has begun a frame, a sender that
     /// falls silent past the inter-character timeout is abandoned rather than
     /// held forever; the gathered bytes are discarded (TR-R-044) so the next
     /// receive starts clean.
@@ -1072,7 +1142,7 @@ mod ascii_tests {
     }
 
     #[tokio::test]
-    /// TR-R-004 — the terminator ends the ADU exactly, so a second frame in the
+    /// TR-R-004, TR-R-082, TR-E-001 — the terminator ends the ADU exactly, so a second frame in the
     /// same read is still there for the next call.
     async fn ut_ascii_two_frames_in_one_read() {
         let (mut peer, server) = duplex(128);
@@ -1115,7 +1185,7 @@ mod ascii_tests {
     }
 
     #[tokio::test]
-    /// TR-R-013 — an ADU that never terminates does not grow the buffer without
+    /// TR-R-013, TR-E-008 — an ADU that never terminates does not grow the buffer without
     /// bound: at the framing's maximum it is an oversized ADU.
     async fn ut_oversized_adu_does_not_grow_buffer() {
         let (mut peer, server) = duplex(1024);
@@ -1135,7 +1205,7 @@ mod ascii_tests {
     }
 
     #[tokio::test]
-    /// TR-R-045 — ContentLength boundary reads one byte at a time until extent
+    /// TR-R-045, TR-E-011 — ContentLength boundary reads one byte at a time until extent
     /// says the ADU is complete, then consumes exactly those bytes.
     async fn ut_rtu_over_tcp_boundary_from_content() {
         use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
@@ -1167,7 +1237,7 @@ mod ascii_tests {
     }
 
     #[tokio::test]
-    /// TR-R-004 — two complete ADUs arriving in one write are delivered one
+    /// TR-R-004, TR-R-082, TR-E-012 — two complete ADUs arriving in one write are delivered one
     /// per call to recv_request, with the surplus retained.
     async fn ut_rtu_over_tcp_two_adus_in_one_read() {
         use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
@@ -1198,7 +1268,7 @@ mod ascii_tests {
     }
 
     #[tokio::test]
-    /// TR-R-046 — when extent derivation fails, the attempted bytes are retained
+    /// TR-R-046, TR-E-013 — when extent derivation fails, the attempted bytes are retained
     /// so the stream does not desynchronize.
     async fn ut_rtu_over_tcp_failed_derivation_retains_the_attempt() {
         use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
@@ -1236,7 +1306,7 @@ mod ascii_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-048 — inter-frame silence has no effect on RtuOverTcp framing.
+    /// TR-R-048, TR-E-014 — inter-frame silence has no effect on RtuOverTcp framing.
     /// ContentLength boundaries are derived from bytes, not timing.
     async fn ut_rtu_over_tcp_ignores_the_inter_frame_interval() {
         use crate::{Address, Quantity, RequestPdu, RtuOverTcp, UnitId};
@@ -1294,7 +1364,7 @@ mod rtu_tests {
     const LONG_GAP: Duration = Duration::from_millis(5);
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-044 — a receive that fails before an ADU was delimited discards the
+    /// TR-R-044, TR-E-009 — a receive that fails before an ADU was delimited discards the
     /// bytes it had gathered, because RTU finds the next boundary in the
     /// silence rather than in the frame that failed. Were they kept, every
     /// later receive would re-read the same rubbish.
@@ -1329,7 +1399,7 @@ mod rtu_tests {
     }
 
     #[tokio::test]
-    /// TR-R-044 — over TCP the gathered bytes are kept instead: the length that
+    /// TR-R-083, TR-E-010 — over TCP the gathered bytes are kept instead: the length that
     /// would delimit the next frame was carried by the one that failed, so
     /// there is no later boundary to resume from and discarding would only
     /// hide that.
@@ -1351,7 +1421,7 @@ mod rtu_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-011 — an RTU ADU carries no length and no terminator, so the frame
+    /// TR-R-011, TR-E-004 — an RTU ADU carries no length and no terminator, so the frame
     /// ends when the line falls silent for 3.5 character times.
     async fn ut_rtu_boundary_on_idle_gap() {
         let (mut peer, server) = duplex(64);
@@ -1373,7 +1443,7 @@ mod rtu_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-011 — a gap shorter than the inter-frame interval is inside a
+    /// TR-R-011, TR-E-003 — a gap shorter than the inter-frame interval is inside a
     /// frame, not between two: the halves are delivered as one ADU. Were they
     /// split, neither half would carry a valid CRC.
     async fn ut_rtu_short_gap_does_not_end_a_frame() {
@@ -1428,7 +1498,7 @@ mod rtu_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-041 — a receive abandoned part-way through an ADU leaves the
+    /// TR-R-041, TR-R-090, TR-E-024 — a receive abandoned part-way through an ADU leaves the
     /// transport desynchronized: the buffer holds a fragment whose extent is
     /// unknown, so the next receive refuses rather than decode a splice.
     async fn ut_timeout_mid_adu_marks_desynchronized() {
@@ -1641,6 +1711,183 @@ mod reader_tests {
         assert!(
             reader.recv_adu().await.is_err(),
             "terminal: the retained bytes from the failed attempt lead every later read"
+        );
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::tests::read_holding;
+    use super::*;
+    use crate::TransactionId;
+    use crate::client::{Client, ClientState, UnusableReason};
+    use crate::error::Error;
+    use crate::frame::{MbapHeader, Rtu, Tcp, UnitId};
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use std::io;
+    use tokio::io::{AsyncWriteExt, ReadBuf, duplex};
+
+    /// A stream standing in for a device whose I/O fails on cue: reads fail
+    /// with `read_failure` (or wait forever when `None`), and writes accept
+    /// `write_budget` bytes, then fail once with `BrokenPipe`, then accept
+    /// everything. Every accepted byte is recorded in `written`.
+    struct Faulty {
+        read_failure: Option<io::ErrorKind>,
+        write_budget: Option<usize>,
+        written: Vec<u8>,
+    }
+
+    impl AsyncRead for Faulty {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            match self.read_failure {
+                Some(kind) => Poll::Ready(Err(io::Error::from(kind))),
+                None => Poll::Pending,
+            }
+        }
+    }
+
+    impl AsyncWrite for Faulty {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let accepted = match self.write_budget {
+                Some(0) => {
+                    self.write_budget = None;
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+                }
+                Some(budget) => {
+                    let accepted = budget.min(buf.len()).min(1);
+                    self.write_budget = Some(budget - accepted);
+                    accepted
+                }
+                None => buf.len(),
+            };
+            let accepted = buf.get(..accepted).expect("accepted never exceeds buf");
+            self.written.extend_from_slice(accepted);
+            Poll::Ready(Ok(accepted.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    /// TR-E-015 — a transport that only ever receives never allocates a write
+    /// buffer: after a receive its outgoing buffer still has no capacity.
+    async fn ut_receive_only_transport_never_allocates_a_write_buffer() {
+        const REQUEST_ADU: [u8; 12] = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03,
+        ];
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Tcp>::new(server);
+        assert_eq!(server.outgoing.capacity(), 0);
+
+        peer.write_all(&REQUEST_ADU).await.expect("writes");
+        server.recv_request().await.expect("receives");
+        assert_eq!(server.outgoing.capacity(), 0);
+    }
+
+    #[tokio::test]
+    /// TR-E-017 — a send that fails part-way through the ADU leaves nothing of
+    /// it behind: the next send puts exactly its own ADU on the wire, with no
+    /// fragment of the abandoned one before it.
+    async fn ut_send_failed_mid_write_is_not_resent() {
+        let stream = Faulty {
+            read_failure: None,
+            write_budget: Some(5),
+            written: Vec::new(),
+        };
+        let mut transport = FrameTransport::<_, Tcp>::new(stream);
+        let first = MbapHeader {
+            transaction_id: TransactionId(1),
+            unit_id: UnitId(0x11),
+        };
+        let second = MbapHeader {
+            transaction_id: TransactionId(2),
+            unit_id: UnitId(0x11),
+        };
+
+        assert_eq!(
+            transport.send_request(&first, &read_holding()).await,
+            Err(Error::Io {
+                kind: io::ErrorKind::BrokenPipe,
+            })
+        );
+        let abandoned_len = transport.stream.written.len();
+        assert_eq!(abandoned_len, 5);
+
+        transport
+            .send_request(&second, &read_holding())
+            .await
+            .expect("sends");
+        // Transaction 2, protocol 0, length 6, unit 0x11, then FC 3 for three
+        // registers from 0x006B (FR-R-100, FR-R-103).
+        assert_eq!(
+            transport.stream.written.get(abandoned_len..),
+            Some(
+                &[
+                    0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x11, 0x03, 0x00, 0x6B, 0x00, 0x03
+                ][..]
+            )
+        );
+    }
+
+    #[tokio::test]
+    /// TR-E-022 — a serial peer that closes right after a complete RTU frame
+    /// does not sever it: the frame is delivered.
+    async fn ut_rtu_close_after_a_whole_frame_delivers_it() {
+        // FR-R-092's Read Holding Registers request to 0x11, with its CRC.
+        const REQUEST_ADU: [u8; 8] = [0x11, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x76, 0x87];
+        let (mut peer, server) = duplex(64);
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        peer.write_all(&REQUEST_ADU).await.expect("writes");
+        drop(peer);
+
+        assert_eq!(
+            server.recv_request().await,
+            Ok((UnitId(0x11), read_holding()))
+        );
+    }
+
+    #[tokio::test]
+    /// TR-E-025 — a serial device that disappears mid-session surfaces
+    /// whatever kind the platform reported, through the I/O error, and the
+    /// client over it is unusable afterwards rather than retrying the link.
+    async fn ut_vanished_serial_device_surfaces_its_kind_and_ends_the_link() {
+        // Linux reports an unplugged USB adapter as EIO, which carries no
+        // dedicated kind; any kind must come through unchanged.
+        let kind = io::ErrorKind::Other;
+        let stream = Faulty {
+            read_failure: Some(kind),
+            write_budget: None,
+            written: Vec::new(),
+        };
+        let mut client = Client::new(FrameTransport::<_, Rtu>::new(stream));
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Io { kind })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Io { kind })
+        );
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
         );
     }
 }

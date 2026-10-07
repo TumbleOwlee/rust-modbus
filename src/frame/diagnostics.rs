@@ -1,4 +1,5 @@
-//! Serial-line diagnostic bodies (FR-R-060 … FR-R-068).
+//! Serial-line diagnostic bodies (FR-R-060 … FR-R-068,
+//! FR-DA-R-004 … FR-DA-R-006).
 
 use crate::error::{Error, Result};
 
@@ -78,7 +79,7 @@ impl DiagnosticSubFunction {
     /// # Errors
     ///
     /// A [`DiagnosticSubFunction::Other`] holding a code the crate names is
-    /// rejected, so no code has two encodings (FR-R-063).
+    /// rejected, so no code has two encodings (FR-DA-R-005).
     pub fn encode(self) -> Result<u16> {
         Ok(match self {
             Self::ReturnQueryData => 0,

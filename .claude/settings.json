@@ -17,6 +17,10 @@
           {
             "type": "command",
             "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hook-guard-shell.sh"
+          },
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hook-guard-attribution.sh"
           }
         ]
       }

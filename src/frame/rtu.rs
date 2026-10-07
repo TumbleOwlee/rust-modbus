@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-095 — a CRC that does not match the bytes before it fails, and the
+    /// FR-R-095, FR-ADU-E-001 — a CRC that does not match the bytes before it fails, and the
     /// PDU is not decoded.
     fn ut_rtu_crc_mismatch_rejected() {
         let mut bytes = READ_HOLDING_REQUEST;
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-096 — every 8-bit address decodes: 0 is broadcast, 1–247 address a
+    /// FR-R-096, FR-ADU-E-002, FR-ADU-E-003 — every 8-bit address decodes: 0 is broadcast, 1–247 address a
     /// server, and 248–255 are left for the caller to judge.
     fn ut_rtu_every_address_decodes() {
         let pdu = RequestPdu::ReadHoldingRegisters {
@@ -506,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-091 — an ADU longer than 256 bytes is rejected on its size, before
+    /// FR-R-091, FR-ADU-E-012 — an ADU longer than 256 bytes is rejected on its size, before
     /// its CRC is computed or its PDU touched.
     fn ut_rtu_adu_too_large() {
         let bytes = vec![0x11; 257];
@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-147 — extent returns the correct length for every derivable function code,
+    /// FR-R-147, FR-ADU-E-014 — extent returns the correct length for every derivable function code,
     /// in both directions. This test is table-driven from the spec requirements.
     fn ut_extent_table_over_every_derivable_code() {
         // Helper to test a PDU by direction and assert its extent
@@ -720,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-148 — function codes whose length cannot be derived fail with IndeterminateLength.
+    /// FR-R-148, FR-ADU-E-013 — function codes whose length cannot be derived fail with IndeterminateLength.
     fn ut_extent_indeterminate_codes() {
         // FC 8 (Diagnostics) — data count is not fixed by the spec
         let mut adu = vec![0x11, 0x08, 0x00, 0x00]; // FC + sub-fn, no data
@@ -754,7 +754,23 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-149 — an ADU length that exceeds 256 fails before allocation.
+    /// FR-ADU-E-014 — an exception response to a custom function code has a
+    /// 5-byte extent (address, function code | 0x80, exception code, CRC),
+    /// although the normal response to that code is not derivable.
+    fn ut_extent_custom_code_exception_response() {
+        let adu = [0x11, 0xD0, 0x01, 0x00, 0x00];
+        assert_eq!(
+            derive_extent(Direction::Response, &adu),
+            Ok(Extent::Complete(5))
+        );
+        assert_eq!(
+            derive_extent(Direction::Response, &[0x11, 0x50, 0x01, 0x00, 0x00]),
+            Err(Error::IndeterminateLength { function: 0x50 })
+        );
+    }
+
+    #[test]
+    /// FR-R-149, FR-ADU-E-015 — an ADU length that exceeds 256 fails before allocation.
     fn ut_extent_above_max_adu_len() {
         // FC 16 request with a large byte count that would exceed 256
         // PDU: FC(1) + addr(2) + qty(2) + bytecount(1) + data(bytecount)

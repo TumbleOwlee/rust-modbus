@@ -1,4 +1,5 @@
-//! TLS transport over TCP, behind the `tls` feature (`TR-R-060` … `TR-R-068`).
+//! TLS transport over TCP, behind the `tls` feature (`TR-R-060` … `TR-R-068`,
+//! `TR-R-096`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -303,7 +304,7 @@ pub async fn connect_tls_framed<F: Framing>(
     };
     match tokio::time::timeout(tcp.connect_timeout, attempt).await {
         Ok(result) => Ok(FrameTransport::new(result?)),
-        // Nothing failed; the wait ran out (TR-R-021).
+        // Nothing failed; the wait ran out (TR-R-089).
         Err(_elapsed) => Err(Error::Timeout { what: "connect" }),
     }
 }
@@ -691,7 +692,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-067, TR-R-069 — `Verify` rejects a server certificate issued by
+    /// TR-R-067, TR-R-069, TR-E-042 — `Verify` rejects a server certificate issued by
     /// a CA the root store does not trust, surfacing `Error::TlsHandshake`
     /// distinctly (not merely `is_err()`), with `peer_cert: None` (a
     /// client-side handshake failure).

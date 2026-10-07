@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-102 — the protocol identifier is 0; anything else is not Modbus.
+    /// FR-R-102, FR-ADU-E-009 — the protocol identifier is 0; anything else is not Modbus.
     fn ut_mbap_protocol_identifier_must_be_zero() {
         let mut bytes = READ_HOLDING_REQUEST;
         bytes[3] = 0x01;
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-105 — a length field of 0, or above 254, cannot describe a PDU and
+    /// FR-R-105, FR-ADU-E-010 — a length field of 0, or above 254, cannot describe a PDU and
     /// is rejected before anything is sized by it.
     fn ut_mbap_length_out_of_range() {
         for (raw, value) in [(0x0000u16, 0u32), (0x00FF, 255), (0xFFFF, 65535)] {
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-106 — a length field that disagrees with the bytes actually
+    /// FR-R-106, FR-ADU-E-011 — a length field that disagrees with the bytes actually
     /// supplied is an error, not a reason to trust one over the other.
     fn ut_mbap_length_must_match_supplied() {
         let mut bytes = READ_HOLDING_REQUEST;
@@ -321,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-104 — a TCP ADU is at most 260 bytes: 7 of header and 253 of PDU.
+    /// FR-R-104, FR-ADU-E-012 — a TCP ADU is at most 260 bytes: 7 of header and 253 of PDU.
     fn ut_tcp_adu_too_large() {
         let bytes = vec![0x00; 261];
         assert_eq!(

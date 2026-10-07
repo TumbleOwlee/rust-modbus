@@ -43,7 +43,9 @@ requires — for wire formats especially, derive expected bytes from the
 specification, not from a debug print of your own encoder.
 
 Every new or changed requirement ships with at least one test whose doc comment
-cites the requirement ID, on the line directly below the `#[test]` attribute:
+cites the requirement ID, on the line directly below the `#[test]` attribute. A
+test lists every requirement (`-R-`) or edge-case (`-E-`) ID its assertions
+directly verify, comma-separated (`docs/specs/README.md`, rule 8):
 
 ```rust
 #[test]
@@ -87,7 +89,7 @@ anything the pre-commit hook would reject is rejected by CI too.
 - PRs are merged to `main` by **squash merge**.
 
 Agents working in this repo follow the fuller gated workflow in
-[`AGENTS.md`](./AGENTS.md); human contributors are welcome to, but the checks
+[`AGENTS.md`](./AGENTS.md) and [`AGENTS.workflow.md`](./AGENTS.workflow.md); human contributors are welcome to, but the checks
 above are the hard requirements.
 
 ## Reporting Issues

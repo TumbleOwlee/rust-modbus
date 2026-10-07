@@ -1,4 +1,5 @@
-//! File record access bodies (FR-R-050 … FR-R-056).
+//! File record access bodies (FR-R-050 … FR-R-056, FR-DA-R-002,
+//! FR-DA-R-003).
 //!
 //! Function codes 20 and 21 are the only ones whose body is a list of
 //! variable-length sub-items rather than a single fixed layout, so their
@@ -63,7 +64,7 @@ pub struct FileRecordReadResponse {
 }
 
 /// A Write File Record sub-request, echoed unchanged in the response
-/// (FR-R-053).
+/// (FR-R-053, FR-DA-R-003).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRecordWrite {
     /// File to write to; 1–65535 (FR-R-056).
@@ -176,7 +177,7 @@ impl FileRecordWrite {
     }
 }
 
-/// Decode the body of a Read File Record request (FR-R-050, FR-R-051).
+/// Decode the body of a Read File Record request (FR-R-050, FR-R-051, FR-DA-R-002).
 pub(super) fn decode_read_requests(input: &mut Input<'_>) -> ParseResult<Vec<FileRecordRead>> {
     let region = region(input, |count| {
         check_bounds(
@@ -242,7 +243,7 @@ pub(super) fn encode_read_responses_into(
 }
 
 /// Decode the body of a Write File Record request or response (FR-R-053,
-/// FR-R-054).
+/// FR-R-054, FR-DA-R-003).
 pub(super) fn decode_write_records(input: &mut Input<'_>) -> ParseResult<Vec<FileRecordWrite>> {
     let region = region(input, |length| {
         check_bounds(

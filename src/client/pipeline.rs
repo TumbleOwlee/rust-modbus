@@ -1,5 +1,5 @@
 //! Pipelined clients: several requests in flight at once over one connection,
-//! distinguished by MBAP transaction id (CL-R-082 … CL-R-095). Gated behind
+//! distinguished by MBAP transaction id (CL-R-082 … CL-R-095, CL-R-106 … CL-R-109). Gated behind
 //! the `pipeline` feature.
 
 use alloc::boxed::Box;
@@ -62,7 +62,7 @@ impl From<ClientConfig> for PipelineConfig {
 /// the background task holds one never-cancelled receive future across every
 /// loop iteration live at the same time as writes, which needs independent
 /// read/write halves — `ClientTransport`'s single `&mut self` cannot express
-/// that. Crate-private — nothing in CL-R-082 … CL-R-095 asks for a third
+/// that. Crate-private — nothing in CL-R-082 … CL-R-095, CL-R-106 … CL-R-109 asks for a third
 /// transport to plug in here.
 ///
 /// Split into independent read/write halves rather than one `&mut self`:
@@ -146,6 +146,34 @@ impl PipelineTransport for UdpTransport<Tcp> {
 /// A cloneable handle over a TCP transport permitting several requests in
 /// flight at once, distinguished by MBAP transaction id (CL-R-082). Every
 /// clone shares the same background task and transport (CL-R-085).
+///
+/// Only MBAP-framed transports are served (CL-R-106): a TCP `FrameTransport`
+/// builds a handle,
+///
+/// ```no_run
+/// use rust_modbus::{FrameTransport, PipelinedClient, Tcp};
+/// fn build(stream: tokio::io::DuplexStream) -> PipelinedClient<FrameTransport<tokio::io::DuplexStream, Tcp>> {
+///     PipelinedClient::new(FrameTransport::<_, Tcp>::new(stream))
+/// }
+/// ```
+///
+/// while RTU and ASCII, whose framings carry no transaction id, do not compile:
+///
+/// ```compile_fail,E0277
+/// // CL-R-106 — RTU is never served by a pipelined handle.
+/// use rust_modbus::{FrameTransport, PipelinedClient, Rtu};
+/// fn build(stream: tokio::io::DuplexStream) {
+///     let _ = PipelinedClient::new(FrameTransport::<_, Rtu>::new(stream));
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// // CL-R-106 — ASCII is never served by a pipelined handle.
+/// use rust_modbus::{Ascii, FrameTransport, PipelinedClient};
+/// fn build(stream: tokio::io::DuplexStream) {
+///     let _ = PipelinedClient::new(FrameTransport::<_, Ascii>::new(stream));
+/// }
+/// ```
 #[derive(Debug)]
 pub struct PipelinedClient<T = FrameTransport<tokio::net::TcpStream, Tcp>> {
     core: Arc<Core<T>>,
@@ -246,7 +274,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
     }
 
     /// Issue a request, failing immediately if `max_in_flight` is already
-    /// reached rather than waiting for a slot (CL-R-086).
+    /// reached rather than waiting for a slot (CL-R-108).
     ///
     /// # Errors
     ///
@@ -312,7 +340,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
 /// transports. `tokio::select!` polls every branch once per pass even before
 /// choosing a winner; a `recv_response` branch that got polled (entering its
 /// framing's read state) and then lost that pass had its future dropped
-/// mid-poll. For `FrameTransportReader`, that leaves TR-R-041's `receiving`
+/// mid-poll. For `FrameTransportReader`, that leaves TR-R-090's `receiving`
 /// latch stuck `true` forever — every later `recv_response` then fails
 /// *synchronously* with `Error::Timeout` instead of awaiting real data,
 /// which this function's `Err(_) => { desynchronized = true; fail_all(...) }`
@@ -360,7 +388,7 @@ async fn run<T: PipelineTransport>(
                 let Some(Command::Send { transaction, unit, request, reply }) = cmd else {
                     // Every handle dropped: `writer` (and, once `recv_fut`
                     // resolves or is dropped, `reader`) drop with this
-                    // function returning, closing the transport (CL-R-085).
+                    // function returning, closing the transport (CL-R-107).
                     break;
                 };
                 if desynchronized.load(Ordering::Acquire) {
@@ -412,7 +440,7 @@ async fn run<T: PipelineTransport>(
                     Err(_error) => {
                         // Not attributable to one transaction: every
                         // in-flight request fails (CL-R-031-equivalent,
-                        // applies on both types per CL-R-091's last sentence).
+                        // applies on both types per CL-R-109).
                         desynchronized.store(true, Ordering::Release);
                         fail_all(&mut in_flight, &mut deadlines);
                     }
@@ -435,7 +463,7 @@ async fn run<T: PipelineTransport>(
 }
 
 /// Fail every still-registered request with [`Error::Desynchronized`],
-/// cancelling each one's pending timer (CL-R-090, CL-R-091's I/O case,
+/// cancelling each one's pending timer (CL-R-090, CL-R-109,
 /// CL-R-089).
 fn fail_all(
     in_flight: &mut HashMap<TransactionId, (oneshot::Sender<Result<ResponsePdu>>, Key)>,
@@ -487,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    /// CL-R-086 — `try_send`'s failure at the in-flight limit is a distinct
+    /// CL-R-108 — `try_send`'s failure at the in-flight limit is a distinct
     /// error from desynchronization, not folded into it.
     fn ut_too_many_in_flight_is_distinct_from_desynchronized() {
         assert_ne!(Error::TooManyInFlight, Error::Desynchronized);
@@ -569,7 +597,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-085 — dropping the last handle closes the transport: the
+    /// CL-R-107 — dropping the last handle closes the transport: the
     /// background task's command channel closes, it returns, and the
     /// transport it owned drops with it.
     async fn ut_dropping_the_last_handle_closes_the_transport() {
@@ -620,7 +648,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-086 — `try_send` fails immediately with `TooManyInFlight` at the
+    /// CL-R-108 — `try_send` fails immediately with `TooManyInFlight` at the
     /// limit, writing nothing: the next successful request still gets the
     /// transaction id right after the one still outstanding, proving the
     /// failed `try_send` never advanced the sequence.
@@ -691,7 +719,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-088 — a late reply for a transaction id already resolved (here,
+    /// CL-R-088, CL-E-011 — a late reply for a transaction id already resolved (here,
     /// by the timeout that also desynchronizes the whole TCP connection,
     /// CL-R-090) is discarded silently: it changes nothing observable, so a
     /// following request still fails with exactly the same `Desynchronized`
@@ -721,7 +749,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-089 — a response carrying a transaction id this handle never
+    /// CL-R-089, CL-E-012 — a response carrying a transaction id this handle never
     /// allocated desynchronizes the whole connection, failing the request
     /// still genuinely in flight too.
     async fn ut_never_issued_id_desynchronizes() {
@@ -776,7 +804,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-090 — any timeout on `PipelinedClient` (TCP) desynchronizes the
+    /// CL-R-090, CL-E-048 — any timeout on `PipelinedClient` (TCP) desynchronizes the
     /// whole connection: every other in-flight request fails too, and no
     /// further request is written.
     async fn ut_timeout_desynchronizes_the_whole_connection() {
@@ -883,7 +911,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-091 — a response timeout on one in-flight `PipelinedUdpClient`
+    /// CL-R-091, CL-E-048 — a response timeout on one in-flight `PipelinedUdpClient`
     /// request fails only that request: the connection is not
     /// desynchronized, and a concurrent, answered request still succeeds.
     ///
@@ -934,8 +962,35 @@ mod tests {
         assert_eq!(t3.await.expect("task"), Ok(registers()));
     }
 
+    #[tokio::test(start_paused = true)]
+    /// CL-R-031, CL-E-049 — on `PipelinedClient` (TCP) an I/O failure
+    /// desynchronizes the whole connection: every in-flight request fails at
+    /// once rather than waiting out its timeout, and later sends are refused.
+    async fn ut_tcp_io_failure_desynchronizes_the_whole_connection() {
+        let (client, mut server) = pipeline_pair_with_config(PipelineConfig {
+            response_timeout: Duration::from_secs(10),
+            ..PipelineConfig::default()
+        });
+        let c1 = client.clone();
+        let c2 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        let t2 = tokio::spawn(async move { c2.send(UnitId(0x11), read_holding()).await });
+        server.recv_request().await.expect("receives first");
+        server.recv_request().await.expect("receives second");
+        // The peer goes away: the client's read side reports end of stream.
+        drop(server);
+
+        assert_eq!(t1.await.expect("task"), Err(Error::Desynchronized));
+        assert_eq!(t2.await.expect("task"), Err(Error::Desynchronized));
+        assert!(client.is_desynchronized());
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
+    }
+
     #[tokio::test]
-    /// CL-R-091 — an I/O failure (distinct from a timeout) still
+    /// CL-R-109, CL-E-049 — an I/O failure (distinct from a timeout) still
     /// desynchronizes the whole `PipelinedUdpClient` connection, same
     /// posture as CL-R-031. A UDP socket connected to a peer whose port has
     /// since gone away reports this as a `recv` error once the kernel
@@ -976,7 +1031,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-089 — same rule as `PipelinedClient`'s TCP case, over real UDP
+    /// CL-R-089, CL-E-012 — same rule as `PipelinedClient`'s TCP case, over real UDP
     /// sockets: a datagram carrying a transaction id this handle never
     /// allocated desynchronizes it.
     async fn ut_udp_never_issued_id_desynchronizes() {

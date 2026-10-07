@@ -9,10 +9,10 @@ use core::time::Duration;
 use crate::error::{Error, Result};
 
 /// Above this baud rate the inter-frame interval stops tracking the character
-/// time and is fixed (TR-R-011).
+/// time and is fixed (TR-R-086).
 const FIXED_INTERVAL_ABOVE_BAUD: u32 = 19_200;
 
-/// The fixed interval used above [`FIXED_INTERVAL_ABOVE_BAUD`] (TR-R-011).
+/// The fixed interval used above [`FIXED_INTERVAL_ABOVE_BAUD`] (TR-R-086).
 const FIXED_INTERVAL: Duration = Duration::from_micros(1_750);
 
 /// Bits per character, excluding start, parity, and stop bits (TR-R-031).
@@ -142,7 +142,7 @@ pub enum RtsPolarity {
 
 impl SerialConfig {
     /// Silence that separates two RTU frames: 3.5 character times, or a fixed
-    /// 1.75 ms above 19200 baud (TR-R-011).
+    /// 1.75 ms above 19200 baud (TR-R-011, TR-R-086).
     ///
     /// # Errors
     ///
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    /// TR-R-011 — at 19200 baud the rule still computes (2.0052 ms), and above
+    /// TR-R-011, TR-R-086 — at 19200 baud the rule still computes (2.0052 ms), and above
     /// it the interval is fixed at 1.75 ms rather than shrinking with the baud
     /// rate.
     fn ut_interframe_interval_is_fixed_above_19200() {
@@ -281,7 +281,7 @@ mod tests {
 
     #[cfg(feature = "rs485")]
     #[test]
-    /// TR-R-052 — `SerialConfig::default().rs485` is `None`: requesting no
+    /// TR-R-052, TR-R-092 — `SerialConfig::default().rs485` is `None`: requesting no
     /// RS-485 configuration issues no ioctl.
     fn ut_rs485_field_default_is_none() {
         assert_eq!(SerialConfig::default().rs485, None);
@@ -311,7 +311,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// TR-R-058 — a deserialized `SerialConfig` with a zero baud rate is
+    /// TR-R-095, TR-E-034 — a deserialized `SerialConfig` with a zero baud rate is
     /// accepted exactly as direct construction accepts it: the configuration
     /// error fires the first time the value is used, not at deserialize time.
     fn ut_serial_config_zero_baud_deserializes_without_error() {

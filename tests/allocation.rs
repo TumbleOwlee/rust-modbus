@@ -18,8 +18,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rust_modbus::{
-    Address, Ascii, FrameTransport, Framing, MbapHeader, Quantity, RequestPdu, Tcp, TransactionId,
-    UnitId,
+    Address, Ascii, FrameTransport, Framing, MbapHeader, Quantity, RequestPdu, Rtu, Tcp,
+    TransactionId, UnitId,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -138,7 +138,7 @@ fn request() -> RequestPdu {
 const FRAMES: usize = 100;
 
 #[test]
-/// FR-R-141, NF-R-009 — a caller that reuses one buffer allocates at most once,
+/// FR-R-141, NF-R-009, FR-E-017, FR-E-019 — a caller that reuses one buffer allocates at most once,
 /// however many frames it encodes: the first encode reserves the framing's
 /// maximum and every later one writes into capacity that already exists.
 fn it_reused_buffer_allocates_once() {
@@ -159,7 +159,27 @@ fn it_reused_buffer_allocates_once() {
 }
 
 #[test]
-/// FR-R-143 — ASCII is the carve-out: its wire form is a transformation of the
+/// FR-E-020 — the allocating encode allocates exactly once, a buffer sized on
+/// the framing's maximum ADU length, and the appending path beneath it never
+/// grows that buffer.
+fn it_allocating_encode_allocates_once_at_framing_maximum() {
+    let mut tcp = Vec::new();
+    let counted = allocations(|| {
+        tcp = Tcp::encode_request(&header(), &request()).expect("encodes");
+    });
+    assert_eq!(counted, 1, "TCP encode allocated {counted} times");
+    assert!(tcp.capacity() >= Tcp::MAX_ADU_LEN);
+
+    let mut rtu = Vec::new();
+    let counted = allocations(|| {
+        rtu = Rtu::encode_request(&UnitId(0x11), &request()).expect("encodes");
+    });
+    assert_eq!(counted, 1, "RTU encode allocated {counted} times");
+    assert!(rtu.capacity() >= Rtu::MAX_ADU_LEN);
+}
+
+#[test]
+/// FR-R-143, FR-E-019 — ASCII is the carve-out: its wire form is a transformation of the
 /// binary ADU rather than a wrapping of it, so it may build that binary form in
 /// one scratch buffer per frame — one, and no more.
 fn it_ascii_encode_allocates_at_most_once_per_frame() {

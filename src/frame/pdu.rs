@@ -211,7 +211,7 @@ pub enum ResponsePdu {
         /// Number of registers written.
         quantity: Quantity,
     },
-    /// 22 — Mask Write Register; echoes the request (FR-R-035).
+    /// 22 — Mask Write Register; echoes the request (FR-DA-R-001).
     MaskWriteRegister {
         /// Reference address.
         address: Address,
@@ -265,7 +265,7 @@ pub enum ResponsePdu {
         /// Sub-responses, one per sub-request (FR-R-052).
         records: Vec<FileRecordReadResponse>,
     },
-    /// 21 — Write File Record — an echo of the request (FR-R-053).
+    /// 21 — Write File Record — an echo of the request (FR-DA-R-003).
     WriteFileRecord {
         /// Sub-requests echoed back.
         records: Vec<FileRecordWrite>,
@@ -576,7 +576,7 @@ const EVENT_LOG_FIXED_BYTES: u32 = 6;
 const MAX_EVENT_BYTES: u32 = 64;
 
 /// A Diagnostics body: the sub-function code, then whole 16-bit data words
-/// (FR-R-061, FR-R-062).
+/// (FR-R-061, FR-R-062, FR-DA-R-004).
 fn diagnostic_body(input: &mut Input<'_>) -> ParseResult<(DiagnosticSubFunction, Vec<u16>)> {
     let sub_function = DiagnosticSubFunction::decode(be_u16.parse_next(input)?);
     let data = rest.parse_next(input)?;
@@ -605,7 +605,7 @@ fn encode_diagnostics(
 }
 
 /// Check a Get Comm Event Log byte count against the range its layout fixes
-/// (FR-R-065).
+/// (FR-DA-R-006).
 fn check_event_log_bytes(byte_count: u32) -> Result<()> {
     let max = EVENT_LOG_FIXED_BYTES.saturating_add(MAX_EVENT_BYTES);
     if byte_count < EVENT_LOG_FIXED_BYTES || byte_count > max {
@@ -853,7 +853,7 @@ impl RequestPdu {
         }
     }
 
-    /// Encode to a request PDU, allocating a buffer for it (FR-R-140).
+    /// Encode to a request PDU, allocating a buffer for it (FR-R-156).
     ///
     /// # Errors
     ///
@@ -1122,7 +1122,7 @@ impl ResponsePdu {
         }
     }
 
-    /// Encode to a response PDU, allocating a buffer for it (FR-R-140).
+    /// Encode to a response PDU, allocating a buffer for it (FR-R-156).
     ///
     /// # Errors
     ///
@@ -1326,6 +1326,85 @@ mod tests {
     use crate::frame::mei::{DeviceIdObject, ReadDeviceIdCode};
     use crate::frame::value::{FileNumber, Mask, RecordLength, RecordNumber};
 
+    #[test]
+    /// FR-R-160 — the boundary start addresses 0 and 65535 are valid in all
+    /// four data tables: each read and write request at either address encodes
+    /// to function code, big-endian 16-bit address, then its quantity/value
+    /// field (MODBUS Application Protocol v1.1b3 §6.1–§6.6, §6.11, §6.12), and
+    /// decodes back unchanged.
+    fn ut_boundary_addresses_valid_in_every_table() {
+        for (raw, hi, lo) in [(0u16, 0x00u8, 0x00u8), (0xFFFF, 0xFF, 0xFF)] {
+            let address = Address(raw);
+            let one = Quantity(1);
+            let cases: Vec<(RequestPdu, Vec<u8>)> = vec![
+                (
+                    RequestPdu::ReadCoils {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x01, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadDiscreteInputs {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x02, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadHoldingRegisters {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x03, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::ReadInputRegisters {
+                        address,
+                        quantity: one,
+                    },
+                    vec![0x04, hi, lo, 0x00, 0x01],
+                ),
+                (
+                    RequestPdu::WriteSingleCoil {
+                        address,
+                        value: true,
+                    },
+                    vec![0x05, hi, lo, 0xFF, 0x00],
+                ),
+                (
+                    RequestPdu::WriteSingleRegister {
+                        address,
+                        value: RegisterValue(0x1234),
+                    },
+                    vec![0x06, hi, lo, 0x12, 0x34],
+                ),
+                (
+                    RequestPdu::WriteMultipleCoils {
+                        address,
+                        coils: vec![true],
+                    },
+                    vec![0x0F, hi, lo, 0x00, 0x01, 0x01, 0x01],
+                ),
+                (
+                    RequestPdu::WriteMultipleRegisters {
+                        address,
+                        registers: vec![RegisterValue(0x1234)],
+                    },
+                    vec![0x10, hi, lo, 0x00, 0x01, 0x02, 0x12, 0x34],
+                ),
+            ];
+            for (request, bytes) in cases {
+                assert_eq!(request.encode(), Ok(bytes.clone()), "encode {request:?}");
+                assert_eq!(
+                    RequestPdu::decode(&bytes),
+                    Ok(request),
+                    "decode {bytes:02X?}"
+                );
+            }
+        }
+    }
+
     /// Coil states of the Read Coils response in the specification's worked
     /// example: bytes `CD 6B 05`, least significant bit first (§6.1).
     fn spec_example_coils() -> Vec<bool> {
@@ -1519,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-140 — the appending form and the allocating form describe the same
+    /// FR-R-156 — the appending form and the allocating form describe the same
     /// bytes, for every function code the crate names. They are one
     /// implementation with two entry points, and this is what says so.
     fn ut_encode_into_matches_encode() {
@@ -1537,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-140 — appending appends: the buffer's existing contents are left
+    /// FR-R-140, FR-E-016 — appending appends: the buffer's existing contents are left
     /// alone, because when to clear is the caller's decision. That is what lets
     /// an ADU encoder write its header first and the PDU after it, into one
     /// buffer.
@@ -1552,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-142 — a failed appending encode restores the buffer to its entry
+    /// FR-R-142, FR-E-015 — a failed appending encode restores the buffer to its entry
     /// state. The quantity below is past the 125-register maximum (FR-R-031),
     /// so encoding fails after the function code would otherwise have been
     /// written; a caller that reuses this buffer must not find that stray byte
@@ -1674,7 +1753,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-044 — a bit-read response carries no coil count, so decoding yields
+    /// FR-R-044, FR-DA-E-004 — a bit-read response carries no coil count, so decoding yields
     /// exactly `8 × byte count` values including the final byte's padding.
     fn ut_bit_response_yields_byte_count_times_eight() {
         let decoded = ResponsePdu::decode(&[0x01, 0x03, 0xCD, 0x6B, 0x05]);
@@ -1780,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-027 — a coil value that is neither `0xFF00` nor `0x0000` is an
+    /// FR-R-027, FR-DA-E-006 — a coil value that is neither `0xFF00` nor `0x0000` is an
     /// illegal-value error in both directions.
     fn ut_write_single_coil_value_illegal() {
         for value in [0x0001u16, 0x00FF, 0xFF01, 0xFFFF] {
@@ -1828,7 +1907,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-021 — a coil quantity outside 1–2000 is an out-of-range error.
+    /// FR-R-021, FR-DA-E-002 — a coil quantity outside 1–2000 is an out-of-range error.
     /// FR-R-045 — and it is rejected on decode as well as on encode.
     fn ut_coil_quantity_out_of_range() {
         for quantity in [0u16, 2001, 65535] {
@@ -1857,7 +1936,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-022 — a register quantity outside 1–125 is an out-of-range error.
+    /// FR-R-022, FR-DA-E-002 — a register quantity outside 1–125 is an out-of-range error.
     /// FR-R-045 — and it is rejected on decode as well as on encode.
     fn ut_register_quantity_out_of_range() {
         for quantity in [0u16, 126, 2000] {
@@ -1886,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-043 — a byte count disagreeing with the data present is a
+    /// FR-R-043, FR-DA-E-001 — a byte count disagreeing with the data present is a
     /// byte-count-mismatch error, raised before any data byte is consumed.
     fn ut_byte_count_mismatch() {
         assert_eq!(
@@ -1906,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-046 — a register-read response byte count must be even, since no
+    /// FR-R-046, FR-DA-E-003 — a register-read response byte count must be even, since no
     /// quantity of 16-bit registers can produce an odd one.
     fn ut_register_response_byte_count_must_be_even() {
         assert_eq!(
@@ -1965,7 +2044,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-131 — a request shorter than its layout requires reports the bytes
+    /// FR-R-131, FR-E-002 — a request shorter than its layout requires reports the bytes
     /// expected and supplied.
     fn ut_truncated_request_is_reported() {
         assert_eq!(
@@ -1978,7 +2057,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-132 — surplus bytes after a complete PDU are rejected.
+    /// FR-R-132, FR-E-003 — surplus bytes after a complete PDU are rejected.
     fn ut_trailing_bytes_are_rejected() {
         assert_eq!(
             RequestPdu::decode(&[0x01, 0x00, 0x13, 0x00, 0x13, 0xFF]),
@@ -1987,9 +2066,9 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-081 — a response whose function code has the high bit set decodes as
+    /// FR-R-081, FR-E-009 — a response whose function code has the high bit set decodes as
     /// an exception response.
-    /// FR-R-086 — including for a custom function code.
+    /// FR-R-086, FR-E-013 — including for a custom function code.
     fn ut_response_decodes_exception() {
         assert_eq!(
             ResponsePdu::decode(&[0x83, 0x02]),
@@ -2115,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-035 — a Mask Write Register request is a reference address, an AND
+    /// FR-R-035, FR-DA-R-001 — a Mask Write Register request is a reference address, an AND
     /// mask and an OR mask, and its response echoes the request.
     /// Bytes from the specification's example (§6.16).
     fn ut_mask_write_register_spec_example() {
@@ -2269,7 +2348,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-042 — a FIFO count above 31 is an out-of-range error, raised before
+    /// FR-R-042, FR-DA-E-007 — a FIFO count above 31 is an out-of-range error, raised before
     /// any allocation proportional to it.
     fn ut_read_fifo_queue_count_above_31_rejected() {
         assert_eq!(
@@ -2284,7 +2363,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-047 — a bit-packed request body whose padding bits above the stated
+    /// FR-R-047, FR-DA-E-005 — a bit-packed request body whose padding bits above the stated
     /// quantity are not zero is an illegal-value error, since FR-R-024 requires
     /// them to be zero.
     fn ut_write_multiple_coils_rejects_nonzero_padding() {
@@ -2346,7 +2425,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-053 — the specification's Write File Record example (§6.15); the
+    /// FR-R-053, FR-DA-R-003 — the specification's Write File Record example (§6.15); the
     /// response is byte-for-byte the request.
     fn ut_write_file_record_spec_example() {
         let bytes = [
@@ -2373,7 +2452,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-051 — a Read File Record request byte count outside 7–245 is an
+    /// FR-R-051, FR-DA-E-009 — a Read File Record request byte count outside 7–245 is an
     /// out-of-range error, raised before any body byte is consumed.
     fn ut_read_file_record_byte_count_out_of_range() {
         assert_eq!(
@@ -2388,7 +2467,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-051 — a Read File Record request byte count that is not a multiple
+    /// FR-DA-R-002, FR-DA-E-010 — a Read File Record request byte count that is not a multiple
     /// of 7 cannot describe whole sub-requests, so it is an illegal value.
     fn ut_read_file_record_byte_count_not_multiple_of_seven() {
         assert_eq!(
@@ -2401,7 +2480,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-055 — a reference type other than 6 is rejected wherever it appears.
+    /// FR-R-055, FR-DA-E-008 — a reference type other than 6 is rejected wherever it appears.
     fn ut_file_record_reference_type_must_be_six() {
         assert_eq!(
             RequestPdu::decode(&[0x14, 0x07, 0x07, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02]),
@@ -2414,7 +2493,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-057 — a file response length that is not the record data byte count
+    /// FR-R-057, FR-DA-E-011 — a file response length that is not the record data byte count
     /// plus one cannot be honoured; an even one would claim an odd number of
     /// data bytes.
     fn ut_file_response_length_must_cover_whole_registers() {
@@ -2429,7 +2508,7 @@ mod tests {
 
     #[test]
     /// FR-R-054 — a Write File Record data length below 9 cannot hold a
-    /// sub-request with any data at all.
+    /// sub-request with any data at all, and one above 251 cannot fit a PDU.
     fn ut_write_file_record_data_length_out_of_range() {
         assert_eq!(
             RequestPdu::decode(&[0x15, 0x07, 0x06, 0x00, 0x04, 0x00, 0x07, 0x00, 0x00]),
@@ -2440,10 +2519,19 @@ mod tests {
                 max: 251,
             })
         );
+        assert_eq!(
+            RequestPdu::decode(&[0x15, 0xFC]),
+            Err(Error::OutOfRange {
+                field: "request data length",
+                value: 252,
+                min: 9,
+                max: 251,
+            })
+        );
     }
 
     #[test]
-    /// FR-R-056, FR-R-058 — file number 0 and record number 10000 are outside
+    /// FR-R-056, FR-R-058, FR-DA-E-012 — file number 0 and record number 10000 are outside
     /// the ranges the specification fixes, on decode as well as encode
     /// (FR-R-133).
     fn ut_file_and_record_numbers_out_of_range() {
@@ -2493,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-052, FR-R-131 — a sub-response claiming more bytes than its region
+    /// FR-R-052, FR-R-131, FR-DA-E-013 — a sub-response claiming more bytes than its region
     /// holds is truncated input, measured against the stated data length.
     fn ut_file_record_sub_item_may_not_overrun_its_region() {
         assert_eq!(
@@ -2554,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-061 — data words are 16 bits, so a body with an odd byte left over
+    /// FR-DA-R-004, FR-DA-E-018 — data words are 16 bits, so a body with an odd byte left over
     /// cannot be honoured.
     fn ut_diagnostics_odd_data_length_rejected() {
         assert_eq!(
@@ -2598,7 +2686,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-063 — an unnamed sub-function code, the reserved range 5–9
+    /// FR-R-063, FR-DA-E-025 — an unnamed sub-function code, the reserved range 5–9
     /// included, decodes as a general value instead of failing.
     fn ut_unnamed_diagnostic_sub_function_decodes() {
         for raw in [5u16, 6, 7, 8, 9, 19, 21, 0xFFFF] {
@@ -2612,7 +2700,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-063 — a general sub-function value holding a code the crate names
+    /// FR-DA-R-005, FR-DA-E-020 — a general sub-function value holding a code the crate names
     /// has two encodings, so encoding it is a reserved-code error.
     fn ut_diagnostic_other_holding_named_code_is_reserved_error() {
         assert_eq!(
@@ -2641,7 +2729,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-068 — a status word that is neither `0x0000` nor `0xFFFF` is
+    /// FR-R-068, FR-DA-E-026 — a status word that is neither `0x0000` nor `0xFFFF` is
     /// carried as it stands, not rejected.
     fn ut_comm_event_status_word_carried_as_is() {
         assert_eq!(
@@ -2672,7 +2760,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-065 — the byte count covers six fixed bytes plus 0–64 event bytes,
+    /// FR-DA-R-006, FR-DA-E-019 — the byte count covers six fixed bytes plus 0–64 event bytes,
     /// so it is out of range below 6 or above 70.
     fn ut_comm_event_log_byte_count_out_of_range() {
         assert_eq!(
@@ -2703,7 +2791,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-067 — the frame layer carries a Report Server ID response body
+    /// FR-R-067, FR-DA-E-016 — the frame layer carries a Report Server ID response body
     /// whole and interprets nothing inside it: not the server id, not the run
     /// indicator, not the additional data. Nothing at this layer can even
     /// locate the run indicator, since the server id's length is
@@ -2753,7 +2841,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-011, FR-R-012 — an unnamed function code decodes with its body
+    /// FR-R-011, FR-R-012, FR-E-006, FR-E-007 — an unnamed function code decodes with its body
     /// opaque: every remaining byte, imposed on by nothing.
     fn ut_custom_function_code_body_is_opaque() {
         let bytes = [0x41, 0xDE, 0xAD, 0xBE, 0xEF];
@@ -2784,7 +2872,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-013 — a custom code holding one of the nineteen named codes has two
+    /// FR-R-013, FR-E-008 — a custom code holding one of the nineteen named codes has two
     /// representations, so encoding it is a reserved-code error.
     fn ut_encoding_custom_with_named_code_is_reserved_error() {
         assert_eq!(
@@ -2842,7 +2930,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-074 — only 1–4 name a conformity class, so 0 and 5 are out of
+    /// FR-R-074, FR-DA-E-014 — only 1–4 name a conformity class, so 0 and 5 are out of
     /// range.
     fn ut_read_device_id_code_out_of_range() {
         for raw in [0x00u8, 0x05, 0xFF] {
@@ -2902,7 +2990,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-076 — the more-follows indicator is `0x00` or `0xFF` and nothing
+    /// FR-R-076, FR-DA-E-015 — the more-follows indicator is `0x00` or `0xFF` and nothing
     /// else.
     fn ut_more_follows_indicator_illegal_value() {
         assert_eq!(
@@ -2915,7 +3003,59 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-077 — the object count must match the objects actually present;
+    /// FR-DA-E-022 — a final object whose value is cut short is truncated
+    /// input, not an object-count mismatch: the 5-byte value has 2 of its
+    /// bytes, so 3 are missing.
+    fn ut_device_id_object_cut_short_is_truncated() {
+        let bytes = [
+            0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x05, 0xAA, 0xBB,
+        ];
+        match ResponsePdu::decode(&bytes) {
+            Err(Error::Truncated { expected, supplied }) => {
+                assert_eq!(expected - supplied, 3);
+            }
+            other => panic!("expected a truncated-input error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    /// FR-DA-E-017 — a Report Server ID response with byte count 0 decodes to
+    /// an empty body; no minimum length is imposed.
+    fn ut_report_server_id_zero_byte_count() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x11, 0x00]),
+            Ok(ResponsePdu::ReportServerId { data: vec![] })
+        );
+    }
+
+    #[test]
+    /// FR-E-018 — the size bound is measured against the bytes this call
+    /// writes, not the buffer's total length: a 252-byte PDU appended after
+    /// 100 existing bytes encodes, and a 254-byte one reports 254, not 354.
+    fn ut_pdu_size_bound_ignores_existing_buffer_contents() {
+        let mut out = vec![0xEE; 100];
+        ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0); 125],
+        }
+        .encode_into(&mut out)
+        .expect("125 registers fit");
+        assert_eq!(out.len(), 352);
+
+        let mut out = vec![0xEE; 100];
+        assert_eq!(
+            ResponsePdu::ReadHoldingRegisters {
+                registers: vec![RegisterValue(0); 126],
+            }
+            .encode_into(&mut out),
+            Err(Error::PduTooLarge {
+                len: 254,
+                max: MAX_PDU_LEN,
+            })
+        );
+    }
+
+    #[test]
+    /// FR-R-077, FR-DA-E-021 — the object count must match the objects actually present;
     /// the counts are objects, not bytes.
     fn ut_device_id_object_count_mismatch() {
         let bytes = [
@@ -2948,7 +3088,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-071 — an MEI type the crate does not name keeps its raw byte and an
+    /// FR-R-071, FR-DA-E-024 — an MEI type the crate does not name keeps its raw byte and an
     /// opaque body rather than failing.
     fn ut_unknown_mei_type_is_opaque() {
         let bytes = [0x2B, 0x7F, 0xAA];

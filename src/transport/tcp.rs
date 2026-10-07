@@ -1,5 +1,5 @@
 //! TCP sockets: connecting, listening, and the options that go with them
-//! (TR-R-020 … TR-R-023).
+//! (TR-R-020 … TR-R-023, TR-R-089).
 
 use core::future::Future;
 use core::time::Duration;
@@ -142,7 +142,7 @@ where
 {
     match tokio::time::timeout(timeout, attempt).await {
         Ok(result) => Ok(result?),
-        // Nothing failed; the wait ran out (TR-R-021).
+        // Nothing failed; the wait ran out (TR-R-089).
         Err(_elapsed) => Err(Error::Timeout { what: "connect" }),
     }
 }
@@ -152,7 +152,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(start_paused = true)]
-    /// TR-R-021 — a connect that does not complete in time is a timeout naming
+    /// TR-R-089, TR-E-019 — a connect that does not complete in time is a timeout naming
     /// what timed out, not an I/O error: nothing failed, the wait ran out.
     async fn ut_connect_timeout_is_a_timeout_error() {
         let never = core::future::pending::<std::io::Result<TcpStream>>();
@@ -180,7 +180,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// TR-R-058 — `TcpConfig` round-trips through JSON.
+    /// TR-R-058, TR-R-094 — `TcpConfig` round-trips through JSON.
     fn ut_tcp_config_serde_roundtrip() {
         let config = TcpConfig {
             connect_timeout: Duration::from_secs(5),

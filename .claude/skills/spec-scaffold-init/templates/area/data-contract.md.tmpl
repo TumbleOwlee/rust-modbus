@@ -1,0 +1,21 @@
+# {{AREA_TITLE}} — Data Contract
+
+Formats this area owns: wire layouts, file schemas, field widths/order, value ranges, encodings.
+
+Normative. Formats are the hardest contract to change post-release — settle each at gate 1 with exact bytes/schema, not a description.
+
+No ID series of its own: every table row carries a `Req` column naming the owning requirement ID(s), enumerated never ranged; `—` plus a raised gap when none (`docs/specs/README.md` rule 7).
+
+---
+
+## Layout
+
+*(Empty. One table per message/record: field, offset/order, width, type, range.)*
+
+## Encoding
+
+*(Empty. Byte order, character encoding, framing/delimiting rules.)*
+
+## Ranges and limits
+
+*(Empty. Valid value ranges, max lengths, out-of-range behavior — cross-ref [`edge-cases.md`](./edge-cases.md).)*

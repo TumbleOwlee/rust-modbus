@@ -10,7 +10,7 @@ belong to [`../transport/`](../transport/).
 
 ---
 
-## 1. Client type and construction
+## Client type and construction
 
 One type for every framing (CL-R-001), built from a transport that is already
 established (CL-R-002).
@@ -69,34 +69,34 @@ a broadcast onto the bus it fronts, and no device answers one. Unlike
 `RtuClient`, `RtuOverTcpClient` is not behind the `rtu` feature: it opens no
 serial port (TR-R-033).
 
-## 2. Request methods
+## Request methods
 
 Every method takes the unit identifier first (CL-R-003) and domain value types
 throughout (CL-R-060, FR-R-007). All are `async` and return `Result`. A write
 addressed to a broadcast identifier returns `Ok` without awaiting (CL-R-051); a
 read so addressed fails without writing (CL-R-052).
 
-| Method | Code | Arguments after `unit: UnitId` | Returns |
-|---|---|---|---|
-| `read_coils` | 1 | `address: Address, quantity: Quantity` | `Vec<bool>` |
-| `read_discrete_inputs` | 2 | `address: Address, quantity: Quantity` | `Vec<bool>` |
-| `read_holding_registers` | 3 | `address: Address, quantity: Quantity` | `Vec<RegisterValue>` |
-| `read_input_registers` | 4 | `address: Address, quantity: Quantity` | `Vec<RegisterValue>` |
-| `write_single_coil` | 5 | `address: Address, value: bool` | `()` |
-| `write_single_register` | 6 | `address: Address, value: RegisterValue` | `()` |
-| `read_exception_status` | 7 | — | `ExceptionStatus` |
-| `diagnostics` | 8 | `sub_function: DiagnosticSubFunction, data: &[u16]` | `Vec<u16>` |
-| `get_comm_event_counter` | 11 | — | `CommEventCounter` |
-| `get_comm_event_log` | 12 | — | `CommEventLog` |
-| `write_multiple_coils` | 15 | `address: Address, coils: &[bool]` | `()` |
-| `write_multiple_registers` | 16 | `address: Address, registers: &[RegisterValue]` | `()` |
-| `report_server_id` | 17 | — | `Vec<u8>` |
-| `read_file_record` | 20 | `records: &[FileRecordRead]` | `Vec<FileRecordReadResponse>` |
-| `write_file_record` | 21 | `records: &[FileRecordWrite]` | `()` |
-| `mask_write_register` | 22 | `address: Address, and_mask: Mask, or_mask: Mask` | `()` |
-| `read_write_multiple_registers` | 23 | `read_address: Address, read_quantity: Quantity, write_address: Address, registers: &[RegisterValue]` | `Vec<RegisterValue>` |
-| `read_fifo_queue` | 24 | `address: Address` | `Vec<RegisterValue>` |
-| `encapsulated_interface_transport` | 43 | `request: MeiRequest` | `MeiResponse` |
+| Method | Code | Arguments after `unit: UnitId` | Returns | Req |
+|---|---|---|---|---|
+| `read_coils` | 1 | `address: Address, quantity: Quantity` | `Vec<bool>` | CL-R-060 |
+| `read_discrete_inputs` | 2 | `address: Address, quantity: Quantity` | `Vec<bool>` | CL-R-060 |
+| `read_holding_registers` | 3 | `address: Address, quantity: Quantity` | `Vec<RegisterValue>` | CL-R-060 |
+| `read_input_registers` | 4 | `address: Address, quantity: Quantity` | `Vec<RegisterValue>` | CL-R-060 |
+| `write_single_coil` | 5 | `address: Address, value: bool` | `()` | CL-R-060 |
+| `write_single_register` | 6 | `address: Address, value: RegisterValue` | `()` | CL-R-060 |
+| `read_exception_status` | 7 | — | `ExceptionStatus` | CL-R-060 |
+| `diagnostics` | 8 | `sub_function: DiagnosticSubFunction, data: &[u16]` | `Vec<u16>` | CL-R-060 |
+| `get_comm_event_counter` | 11 | — | `CommEventCounter` | CL-R-060 |
+| `get_comm_event_log` | 12 | — | `CommEventLog` | CL-R-060 |
+| `write_multiple_coils` | 15 | `address: Address, coils: &[bool]` | `()` | CL-R-060 |
+| `write_multiple_registers` | 16 | `address: Address, registers: &[RegisterValue]` | `()` | CL-R-060 |
+| `report_server_id` | 17 | — | `Vec<u8>` | CL-R-060 |
+| `read_file_record` | 20 | `records: &[FileRecordRead]` | `Vec<FileRecordReadResponse>` | CL-R-060 |
+| `write_file_record` | 21 | `records: &[FileRecordWrite]` | `()` | CL-R-060 |
+| `mask_write_register` | 22 | `address: Address, and_mask: Mask, or_mask: Mask` | `()` | CL-R-060 |
+| `read_write_multiple_registers` | 23 | `read_address: Address, read_quantity: Quantity, write_address: Address, registers: &[RegisterValue]` | `Vec<RegisterValue>` | CL-R-060 |
+| `read_fifo_queue` | 24 | `address: Address` | `Vec<RegisterValue>` | CL-R-060 |
+| `encapsulated_interface_transport` | 43 | `request: MeiRequest` | `MeiResponse` | CL-R-060 |
 
 The write methods return `()` rather than the fields the server echoes: the echo
 is not compared (CL-R-064), so returning it would invite a caller to compare it
@@ -113,7 +113,7 @@ and an echo is inspectable. `None` means the request was a broadcast and no
 reply was awaited (CL-R-053).
 
 Two responses carry several values with no single natural payload, so each gets
-a struct rather than a tuple:
+a struct rather than a tuple (CL-R-060):
 
 ```rust
 pub struct CommEventCounter { pub status: u16, pub event_count: u16 }
@@ -125,11 +125,11 @@ pub struct CommEventLog {
 }
 ```
 
-## 3. Configuration
+## Configuration
 
 ```rust
 pub struct ClientConfig {
-    pub response_timeout: Duration,  // 1 s (CL-R-030)
+    pub response_timeout: Duration,  // 1 s (CL-R-100)
 }
 ```
 
@@ -138,30 +138,32 @@ configuration for behavior the client does not have. The RTU inter-frame
 interval is *not* here — it is a serial-port property owned by the transport
 area (TR-R-011).
 
-## 4. Feature flags
+## Feature flags
 
-| Feature | Default | Gates |
-|---|---|---|
-| `std` | on | the whole client area (CL-R-004) |
-| `rtu` | off | `RtuClient` and `AsciiClient` only |
-| `sync` | off | the blocking client of §7 (CL-R-070) |
-| `pipeline` | off | `PipelinedClient` and `PipelinedUdpClient` of §8 (CL-R-094), implies `std` |
+| Feature | Default | Gates | Req |
+|---|---|---|---|
+| `std` | on | the whole client area | CL-R-004 |
+| `rtu` | off | `RtuClient` and `AsciiClient` only | TR-R-032 |
+| `sync` | off | the blocking client of `## The blocking client` | CL-R-070 |
+| `pipeline` | off | `PipelinedClient` and `PipelinedUdpClient` of `## Pipelined clients`, implies `std` | CL-R-094 |
 
 The client is generic over the stream, so `Client<S, Rtu>` over an in-memory
 duplex pair works with the `rtu` feature off; only the alias naming a serial
 port is gated.
 
-## 5. Error variants
+## Error variants
 
 Added by this area, all gated on `std`:
 
-| Variant | Fields | Requirements |
+| Variant | Fields | Req |
 |---|---|---|
 | `Exception` | `function: FunctionCode, exception: ExceptionCode` | CL-R-040, CL-R-041 |
 | `UnexpectedFunction` | `expected: FunctionCode, actual: FunctionCode` | CL-R-022 |
-| `Desynchronized` | — | CL-R-031, CL-R-032; reused for CL-R-089, CL-R-090, CL-R-091 |
+| `Desynchronized` | — | CL-R-031, CL-R-032, CL-R-089, CL-R-090, CL-R-109 |
 | `BlockingInAsyncContext` | — | CL-R-075 |
-| `TooManyInFlight` | — | CL-R-086, gated on `pipeline` |
+| `TooManyInFlight` | — | CL-R-108 |
+
+`TooManyInFlight` is gated on `pipeline` (CL-R-094).
 
 A broadcast read (CL-R-052) is refused with the frame area's existing
 `IllegalValue { field: "broadcast read", value: 0 }` rather than a variant of its
@@ -172,7 +174,7 @@ that variant already means.
 not a fourth one: a caller distinguishes a response timeout from a connect
 timeout by the field, and CL-R-031 means the client is desynchronized either way.
 
-## 6. Reported state
+## Reported state
 
 What a caller may ask a client about itself (CL-R-035). Both types are
 `std`-gated, `Debug + Clone + Copy + PartialEq + Eq`, and exhaustive per
@@ -183,12 +185,12 @@ extending.
 ```rust
 pub enum ClientState {
     /// No exchange has been attempted, or only broadcast writes have been
-    /// (CL-R-036).
+    /// (CL-R-102).
     Untried,
     /// The last exchange was answered, including with an exception (CL-R-036).
     Answered,
     /// The last exchange was not answered, and the client is still usable
-    /// (CL-R-023).
+    /// (CL-R-098).
     Unanswered,
     /// Every further request will be refused (CL-R-032).
     Unusable(UnusableReason),
@@ -202,13 +204,13 @@ pub enum UnusableReason {
     /// The response timeout elapsed with no matching response (CL-R-031).
     Silent,
     /// A frame did not decode on a framing that is not self-locating
-    /// (CL-R-023).
+    /// (CL-R-098).
     Undecodable,
 }
 ```
 
 `is_desynchronized` is retained and is exactly
-`matches!(self.state(), ClientState::Unusable(_))` (CL-R-034).
+`matches!(self.state(), ClientState::Unusable(_))` (CL-R-034, CL-R-101).
 
 **These values report what this client observed, not whether the peer is alive.**
 On TCP a peer that vanished without a FIN is indistinguishable from an idle one
@@ -218,9 +220,9 @@ probe (CL-R-039). A caller that needs proof a server still answers issues a
 request with `call` and reads the result — that is supervision policy, and it
 stays with the caller.
 
-## 7. The blocking client
+## The blocking client
 
-Gated on `sync` (CL-R-070). Mirrors §2 method for method (CL-R-071); every method
+Gated on `sync` (CL-R-070). Mirrors `## Request methods` method for method (CL-R-071); every method
 takes `&mut self` and returns the same type the async method resolves to.
 
 ```rust
@@ -248,12 +250,12 @@ impl<F: ClientFraming + Send> SyncClient<SerialStream, F> where F::Header: Sync 
 }
 ```
 
-Request methods, all twenty of §2, with `async` removed:
+Request methods, all twenty of `## Request methods`, with `async` removed:
 
 ```rust
 pub fn read_coils(&mut self, unit: UnitId, address: Address, quantity: Quantity)
     -> Result<Vec<bool>>;
-// … the remaining eighteen typed methods, signatures identical to §2 …
+// … the remaining eighteen typed methods, signatures identical to `## Request methods` …
 pub fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>>;
 ```
 
@@ -271,16 +273,16 @@ caller that wants the transport uses the async client.
 
 No blocking server exists (CL-R-079).
 
-## 8. Pipelined clients
+## Pipelined clients
 
 Gated on `pipeline` (CL-R-094). Coexist with `Client<T, F>`; TCP-only (CL-R-082,
-CL-R-083), no generic framing parameter.
+CL-R-083, CL-R-106), no generic framing parameter.
 
 ```rust
 pub struct PipelinedClient<T = FrameTransport<TcpStream, Tcp>> { /* Arc-shared handle */ }
 pub type PipelinedUdpClient = PipelinedClient<UdpTransport<Tcp>>;
 
-impl<T> Clone for PipelinedClient<T> { /* shares the background task (CL-R-085) */ }
+impl<T> Clone for PipelinedClient<T> { /* shares the background task (CL-R-085, CL-R-107) */ }
 
 impl<T> PipelinedClient<T> {
     pub fn new(transport: T) -> Self;
@@ -294,7 +296,7 @@ impl<T> PipelinedClient<T> {
 ```
 
 `send` awaits a free in-flight slot at `max_in_flight` (CL-R-086); `try_send`
-fails immediately with `TooManyInFlight` instead. Neither returns
+fails immediately with `TooManyInFlight` instead (CL-R-108). Neither returns
 `Option<ResponsePdu>` the way `Client::call` does — both types are fixed to
 `Tcp` framing, where broadcast is impossible, so the `None` arm `call` needs
 for RTU/ASCII broadcasts can never occur here.
@@ -316,4 +318,4 @@ impl From<ClientConfig> for PipelineConfig { /* CL-R-095 */ }
 
 The background task spawned by `new`/`with_config` (CL-R-084) owns the
 transport for the handle's lifetime and shuts down when the last clone drops
-(CL-R-085); there is no explicit shutdown method and no `into_inner`.
+(CL-R-107); there is no explicit shutdown method and no `into_inner`.
