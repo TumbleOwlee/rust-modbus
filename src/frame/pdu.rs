@@ -2915,6 +2915,58 @@ mod tests {
     }
 
     #[test]
+    /// FR-DA-E-022 — a final object whose value is cut short is truncated
+    /// input, not an object-count mismatch: the 5-byte value has 2 of its
+    /// bytes, so 3 are missing.
+    fn ut_device_id_object_cut_short_is_truncated() {
+        let bytes = [
+            0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x05, 0xAA, 0xBB,
+        ];
+        match ResponsePdu::decode(&bytes) {
+            Err(Error::Truncated { expected, supplied }) => {
+                assert_eq!(expected - supplied, 3);
+            }
+            other => panic!("expected a truncated-input error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    /// FR-DA-E-017 — a Report Server ID response with byte count 0 decodes to
+    /// an empty body; no minimum length is imposed.
+    fn ut_report_server_id_zero_byte_count() {
+        assert_eq!(
+            ResponsePdu::decode(&[0x11, 0x00]),
+            Ok(ResponsePdu::ReportServerId { data: vec![] })
+        );
+    }
+
+    #[test]
+    /// FR-E-018 — the size bound is measured against the bytes this call
+    /// writes, not the buffer's total length: a 252-byte PDU appended after
+    /// 100 existing bytes encodes, and a 254-byte one reports 254, not 354.
+    fn ut_pdu_size_bound_ignores_existing_buffer_contents() {
+        let mut out = vec![0xEE; 100];
+        ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0); 125],
+        }
+        .encode_into(&mut out)
+        .expect("125 registers fit");
+        assert_eq!(out.len(), 352);
+
+        let mut out = vec![0xEE; 100];
+        assert_eq!(
+            ResponsePdu::ReadHoldingRegisters {
+                registers: vec![RegisterValue(0); 126],
+            }
+            .encode_into(&mut out),
+            Err(Error::PduTooLarge {
+                len: 254,
+                max: MAX_PDU_LEN,
+            })
+        );
+    }
+
+    #[test]
     /// FR-R-077, FR-DA-E-021 — the object count must match the objects actually present;
     /// the counts are objects, not bytes.
     fn ut_device_id_object_count_mismatch() {

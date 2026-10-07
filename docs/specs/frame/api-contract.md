@@ -106,7 +106,7 @@ Everything below is exported from the crate root. All types derive `Debug`, `Clo
 | `Extent` | enum | `NeedMore`, `Complete(usize)` — the result of a content-derived boundary derivation | FR-R-146 |
 | `MbapHeader` | struct | `{ transaction_id: TransactionId, unit_id: UnitId }` | FR-R-101 |
 | `Error`, `Result<T>` | enum, alias | `## Error variants`; `Result<T> = core::result::Result<T, Error>` | NF-R-012 |
-| `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-045) | FR-R-036 |
+| `mask_write_result` | fn | `(current: RegisterValue, and_mask: Mask, or_mask: Mask) -> RegisterValue` (FR-R-036) | FR-R-036 |
 | `crc16` | fn | `(bytes: &[u8]) -> u16`, the RTU/RTU-over-stream CRC of `## Framings`, computable independently of decoding (FR-ADU-R-001) | FR-ADU-R-001 |
 | `lrc` | fn | `(bytes: &[u8]) -> u8`, the ASCII checksum of `## Framings`, computable independently of decoding (FR-ADU-R-002) | FR-ADU-R-002 |
 
@@ -121,7 +121,7 @@ Each is a transparent tuple struct with a public field, deriving `Debug`, `Clone
 | `Address` | `u16` | every starting or single data address (`frame-data-access/requirements.md` `## Bit and register data access`) | FR-R-007, FR-R-155 |
 | `Quantity` | `u16` | every count of coils, inputs, or registers (`frame-data-access/requirements.md` `## Bit and register data access`) | FR-R-007, FR-R-155 |
 | `RegisterValue` | `u16` | register contents, FIFO contents, file record contents (FR-R-004) | FR-R-007, FR-R-155 |
-| `Mask` | `u16` | the AND and OR masks of Mask Write Register (FR-R-044) | FR-R-007, FR-R-155 |
+| `Mask` | `u16` | the AND and OR masks of Mask Write Register (FR-R-035) | FR-R-007, FR-R-155 |
 | `FileNumber`, `RecordNumber`, `RecordLength` | `u16` | the file record fields of `frame-data-access/requirements.md` `## File record access` | FR-R-007, FR-R-155 |
 | `ExceptionStatus` | `u8` | the output status byte of Read Exception Status (FR-R-060) | FR-R-007, FR-R-155 |
 
@@ -217,17 +217,17 @@ One enum, `Error`, with a variant per failure mode — never a formatted string 
 | `TrailingBytes` | `extra: usize` | FR-R-132 |
 | `InvalidFunctionCode` | `u8` | FR-R-014, FR-R-015 |
 | `ReservedCode` | `u8` | FR-R-013, FR-DA-R-005, FR-R-084 |
-| `InvalidLength` | `expected: usize, actual: usize` | FR-R-084, FR-R-085, FR-R-106 |
-| `OutOfRange` | `field: &'static str, value: u32, min: u32, max: u32` | FR-R-021, FR-R-027, FR-R-031, FR-R-038, FR-R-042, FR-R-051, FR-R-055, FR-R-105, FR-DA-R-006 |
+| `InvalidLength` | `expected: usize, actual: usize` | FR-R-085, FR-R-106 |
+| `OutOfRange` | `field: &'static str, value: u32, min: u32, max: u32` | FR-R-021, FR-R-022, FR-R-031, FR-R-033, FR-R-038, FR-R-042, FR-R-051, FR-R-054, FR-R-056, FR-R-058, FR-R-074, FR-R-105, FR-DA-R-006 |
 | `Checksum` | `expected: u16, actual: u16` | FR-R-095, FR-R-115 |
 | `Framing` | `element: &'static str` | FR-R-110, FR-R-116 |
 | `InvalidCharacter` | `u8` | FR-ADU-R-004 |
 | `ProtocolIdentifier` | `u16` | FR-R-102 |
 | `AduTooLarge` | `len: usize, max: usize` | FR-R-091, FR-R-104, FR-R-113, FR-R-149 |
 | `IndeterminateLength` | `function: u8` | FR-R-148 |
-| `ReferenceType` | `u8` | FR-R-054 |
-| `IllegalValue` | `field: &'static str, value: u16` | FR-R-022, FR-DA-R-002, FR-DA-R-004, FR-R-074, FR-R-077 |
-| `ByteCountMismatch` | `expected: usize, actual: usize` | FR-R-033, FR-R-043, FR-R-056, FR-R-057, FR-R-058, FR-R-076 |
+| `ReferenceType` | `u8` | FR-R-055 |
+| `IllegalValue` | `field: &'static str, value: u16` | FR-R-027, FR-R-046, FR-R-057, FR-R-076, FR-DA-R-002, FR-DA-R-004 |
+| `ByteCountMismatch` | `expected: usize, actual: usize` | FR-R-043, FR-R-077 |
 | `PduTooLarge` | `len: usize, max: usize` | FR-R-002, FR-R-006 |
 | `Malformed` | — (the residual: input that fits no other variant) | — |
 

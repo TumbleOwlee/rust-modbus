@@ -754,6 +754,22 @@ mod tests {
     }
 
     #[test]
+    /// FR-ADU-E-014 — an exception response to a custom function code has a
+    /// 5-byte extent (address, function code | 0x80, exception code, CRC),
+    /// although the normal response to that code is not derivable.
+    fn ut_extent_custom_code_exception_response() {
+        let adu = [0x11, 0xD0, 0x01, 0x00, 0x00];
+        assert_eq!(
+            derive_extent(Direction::Response, &adu),
+            Ok(Extent::Complete(5))
+        );
+        assert_eq!(
+            derive_extent(Direction::Response, &[0x11, 0x50, 0x01, 0x00, 0x00]),
+            Err(Error::IndeterminateLength { function: 0x50 })
+        );
+    }
+
+    #[test]
     /// FR-R-149, FR-ADU-E-015 — an ADU length that exceeds 256 fails before allocation.
     fn ut_extent_above_max_adu_len() {
         // FC 16 request with a large byte count that would exceed 256

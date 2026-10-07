@@ -18,8 +18,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rust_modbus::{
-    Address, Ascii, FrameTransport, Framing, MbapHeader, Quantity, RequestPdu, Tcp, TransactionId,
-    UnitId,
+    Address, Ascii, FrameTransport, Framing, MbapHeader, Quantity, RequestPdu, Rtu, Tcp,
+    TransactionId, UnitId,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -156,6 +156,26 @@ fn it_reused_buffer_allocates_once() {
         }
     });
     assert_eq!(rest, 0, "{FRAMES} further frames allocated {rest} times");
+}
+
+#[test]
+/// FR-E-020 — the allocating encode allocates exactly once, a buffer sized on
+/// the framing's maximum ADU length, and the appending path beneath it never
+/// grows that buffer.
+fn it_allocating_encode_allocates_once_at_framing_maximum() {
+    let mut tcp = Vec::new();
+    let counted = allocations(|| {
+        tcp = Tcp::encode_request(&header(), &request()).expect("encodes");
+    });
+    assert_eq!(counted, 1, "TCP encode allocated {counted} times");
+    assert!(tcp.capacity() >= Tcp::MAX_ADU_LEN);
+
+    let mut rtu = Vec::new();
+    let counted = allocations(|| {
+        rtu = Rtu::encode_request(&UnitId(0x11), &request()).expect("encodes");
+    });
+    assert_eq!(counted, 1, "RTU encode allocated {counted} times");
+    assert!(rtu.capacity() >= Rtu::MAX_ADU_LEN);
 }
 
 #[test]
