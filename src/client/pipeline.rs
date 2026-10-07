@@ -146,6 +146,34 @@ impl PipelineTransport for UdpTransport<Tcp> {
 /// A cloneable handle over a TCP transport permitting several requests in
 /// flight at once, distinguished by MBAP transaction id (CL-R-082). Every
 /// clone shares the same background task and transport (CL-R-085).
+///
+/// Only MBAP-framed transports are served (CL-R-106): a TCP `FrameTransport`
+/// builds a handle,
+///
+/// ```no_run
+/// use rust_modbus::{FrameTransport, PipelinedClient, Tcp};
+/// fn build(stream: tokio::io::DuplexStream) -> PipelinedClient<FrameTransport<tokio::io::DuplexStream, Tcp>> {
+///     PipelinedClient::new(FrameTransport::<_, Tcp>::new(stream))
+/// }
+/// ```
+///
+/// while RTU and ASCII, whose framings carry no transaction id, do not compile:
+///
+/// ```compile_fail,E0277
+/// // CL-R-106 — RTU is never served by a pipelined handle.
+/// use rust_modbus::{FrameTransport, PipelinedClient, Rtu};
+/// fn build(stream: tokio::io::DuplexStream) {
+///     let _ = PipelinedClient::new(FrameTransport::<_, Rtu>::new(stream));
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// // CL-R-106 — ASCII is never served by a pipelined handle.
+/// use rust_modbus::{Ascii, FrameTransport, PipelinedClient};
+/// fn build(stream: tokio::io::DuplexStream) {
+///     let _ = PipelinedClient::new(FrameTransport::<_, Ascii>::new(stream));
+/// }
+/// ```
 #[derive(Debug)]
 pub struct PipelinedClient<T = FrameTransport<tokio::net::TcpStream, Tcp>> {
     core: Arc<Core<T>>,
@@ -932,6 +960,33 @@ mod tests {
             .await
             .expect("answers");
         assert_eq!(t3.await.expect("task"), Ok(registers()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-031, CL-E-049 — on `PipelinedClient` (TCP) an I/O failure
+    /// desynchronizes the whole connection: every in-flight request fails at
+    /// once rather than waiting out its timeout, and later sends are refused.
+    async fn ut_tcp_io_failure_desynchronizes_the_whole_connection() {
+        let (client, mut server) = pipeline_pair_with_config(PipelineConfig {
+            response_timeout: Duration::from_secs(10),
+            ..PipelineConfig::default()
+        });
+        let c1 = client.clone();
+        let c2 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        let t2 = tokio::spawn(async move { c2.send(UnitId(0x11), read_holding()).await });
+        server.recv_request().await.expect("receives first");
+        server.recv_request().await.expect("receives second");
+        // The peer goes away: the client's read side reports end of stream.
+        drop(server);
+
+        assert_eq!(t1.await.expect("task"), Err(Error::Desynchronized));
+        assert_eq!(t2.await.expect("task"), Err(Error::Desynchronized));
+        assert!(client.is_desynchronized());
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Desynchronized)
+        );
     }
 
     #[tokio::test]
