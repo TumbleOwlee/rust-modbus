@@ -278,8 +278,8 @@ async fn it_corrupted_request_leaves_the_server_serving_on_rtu() {
 }
 
 #[tokio::test]
-/// SV-R-051 — one corrupted request on ASCII does not end the connection
-/// either, and the failure never leaves `serve_link`.
+/// SV-R-050 — one corrupted request on ASCII does not end the connection
+/// either: the frame is dropped and `serve_link` keeps serving.
 async fn it_corrupted_request_leaves_the_server_serving_on_ascii() {
     corrupted_request_leaves_the_server_serving::<Ascii>(corrupt_lrc).await;
 }

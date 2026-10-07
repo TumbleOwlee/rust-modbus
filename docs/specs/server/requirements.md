@@ -112,7 +112,7 @@ limitations).
 
 **SV-R-050** — A request that cannot be decoded shall be reported to the service (SV-R-034). It shall end the connection only where the framing is not self-locating (FR-R-144); on a self-locating framing the failure shall cost exactly that frame and serving shall continue with the next request. No response shall be sent for a request that could not be decoded, on either framing. This is the responder's counterpart to CL-R-023.
 
-**SV-R-051** — A failure confined to one connection shall not propagate out of serving. Serving shall fail only for a failure of the listener itself that the service answers with `AcceptErrorAction::Stop` (SV-R-059, SV-R-060).
+**SV-R-051** — A failure confined to one connection shall not propagate out of serving a listener. Serving a listener shall fail only for a failure of the listener itself that the service answers with `AcceptErrorAction::Stop` (SV-R-059, SV-R-060). Serving a single link returns per SV-R-062.
 
 **SV-R-052** — A peer that closes the connection between two ADUs shall end the connection with the closed reason of SV-R-033, not as a failure. A close part-way through an ADU is a failure (TR-R-014).
 
@@ -133,3 +133,5 @@ limitations).
 **SV-R-060** — On `AcceptErrorAction::Continue`, serving shall keep every live connection and accept again only once `on_accept_error`'s future has completed, so a service backs off by awaiting inside the notification. On `AcceptErrorAction::Stop`, serving shall drain live connections and return the error (SV-R-051).
 
 **SV-R-061** — A shutdown requested while `on_accept_error` is pending shall drop that future without awaiting its completion, and shutdown shall proceed as for one requested while accepting (SV-R-041–SV-R-044).
+
+**SV-R-062** — `serve_link` shall return `Err(error)` when its link ends with `Disconnect::Failed(error)`, and `Ok(())` when it ends with `Disconnect::Closed`, `Disconnect::Rejected` or `Disconnect::ShuttingDown`. The result shall follow from the same reason passed to `on_disconnect` (SV-R-033), and `serve_link` shall return only once that notification has completed. A single link is the whole of what `serve_link` serves, so its failure is serving's failure.
