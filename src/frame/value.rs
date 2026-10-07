@@ -58,17 +58,51 @@ pub(crate) const BROADCAST_UNIT: UnitId = UnitId(0);
 value! {
     /// A server address on a serial line (FR-R-096, FR-R-117), or the unit
     /// identifier of an MBAP header (FR-R-101).
+    ///
+    /// FR-R-007 — an [`ExceptionStatus`] shares the width but is not a unit
+    /// identifier:
+    ///
+    /// ```compile_fail
+    /// use rust_modbus::{ExceptionStatus, UnitId};
+    /// fn address(_: UnitId) {}
+    /// address(ExceptionStatus(1));
+    /// ```
     UnitId(u8)
 }
 
 value! {
     /// The transaction identifier of an MBAP header (FR-R-101), by which a
     /// response is matched to its request.
+    ///
+    /// FR-R-007 — an [`Address`] shares the width but is not a transaction
+    /// identifier:
+    ///
+    /// ```compile_fail
+    /// use rust_modbus::{Address, TransactionId};
+    /// fn transaction(_: TransactionId) {}
+    /// transaction(Address(1));
+    /// ```
     TransactionId(u16)
 }
 
 value! {
     /// A data address: the start of a range, or the single item written.
+    ///
+    /// FR-R-007 — the right type is accepted:
+    ///
+    /// ```
+    /// use rust_modbus::Address;
+    /// fn start(_: Address) {}
+    /// start(Address(1));
+    /// ```
+    ///
+    /// FR-R-007 — a [`Quantity`] shares the width but is not an address:
+    ///
+    /// ```compile_fail
+    /// use rust_modbus::{Address, Quantity};
+    /// fn start(_: Address) {}
+    /// start(Quantity(1));
+    /// ```
     Address(u16)
 }
 
@@ -79,6 +113,14 @@ value! {
 
 value! {
     /// The contents of one 16-bit register (FR-R-004).
+    ///
+    /// FR-R-007 — a [`Mask`] shares the width but is not register contents:
+    ///
+    /// ```compile_fail
+    /// use rust_modbus::{Mask, RegisterValue};
+    /// fn store(_: RegisterValue) {}
+    /// store(Mask(0x00F2));
+    /// ```
     RegisterValue(u16)
 }
 
@@ -89,6 +131,14 @@ value! {
 
 value! {
     /// The file a record belongs to (FR-R-050).
+    ///
+    /// FR-R-007 — a [`RecordNumber`] shares the width but is not a file number:
+    ///
+    /// ```compile_fail
+    /// use rust_modbus::{FileNumber, RecordNumber};
+    /// fn file(_: FileNumber) {}
+    /// file(RecordNumber(4));
+    /// ```
     FileNumber(u16)
 }
 
@@ -154,5 +204,32 @@ mod tests {
             serde_json::from_str::<UnitId>(&text).expect("deserializes"),
             UnitId(17)
         );
+    }
+
+    #[test]
+    /// FR-E-022 — Display does not judge legality: a unit identifier in the
+    /// reserved range 248–255 renders like any other value.
+    fn ut_display_of_protocol_illegal_value() {
+        assert_eq!(format!("{}", UnitId(250)), "250");
+        assert_eq!(format!("{}", Quantity(2001)), "2001");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    /// FR-R-157, FR-E-021 — deserialization adds no validation beyond the
+    /// integer's width: a reserved unit identifier and a quantity no function
+    /// code accepts both deserialize, and only a value too wide for the
+    /// wrapped integer fails.
+    fn ut_deserialize_imposes_no_validation() {
+        assert_eq!(
+            serde_json::from_str::<UnitId>("250").expect("fits in u8"),
+            UnitId(250)
+        );
+        assert_eq!(
+            serde_json::from_str::<Quantity>("2001").expect("fits in u16"),
+            Quantity(2001)
+        );
+        assert!(serde_json::from_str::<UnitId>("256").is_err());
+        assert!(serde_json::from_str::<Quantity>("65536").is_err());
     }
 }
