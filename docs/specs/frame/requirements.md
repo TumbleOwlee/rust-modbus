@@ -30,6 +30,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (supported function 
 
 **FR-R-155** — Each domain value type of FR-R-007 is a transparent wrapper over its wire representation and imposes no validation beyond that representation's width; a value that is legal on the wire is constructible.
 
+**FR-R-160** — Every 16-bit value 0–65535 is a valid start address in each of the four data tables (coils, discrete inputs, input registers, holding registers); encoding and decoding reject none of them.
+
 ---
 
 ## Function code taxonomy
@@ -77,6 +79,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (supported function 
 **FR-R-132** — Decoding a PDU that carries more bytes than its layout requires fails with a trailing-bytes error rather than silently ignoring the surplus. This does not apply where the layout is defined as consuming all remaining bytes: custom function codes (FR-R-012), CANopen and unknown MEI bodies (`FR-DA-R-*`), and Report Server ID device data (`FR-DA-R-*`).
 
 **FR-R-133** — Every PDU the frame layer can decode re-encodes to the identical byte sequence. Decode and encode are inverse operations for all valid input. For ASCII ADUs this holds subject to `FR-ADU-R-*`'s hexadecimal-case rule.
+
+**FR-R-159** — A decode failure that no more specific error variant describes is reported as `Error::Malformed`.
 
 ---
 

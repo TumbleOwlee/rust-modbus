@@ -30,6 +30,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 
 **SV-R-063** — The server has no configuration whose default is not stated in [`api-contract.md`](./api-contract.md).
 
+**SV-R-069** — The server area's API is identical with and without the `rtu` feature; serial transports come from the transport area (TR-R-032).
+
 ---
 
 ## The exchange
@@ -122,7 +124,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 
 **SV-R-057** — The crate provides `Server::serve_udp`, taking an already-bound UDP socket. Each inbound datagram is dispatched to `Service`'s request-handling method (SV-R-003) independently and its response, if any, is sent to that datagram's source address.
 
-**SV-R-066** — Under `Server::serve_udp` (SV-R-057) no connection identity is assigned and no connection lifecycle notification (SV-R-030, SV-R-031, SV-R-032, SV-R-033, SV-R-034, SV-R-035, SV-R-036) fires, since a UDP datagram is not part of a connection.
+**SV-R-066** — Under `Server::serve_udp` (SV-R-057) no per-peer connection identity is assigned: every datagram reaches the service with the fixed `ConnectionId(0)`, and no connection lifecycle notification (SV-R-030, SV-R-031, SV-R-032, SV-R-033, SV-R-034, SV-R-035, SV-R-036) fires, since a UDP datagram is not part of a connection.
 
 **SV-R-058** — A request-handling failure on one datagram does not affect handling of any other datagram (per-datagram counterpart to SV-R-035's per-connection isolation).
 

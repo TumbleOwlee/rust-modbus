@@ -149,7 +149,7 @@ The length field counts the bytes that follow it: the unit identifier plus the P
 | Get Comm Event Log events | 0–64 bytes | FR-R-065 |
 | MBAP length field | 2–254 | FR-R-103, FR-R-105 |
 | Serial address | 0 broadcast, 1–247 individual, 248–255 carried | FR-R-096 |
-| Address space per register table | 0–65535 | — |
+| Address space per register table | 0–65535 | FR-R-160 |
 
 ---
 

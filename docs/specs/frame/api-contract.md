@@ -229,7 +229,7 @@ One enum, `Error`, with a variant per failure mode — never a formatted string 
 | `IllegalValue` | `field: &'static str, value: u16` | FR-R-027, FR-R-046, FR-R-057, FR-R-076, FR-DA-R-002, FR-DA-R-004 |
 | `ByteCountMismatch` | `expected: usize, actual: usize` | FR-R-043, FR-R-077 |
 | `PduTooLarge` | `len: usize, max: usize` | FR-R-002, FR-R-006 |
-| `Malformed` | — (the residual: input that fits no other variant) | — |
+| `Malformed` | — (the residual: input that fits no other variant) | FR-R-159 |
 
 `Error` implements `core::error::Error` via `thiserror`, so it is usable in `no_std` builds and composes with `std::error::Error` where `std` is present.
 

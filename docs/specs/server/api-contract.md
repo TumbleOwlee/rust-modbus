@@ -173,7 +173,7 @@ pub struct ServerConfig {
 | Feature | Default | Gates | Req |
 |---|---|---|---|
 | `std` | on | the whole server area | SV-R-006 |
-| `rtu` | off | nothing in this area | — |
+| `rtu` | off | nothing in this area | SV-R-069 |
 | `tls` | off | `Server::serve_tls`, `Connection::peer_cert`, `Service::on_tls_handshake_failed` | TR-R-063, SV-R-055, SV-R-056 |
 
 `serve_link` is generic over the stream, so a server over an in-memory duplex pair or over `Rtu` framing needs no feature beyond `std`; only opening a real serial port is gated.

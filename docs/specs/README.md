@@ -57,6 +57,7 @@ Every non-functional requirement except `NF-R-009`, `NF-R-012` and `NF-R-014`, w
 | `NF-R-025` | The `serde` feature declaration in `Cargo.toml`, whose comment cites it, and the `features` and `no-std` CI jobs |
 | `CL-R-039` | Design posture: an API that does not exist. Enforced by the absence of a probe method in `client/api-contract.md` and by review |
 | `TR-R-061` | `deny.toml`'s `[bans]` `deny` list (`native-tls`, `openssl`, `openssl-sys`, `boring`, `boring-sys`) and the `deny` CI job |
+| `SV-R-069` | The `features` CI job (`cargo check` with and without `rtu`); the server module carries no `rtu` gate, checked at review |
 | `TR-R-064` | Structural claim about *when* the TLS handshake runs relative to `FrameTransport` construction; verified by code inspection at review, not a runtime assertion |
 
 **Kind 2 — cross-cutting restatements**
