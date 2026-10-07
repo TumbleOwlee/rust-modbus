@@ -1,5 +1,5 @@
 //! TCP transport over a real loopback socket (TR-R-002, TR-R-020 … TR-R-023,
-//! TR-R-042).
+//! TR-R-042, TR-R-089).
 //!
 //! Every listener binds port 0 and reads the assigned port back, so nothing
 //! here collides with another test run holding a fixed port.
@@ -72,7 +72,7 @@ async fn it_client_and_server_roles_share_one_transport() {
 }
 
 #[tokio::test]
-/// TR-R-021 — a refused connection is an I/O error carrying the kind the
+/// TR-R-089, TR-E-018 — a refused connection is an I/O error carrying the kind the
 /// platform reported, deliberately distinct from a connect timeout.
 async fn it_connect_refused_is_distinct_from_a_timeout() {
     // Bind, read the port back, then drop the listener so nothing is listening
@@ -121,7 +121,7 @@ async fn it_nodelay_is_on_by_default_and_overridable() {
 }
 
 #[tokio::test]
-/// TR-R-042 — the transport imposes no response timeout of its own: a server
+/// TR-R-042, TR-E-027 — the transport imposes no response timeout of its own: a server
 /// that takes its time still gets its response delivered. Per-request timing
 /// belongs to the client area.
 async fn it_transport_does_not_time_out_a_slow_response() {

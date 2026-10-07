@@ -93,7 +93,7 @@ impl From<ConnectionId> for u64 {
     }
 }
 
-/// Whether a connection is served or closed unread (SV-R-032).
+/// Whether a connection is served or closed unread (SV-R-032, SV-R-064).
 ///
 /// A named choice rather than a `bool`: at the call site neither the implementor
 /// nor the reader has to remember which way `true` points.
@@ -200,7 +200,7 @@ pub trait Service: Send + Sync + 'static {
     /// Accepting from a listener failed (SV-R-059).
     ///
     /// Answer [`AcceptErrorAction::Continue`] to keep serving or
-    /// [`AcceptErrorAction::Stop`] to drain and return the error (SV-R-060). The
+    /// [`AcceptErrorAction::Stop`] to drain and return the error (SV-R-067). The
     /// server awaits this before the next accept, so a service backs off by
     /// awaiting inside it; a shutdown requested meanwhile drops the future
     /// (SV-R-061). No [`Connection`]/[`ConnectionId`] exists, since no peer was

@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-131 — the truncated-input error names bytes expected and supplied.
+    /// FR-R-131, FR-E-002 — the truncated-input error names bytes expected and supplied.
     fn ut_truncated_reports_expected_and_supplied() {
         assert_eq!(
             run(&[0x12], be_u16),
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-130 — an empty input errors rather than panicking.
+    /// FR-R-130, FR-E-001 — an empty input errors rather than panicking.
     fn ut_empty_input_errors() {
         assert_eq!(
             run(&[], be_u8),
@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-132 — surplus bytes are rejected, not silently ignored.
+    /// FR-R-132, FR-E-003 — surplus bytes are rejected, not silently ignored.
     fn ut_trailing_bytes_rejected() {
         assert_eq!(
             run(&[0x12, 0x34, 0x56], be_u16),

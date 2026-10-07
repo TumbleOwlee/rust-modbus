@@ -138,7 +138,7 @@ fn request() -> RequestPdu {
 const FRAMES: usize = 100;
 
 #[test]
-/// FR-R-141, NF-R-009 — a caller that reuses one buffer allocates at most once,
+/// FR-R-141, NF-R-009, FR-E-017, FR-E-019 — a caller that reuses one buffer allocates at most once,
 /// however many frames it encodes: the first encode reserves the framing's
 /// maximum and every later one writes into capacity that already exists.
 fn it_reused_buffer_allocates_once() {
@@ -159,7 +159,7 @@ fn it_reused_buffer_allocates_once() {
 }
 
 #[test]
-/// FR-R-143 — ASCII is the carve-out: its wire form is a transformation of the
+/// FR-R-143, FR-E-019 — ASCII is the carve-out: its wire form is a transformation of the
 /// binary ADU rather than a wrapping of it, so it may build that binary form in
 /// one scratch buffer per frame — one, and no more.
 fn it_ascii_encode_allocates_at_most_once_per_frame() {

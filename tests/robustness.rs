@@ -47,7 +47,7 @@ fn decode_every_way(bytes: &[u8]) {
 
 proptest! {
     #[test]
-    /// FR-R-130, NF-R-012 — no decoding operation panics, indexes out of
+    /// FR-R-130, NF-R-012, FR-E-014 — no decoding operation panics, indexes out of
     /// bounds, or aborts, for any input byte sequence whatsoever.
     fn it_decoding_arbitrary_bytes_never_panics(bytes in arbitrary_bytes()) {
         decode_every_way(&bytes);
@@ -68,7 +68,7 @@ proptest! {
 
 proptest! {
     #[test]
-    /// FR-R-130, NF-R-014 — the ASCII decoder holds to the same standard on
+    /// FR-R-130, NF-R-014, FR-E-014 — the ASCII decoder holds to the same standard on
     /// input drawn from its own alphabet, which reaches deeper into it than
     /// random bytes: NF-R-014 requires that generated input, not a fixture list
     /// alone, is what pins the no-panic posture.
@@ -111,7 +111,7 @@ fn valid_adus() -> Vec<(&'static str, Vec<u8>)> {
 }
 
 #[test]
-/// FR-R-132 — a PDU carrying more bytes than its layout requires fails with a
+/// FR-R-132, FR-E-003 — a PDU carrying more bytes than its layout requires fails with a
 /// trailing-bytes error naming the surplus, rather than silently ignoring it.
 fn it_surplus_pdu_bytes_are_rejected() {
     let pdu = RequestPdu::ReadHoldingRegisters {
@@ -162,7 +162,7 @@ fn it_valid_adus_reencode_identically() {
 }
 
 #[test]
-/// FR-R-130 — truncating a valid ADU at every prefix length produces an error,
+/// FR-R-130, FR-E-014 — truncating a valid ADU at every prefix length produces an error,
 /// never a panic and never a successful decode of a partial frame.
 fn it_every_truncation_of_a_valid_adu_is_rejected() {
     for (name, bytes) in valid_adus() {

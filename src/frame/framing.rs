@@ -88,7 +88,7 @@ impl AduBoundary {
     /// frame, so losing it loses every boundary after it too.
     ///
     /// The client and the server consult this to decide whether an undecodable
-    /// frame costs one frame or the whole link (CL-R-023, SV-R-050).
+    /// frame costs one frame or the whole link (CL-R-098, SV-R-050).
     #[must_use]
     pub fn is_self_locating(&self) -> bool {
         match *self {
@@ -141,7 +141,7 @@ pub trait Framing {
         out: &mut Vec<u8>,
     ) -> Result<()>;
 
-    /// Encode a request into an ADU, allocating a buffer for it (FR-R-140).
+    /// Encode a request into an ADU, allocating a buffer for it (FR-R-156).
     ///
     /// # Errors
     ///
@@ -173,7 +173,7 @@ pub trait Framing {
         out: &mut Vec<u8>,
     ) -> Result<()>;
 
-    /// Encode a response into an ADU, allocating a buffer for it (FR-R-140).
+    /// Encode a response into an ADU, allocating a buffer for it (FR-R-156).
     ///
     /// # Errors
     ///
@@ -221,11 +221,11 @@ mod tests {
         }
     }
 
-    /// Assert FR-R-140, FR-R-141 and FR-R-142 over one framing.
+    /// Assert FR-R-140, FR-R-141, FR-R-142 and FR-R-156 over one framing.
     fn appending_encode_holds<F: Framing>(header: &F::Header) {
         let allocating = F::encode_request(header, &request()).expect("encodes");
 
-        // FR-R-140 — appending yields the same bytes as allocating, after what
+        // FR-R-140, FR-R-156 — appending yields the same bytes as allocating, after what
         // the buffer already held.
         let mut out = vec![0xAA, 0xBB];
         F::encode_request_into(header, &request(), &mut out).expect("encodes");
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(out.get(1), Some(&0xBB));
         assert_eq!(out.get(2..), Some(allocating.as_slice()));
 
-        // FR-R-140 — and the same holds for a response.
+        // FR-R-140, FR-R-156 — and the same holds for a response.
         let allocating = F::encode_response(header, &response()).expect("encodes");
         let mut out = Vec::new();
         F::encode_response_into(header, &response(), &mut out).expect("encodes");
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-140, FR-R-141, FR-R-142 — RTU's appending encode appends the bytes
+    /// FR-R-140, FR-R-141, FR-R-142, FR-R-156, FR-E-015, FR-E-016, FR-E-017 — RTU's appending encode appends the bytes
     /// its allocating form returns, reserves the framing maximum first, and
     /// restores the buffer when it fails.
     fn ut_rtu_appending_encode() {
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-140, FR-R-141, FR-R-142 — TCP's appending encode does the same,
+    /// FR-R-140, FR-R-141, FR-R-142, FR-R-156, FR-E-015, FR-E-016, FR-E-017 — TCP's appending encode does the same,
     /// with a length field that is only known once the PDU has been written.
     fn ut_tcp_appending_encode() {
         appending_encode_holds::<Tcp>(&MbapHeader {
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-140, FR-R-141, FR-R-142 — ASCII's appending encode does the same,
+    /// FR-R-140, FR-R-141, FR-R-142, FR-R-156, FR-E-015, FR-E-016, FR-E-017 — ASCII's appending encode does the same,
     /// despite transforming the binary ADU through its scratch buffer
     /// (FR-R-143).
     fn ut_ascii_appending_encode() {

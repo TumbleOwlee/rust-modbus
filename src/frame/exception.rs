@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-081 — decoding reports the original function code with the high bit
+    /// FR-R-081, FR-E-009 — decoding reports the original function code with the high bit
     /// cleared, not the raw byte.
     fn ut_decode_reports_original_function_code() {
         assert_eq!(
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-083 — an unnamed exception code, including 0, decodes successfully
+    /// FR-R-083, FR-E-010 — an unnamed exception code, including 0, decodes successfully
     /// into a general value rather than failing.
     fn ut_unknown_exception_code_wrapped() {
         for byte in [0, 7, 9, 12, 13, 100, 255] {
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-083 — every one of the 256 bytes decodes, so no server's choice of
+    /// FR-R-083, FR-E-010 — every one of the 256 bytes decodes, so no server's choice of
     /// exception code can make a response undecodable.
     fn ut_every_exception_byte_decodes() {
         for byte in 0..=255u8 {
@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-084 — encoding a general value holding a named code is a
+    /// FR-R-084, FR-E-011 — encoding a general value holding a named code is a
     /// reserved-code error, so one wire byte keeps one representation.
     fn ut_other_holding_named_code_is_reserved_error() {
         for (byte, _) in ExceptionCode::NAMED {
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-085 — an exception response PDU of any length other than two fails
+    /// FR-R-085, FR-E-012 — an exception response PDU of any length other than two fails
     /// with a length error. This is more specific than the generic truncation
     /// and trailing-byte rules, and takes precedence over them.
     fn ut_exception_length_not_two_errors() {
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-086 — the exception path works for a custom function code, not only
+    /// FR-R-086, FR-E-013 — the exception path works for a custom function code, not only
     /// for the named ones.
     fn ut_exception_for_custom_function_code() {
         let decoded = ExceptionResponse::decode(&[0x80 | 100, 0x0B]);
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-154 — an unnamed exception code Displays with its decimal byte
+    /// FR-R-154, FR-E-023 — an unnamed exception code Displays with its decimal byte
     /// value, since there is no name to substitute.
     fn ut_exception_code_display_other() {
         assert_eq!(

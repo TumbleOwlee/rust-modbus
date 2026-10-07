@@ -115,7 +115,7 @@ async fn it_exception_over_a_socket_leaves_the_client_usable() {
 }
 
 #[tokio::test]
-/// CL-R-031, CL-R-032 — a peer that closes the connection desynchronizes the
+/// CL-R-031, CL-R-032, CL-E-014 — a peer that closes the connection desynchronizes the
 /// client, which then refuses further requests instead of writing into a socket
 /// whose other end is gone.
 async fn it_closed_connection_desynchronizes_the_client() {
@@ -175,7 +175,7 @@ async fn it_client_surrenders_a_live_socket() {
 }
 
 #[tokio::test]
-/// CL-R-037 — bind an ephemeral port, accept, read one request, drop the
+/// CL-R-037, CL-E-025 — bind an ephemeral port, accept, read one request, drop the
 /// socket; the client's next exchange fails and `state()` is
 /// `Unusable(UnusableReason::PeerClosed)`.
 async fn it_client_reports_peer_closed_after_server_drops() {

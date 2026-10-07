@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-078 — the object count is a single wire byte (FR-R-075), so 256
+    /// FR-R-078, FR-DA-E-023 — the object count is a single wire byte (FR-R-075), so 256
     /// objects cannot be expressed; encoding them fails with an out-of-range
     /// error naming that field rather than truncating the count and emitting a
     /// frame no peer could parse.
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-078 — an object's length is a single wire byte too (FR-R-075), so a
+    /// FR-R-078, FR-DA-E-023 — an object's length is a single wire byte too (FR-R-075), so a
     /// 256-byte object value fails to encode with an out-of-range error naming
     /// the length field. 255 bytes is the largest value that fits, and encodes.
     fn ut_device_id_response_object_value_above_255_bytes_rejected() {

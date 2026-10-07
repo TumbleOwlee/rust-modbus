@@ -66,7 +66,7 @@ pub enum UnusableReason {
     /// CL-R-037).
     Silent,
     /// A frame did not decode on a framing that is not self-locating
-    /// (CL-R-023, CL-R-037).
+    /// (CL-R-098, CL-R-037).
     Undecodable,
 }
 
@@ -88,12 +88,12 @@ pub enum UnusableReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
     /// No exchange has been attempted, or only broadcast writes have been
-    /// (CL-R-036).
+    /// (CL-R-102).
     Untried,
     /// The last exchange was answered, including with an exception (CL-R-036).
     Answered,
     /// The last exchange was not answered, and the client is still usable
-    /// (CL-R-023).
+    /// (CL-R-098).
     Unanswered,
     /// Every further request will be refused (CL-R-032). The reason names what
     /// the client observed at the moment it became so.
@@ -144,7 +144,7 @@ pub struct Client<T, F> {
     next_transaction: TransactionId,
     /// What this client has observed about its own usability (CL-R-035). The
     /// desynchronization flag of CL-R-031 is one of its cases rather than a
-    /// second value beside it, so the two cannot disagree (CL-R-034).
+    /// second value beside it, so the two cannot disagree (CL-R-101).
     state: ClientState,
     /// Which framing this client speaks — `T` alone no longer names it now
     /// that `T` ranges over any `ClientTransport`, not just `FrameTransport<_,
@@ -237,13 +237,13 @@ where
 
         if F::is_broadcast(unit) {
             // Nothing was heard, and nothing was expected to be: a broadcast is
-            // no evidence either way, so the report stands as it was (CL-R-036).
+            // no evidence either way, so the report stands as it was (CL-R-102).
             return Ok(None);
         }
 
         // Absolute, and fixed once the request is on the wire: waiting is never
         // extended by the time spent writing (CL-R-014) or by discarding a
-        // response that was not ours (CL-R-021).
+        // response that was not ours (CL-R-097).
         let deadline = Instant::now() + self.config.response_timeout;
         loop {
             let received =
@@ -263,7 +263,7 @@ where
                     // (CL-R-031). A *frame* failure costs the link only where
                     // the next boundary was carried by the frame that failed;
                     // silence and delimiters are still on the wire, so there
-                    // the failure costs exactly that frame (CL-R-023).
+                    // the failure costs exactly that frame (CL-R-098).
                     self.state = if error.ends_stream() || !F::boundary().is_self_locating() {
                         ClientState::Unusable(classify_unusable_reason(&error))
                     } else {
@@ -276,7 +276,7 @@ where
             };
             if !F::is_response_to(&header, &header_in) {
                 // Another exchange's reply, or a late one. Discard it and keep
-                // waiting against the same deadline (CL-R-021).
+                // waiting against the same deadline (CL-R-021, CL-R-097).
                 continue;
             }
             // The peer answered. What it said may still be wrong, but the link
@@ -986,7 +986,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-021 — a response whose header does not answer the request is
+    /// CL-R-021, CL-E-002 — a response whose header does not answer the request is
     /// discarded and the wait continues, rather than being handed back as if it
     /// did.
     async fn ut_unmatched_response_is_discarded() {
@@ -1018,7 +1018,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-022 — a matching header carrying another function's response is a
+    /// CL-R-022, CL-E-003 — a matching header carrying another function's response is a
     /// protocol error naming both codes, not a silent mismatch.
     async fn ut_wrong_function_code_is_an_error() {
         let (mut client, mut server) = pair();
@@ -1041,7 +1041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-040, CL-R-042 — `call` hands an exception response back verbatim
+    /// CL-R-040, CL-R-042, CL-E-004 — `call` hands an exception response back verbatim
     /// rather than reinterpreting it, and the client stays usable.
     async fn ut_call_returns_an_exception_response_verbatim() {
         let (mut client, mut server) = pair();
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-030, CL-R-031 — a silent server costs the response timeout, then
+    /// CL-R-030, CL-R-031, CL-E-001 — a silent server costs the response timeout, then
     /// fails as a timeout naming the response, and leaves the client
     /// desynchronized.
     async fn ut_silence_times_out_and_desynchronizes() {
@@ -1091,7 +1091,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-023 — over TCP, a response that cannot be decoded fails with the
+    /// CL-R-023, CL-R-098, CL-E-006 — over TCP, a response that cannot be decoded fails with the
     /// frame area's own decoding error, unaltered, and leaves the client
     /// unusable: the MBAP length was trusted to read the ADU off the stream, so
     /// once its contents turn out to be nonsense there is no way to know where
@@ -1134,7 +1134,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-023 — over RTU the same failure costs exactly one frame. The next
+    /// CL-R-023, CL-R-098, CL-E-007 — over RTU the same failure costs exactly one frame. The next
     /// boundary is the line falling silent, not a length inside the frame that
     /// went wrong, so the client stays usable and the request after it is
     /// answered normally. The corrupt reply below is a valid ADU with its last
@@ -1189,8 +1189,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-031 — a timeout still desynchronizes on RTU, unchanged by
-    /// CL-R-023's framing rule: a late response carries only a unit
+    /// CL-R-031, CL-E-009 — a timeout still desynchronizes on RTU, unchanged by
+    /// CL-R-098's framing rule: a late response carries only a unit
     /// identifier, so it would satisfy CL-R-020 for the *next* request and be
     /// delivered as that request's answer.
     async fn ut_timeout_still_desynchronizes_on_rtu() {
@@ -1212,7 +1212,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-014 — the deadline is absolute: a stream of unmatched responses
+    /// CL-R-014, CL-R-097, CL-E-002, CL-E-013 — the deadline is absolute: a stream of unmatched responses
     /// cannot hold a request open past the timeout by restarting it.
     async fn ut_discarding_does_not_extend_the_deadline() {
         let (mut client, mut server) = pair();
@@ -1240,7 +1240,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-032 — a desynchronized client refuses the next request outright,
+    /// CL-R-032, CL-E-017 — a desynchronized client refuses the next request outright,
     /// without writing: the peer's next bytes are no longer accounted for.
     async fn ut_desynchronized_client_writes_nothing() {
         let (mut client, mut server) = pair();
@@ -1306,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    /// CL-R-030 — the default response timeout is 1 second.
+    /// CL-R-100 — the default response timeout is 1 second.
     fn ut_default_response_timeout() {
         assert_eq!(
             ClientConfig::default(),
@@ -1318,7 +1318,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    /// CL-R-065 — `ClientConfig` round-trips through JSON. The timeout keeps
+    /// CL-R-065, CL-R-103 — `ClientConfig` round-trips through JSON. The timeout keeps
     /// `Duration`'s own representation, so every value `Duration` can hold
     /// survives: one finer than a millisecond, and one far larger than any
     /// nanosecond count would fit.
@@ -1578,7 +1578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-040, CL-R-042 — a typed method surfaces an exception as a failure
+    /// CL-R-040, CL-R-042, CL-E-004 — a typed method surfaces an exception as a failure
     /// carrying both codes, never as a success, and the client stays usable.
     async fn ut_typed_method_fails_on_an_exception() {
         let (mut client, server) = pair();
@@ -1609,7 +1609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-041 — an exception code the crate does not name is a legal thing
+    /// CL-R-041, CL-E-005 — an exception code the crate does not name is a legal thing
     /// for a server to send, so it reaches the caller unaltered.
     async fn ut_unnamed_exception_code_reaches_the_caller() {
         let (mut client, server) = pair();
@@ -1633,7 +1633,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-064 — an echo that disagrees with what was sent is not an error
+    /// CL-R-064, CL-E-032 — an echo that disagrees with what was sent is not an error
     /// here. It is a server defect the caller can detect through `call`; the
     /// client does not fail a completed exchange over it.
     async fn ut_echoed_fields_are_not_compared() {
@@ -1695,7 +1695,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-052 — a broadcast read fails before anything is written: an answer
+    /// CL-R-052, CL-E-018 — a broadcast read fails before anything is written: an answer
     /// that cannot arrive is a caller error, not a silent no-op.
     async fn ut_broadcast_read_is_rejected_before_writing() {
         let (client, server) = duplex(1024);
@@ -1878,7 +1878,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-013, CL-R-031 — a write that fails leaves the client unusable: a
+    /// CL-R-013, CL-R-031, CL-E-016 — a write that fails leaves the client unusable: a
     /// partially written ADU is on the wire and no later request can repair it,
     /// so the failure must not look recoverable.
     async fn ut_failed_write_desynchronizes() {
@@ -1926,7 +1926,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-035 — a client that has done nothing says so, rather than claiming
+    /// CL-R-035, CL-E-020 — a client that has done nothing says so, rather than claiming
     /// a health it has no evidence for.
     async fn ut_new_client_is_untried() {
         let (client, _server) = pair();
@@ -1934,7 +1934,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-035 — an exchange the peer answered is reported as answered, and
+    /// CL-R-035, CL-E-022 — an exchange the peer answered is reported as answered, and
     /// stays that way while nothing further has been observed.
     async fn ut_answered_after_a_matched_response() {
         let (mut client, mut server) = pair();
@@ -1960,7 +1960,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-036 — an exception is an answer. The server replied; it merely
+    /// CL-R-036, CL-E-022 — an exception is an answer. The server replied; it merely
     /// refused, which says as much about the link as a success does.
     async fn ut_exception_counts_as_answered() {
         let (mut client, mut server) = pair();
@@ -1988,7 +1988,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-036 — a response carrying another function's code is still an
+    /// CL-R-036, CL-E-022 — a response carrying another function's code is still an
     /// answer: the frame corresponded to the request and decoded.
     async fn ut_unexpected_function_counts_as_answered() {
         let (mut client, mut server) = pair();
@@ -2012,7 +2012,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-036 — a broadcast is heard by no one that answers, so it leaves the
+    /// CL-R-102, CL-E-021, CL-E-024 — a broadcast is heard by no one that answers, so it leaves the
     /// report exactly as it found it: `Untried` stays untried, and an earlier
     /// answer is neither confirmed nor erased.
     async fn ut_broadcast_write_leaves_state_unchanged() {
@@ -2065,7 +2065,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-034 — a corrupt frame on a self-locating framing leaves the client
+    /// CL-R-034, CL-R-101, CL-E-023 — a corrupt frame on a self-locating framing leaves the client
     /// usable but the exchange unanswered, and the boolean report agrees with
     /// the state it is a projection of.
     async fn ut_undecodable_response_on_rtu_reports_unanswered() {
@@ -2103,7 +2103,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-038 — the report is made of what has already been observed: asking
+    /// CL-R-038, CL-E-030 — the report is made of what has already been observed: asking
     /// for it writes nothing, reads nothing, and returns the same answer twice.
     async fn ut_state_reports_without_touching_the_transport() {
         let (client, mut server) = pair();
@@ -2122,7 +2122,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-037 — the response timeout elapses; state is
+    /// CL-R-037, CL-E-028 — the response timeout elapses; state is
     /// `Unusable(UnusableReason::Silent)`.
     async fn ut_timeout_reports_silent() {
         let (mut client, mut server) = pair();
@@ -2143,7 +2143,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-037 — a malformed TCP response; state is
+    /// CL-R-037, CL-E-029 — a malformed TCP response; state is
     /// `Unusable(UnusableReason::Undecodable)`.
     async fn ut_undecodable_response_on_tcp_reports_undecodable() {
         let (client, server) = duplex(1024);
@@ -2175,7 +2175,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-037 — drop the peer half, then issue a request; state is
+    /// CL-R-037, CL-E-026, CL-E-027 — drop the peer half, then issue a request; state is
     /// `Unusable(UnusableReason::Io { kind })`.
     async fn ut_write_failure_reports_the_io_kind() {
         let (client, server) = duplex(1024);
@@ -2196,7 +2196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// CL-R-037 — peer reads the request then shuts down; state is
+    /// CL-R-037, CL-E-025 — peer reads the request then shuts down; state is
     /// `Unusable(UnusableReason::PeerClosed)`.
     async fn ut_peer_close_before_a_response_reports_peer_closed() {
         let (client, server) = duplex(1024);

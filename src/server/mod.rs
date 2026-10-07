@@ -82,7 +82,7 @@ where
     /// (SV-R-007).
     ///
     /// Returns when the link ends, once `on_disconnect` has completed. The
-    /// result is that of the link's end (SV-R-062).
+    /// result is that of the link's end (SV-R-062, SV-R-068).
     ///
     /// # Errors
     ///
@@ -117,7 +117,7 @@ where
     ///
     /// Fails if the listener does and the service answers
     /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
-    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// (SV-R-059, SV-R-067). Connections already running are finished before the
     /// failure is returned.
     pub async fn serve(self, listener: crate::transport::TcpListener) -> Result<()> {
         self.serve_framed::<Tcp>(listener).await
@@ -134,7 +134,7 @@ where
     ///
     /// Fails if the listener does and the service answers
     /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
-    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// (SV-R-059, SV-R-067). Connections already running are finished before the
     /// failure is returned.
     pub async fn serve_framed<F>(self, listener: crate::transport::TcpListener) -> Result<()>
     where
@@ -190,7 +190,7 @@ where
     ///
     /// A datagram that fails to receive or decode is reported through
     /// [`Service::on_error`] and costs nothing beyond itself (SV-R-058,
-    /// TR-R-074): unlike a stream, a UDP socket carries no boundary state a
+    /// TR-R-098): unlike a stream, a UDP socket carries no boundary state a
     /// bad datagram could desynchronize, so this never ends serving.
     ///
     /// Built on [`recv_datagram_request`](crate::transport::recv_datagram_request)
@@ -258,7 +258,7 @@ where
     ///
     /// Fails if the listener's TCP accept does and the service answers
     /// [`AcceptErrorAction::Stop`] (the default) to [`Service::on_accept_error`]
-    /// (SV-R-059, SV-R-060). Connections already running are finished before the
+    /// (SV-R-059, SV-R-067). Connections already running are finished before the
     /// failure is returned.
     #[cfg(feature = "tls")]
     pub async fn serve_tls<F>(self, listener: crate::transport::TlsListener) -> Result<()>
@@ -311,7 +311,7 @@ where
     ///
     /// `Continue` keeps `connections` and accepts again once the hook's future
     /// has completed (SV-R-060). `Stop` drains them and returns the error
-    /// (SV-R-051). A shutdown while accepting, or while the hook is pending,
+    /// (SV-R-067, SV-R-051). A shutdown while accepting, or while the hook is pending,
     /// drains and returns `Ok`; the hook's future is dropped, not awaited
     /// (SV-R-061).
     async fn next_accept<T, Fut>(
@@ -371,7 +371,7 @@ enum Accepted<T> {
     Done(Result<()>),
 }
 
-/// The `ConnectionId` every UDP-dispatched notification carries (SV-R-057).
+/// The `ConnectionId` every UDP-dispatched notification carries (SV-R-057, SV-R-066).
 ///
 /// A UDP datagram is not part of a connection, so no identity is allocated
 /// for it (SV-R-031 does not apply): every datagram uses this fixed value
@@ -597,7 +597,7 @@ mod tests {
         overlap: Option<Arc<tokio::sync::Barrier>>,
         /// Holds every request until the test releases a permit (SV-R-042).
         hold: Option<Arc<tokio::sync::Semaphore>>,
-        /// Holds `on_disconnect` open until the test adds a permit (SV-R-062).
+        /// Holds `on_disconnect` open until the test adds a permit (SV-R-062, SV-R-068).
         disconnect_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
 
@@ -664,7 +664,7 @@ mod tests {
         }
 
         /// A service whose `on_disconnect` does not complete until
-        /// `release_disconnect` (SV-R-062).
+        /// `release_disconnect` (SV-R-062, SV-R-068).
         fn gated_disconnect() -> Arc<Self> {
             Arc::new(Self {
                 events: Mutex::new(Vec::new()),
@@ -840,7 +840,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-012 — a service's refusal reaches the wire as an exception response
+    /// SV-R-012, SV-E-001 — a service's refusal reaches the wire as an exception response
     /// to the function it refused.
     async fn ut_refusal_becomes_an_exception_response() {
         let service = Recorder::new(|_| Err(ExceptionCode::IllegalDataAddress));
@@ -868,7 +868,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-013 — the server sends what the service returned, even when it
+    /// SV-R-013, SV-E-014 — the server sends what the service returned, even when it
     /// answers one function with another's response.
     async fn ut_response_is_sent_unaltered() {
         let service = Recorder::new(|_| {
@@ -903,7 +903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-014, SV-R-034 — a response that will not encode is reported and
+    /// SV-R-014, SV-R-034, SV-E-013 — a response that will not encode is reported and
     /// costs only its own request: the connection answers the next one.
     async fn ut_unencodable_response_reports_and_continues() {
         let service = Recorder::new(|request| match request {
@@ -984,7 +984,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-032 — a service that answers `Acceptance::Reject` gets a connection
+    /// SV-R-032, SV-E-019 — a service that answers `Acceptance::Reject` gets a connection
     /// closed without a request being read, ending with the refusing reason.
     async fn ut_refused_connection_reads_nothing() {
         let service = Recorder::refusing();
@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-062 — a link that fails returns the error it ended with.
+    /// SV-R-062, SV-E-025 — a link that fails returns the error it ended with.
     async fn ut_serve_link_returns_the_error_of_a_failed_link() {
         let service = Recorder::new(|_| Ok(registers()));
         let (serving, client) = link(Arc::clone(&service));
@@ -1069,7 +1069,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-062 — `serve_link` returns only once `on_disconnect` has completed,
+    /// SV-R-068 — `serve_link` returns only once `on_disconnect` has completed,
     /// for a failure as for a clean end.
     async fn ut_serve_link_returns_after_on_disconnect_completes() {
         let service = Recorder::gated_disconnect();
@@ -1097,7 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-062 — a shutdown that arrives while a failed link's `on_disconnect`
+    /// SV-R-062, SV-E-027 — a shutdown that arrives while a failed link's `on_disconnect`
     /// is pending does not change the result: it follows the reason the service
     /// received.
     async fn ut_serve_link_result_follows_the_reason_on_disconnect_received() {
@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-033, SV-R-052 — a peer that closes between two ADUs ends the
+    /// SV-R-033, SV-R-052, SV-E-017 — a peer that closes between two ADUs ends the
     /// connection cleanly, not as a failure, and is notified once.
     async fn ut_clean_close_ends_the_connection_cleanly() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1158,7 +1158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-050 — over TCP an undecodable request is reported and ends the
+    /// SV-R-050, SV-E-003, SV-E-026 — over TCP an undecodable request is reported and ends the
     /// connection, and `serve_link` returns that failure (SV-R-062). The MBAP length was trusted to read the ADU, so once its
     /// contents turn out to be nonsense there is no way to find the next one.
     async fn ut_undecodable_request_ends_the_connection_on_tcp() {
@@ -1195,7 +1195,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// SV-R-050 — over RTU the same failure costs exactly one frame: the next
+    /// SV-R-050, SV-R-065, SV-E-004 — over RTU the same failure costs exactly one frame: the next
     /// boundary is the line falling silent, so the server reports the failure,
     /// answers nothing, and serves the next request. One noise burst must not
     /// take a device off the bus.
@@ -1249,7 +1249,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-020, SV-R-021 — a configured unit answers only itself, and a request
+    /// SV-R-020, SV-R-021, SV-E-008 — a configured unit answers only itself, and a request
     /// for another unit draws no response without ending the connection.
     async fn ut_configured_unit_ignores_other_units() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1296,7 +1296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-008, SV-R-022 — with no unit configured, which is the default, every
+    /// SV-R-008, SV-R-022, SV-E-011 — with no unit configured, which is the default, every
     /// identifier reaches the service.
     async fn ut_unconfigured_unit_dispatches_every_unit() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// SV-R-023 — a broadcast is dispatched and never answered, even when the
+    /// SV-R-023, SV-E-012 — a broadcast is dispatched and never answered, even when the
     /// server is configured for another unit.
     async fn ut_broadcast_is_dispatched_but_unanswered() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1481,7 +1481,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-035 — one connection failing neither disturbs another nor stops the
+    /// SV-R-035, SV-E-020 — one connection failing neither disturbs another nor stops the
     /// server accepting.
     async fn ut_one_failed_connection_does_not_disturb_the_others() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1536,7 +1536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-040, SV-R-041, SV-R-043, SV-R-044 — shutdown ends an idle
+    /// SV-R-040, SV-R-041, SV-R-043, SV-R-044, SV-E-024 — shutdown ends an idle
     /// connection with the shutting-down reason, and returns only once serving
     /// has finished.
     async fn ut_shutdown_ends_an_idle_connection() {
@@ -1573,7 +1573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-042, SV-R-044 — a request already dispatched is answered before its
+    /// SV-R-042, SV-R-044, SV-E-023 — a request already dispatched is answered before its
     /// connection closes, and shutdown waits for it.
     async fn ut_shutdown_waits_for_a_request_in_flight() {
         let service = Recorder::holding();
@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-033, SV-R-050 — a peer that vanishes part-way through an ADU ends
+    /// SV-R-033, SV-R-050, SV-E-018 — a peer that vanishes part-way through an ADU ends
     /// the connection as a failure, distinct from the clean close of SV-R-052.
     async fn ut_close_mid_adu_ends_the_connection_as_a_failure() {
         let service = Recorder::new(|_| Ok(registers()));
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-057 — a UDP datagram is dispatched to the service and answered to
+    /// SV-R-057, SV-R-066 — a UDP datagram is dispatched to the service and answered to
     /// its source address, with no `on_connect`/`on_disconnect` at all, unlike
     /// every stream-based path (ut_serve_link_answers_a_request, above).
     async fn ut_serve_udp_answers_a_request_with_no_connection_lifecycle() {
@@ -2065,7 +2065,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-060 — `Continue` keeps the live connection and accepts again.
+    /// SV-R-060, SV-E-021 — `Continue` keeps the live connection and accepts again.
     async fn ut_continue_keeps_connections_and_accepts_again() {
         let watcher = AcceptWatcher::new(&[AcceptErrorAction::Continue], None, None);
         let server = Server::new(Arc::clone(&watcher));
@@ -2123,7 +2123,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-060 — `Stop` drains live connections, then returns the error.
+    /// SV-R-067, SV-E-021 — `Stop` drains live connections, then returns the error.
     async fn ut_stop_drains_live_connections_then_returns_error() {
         let watcher = AcceptWatcher::new(&[AcceptErrorAction::Stop], None, None);
         let server = Server::new(Arc::clone(&watcher));
@@ -2144,7 +2144,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-061 — a shutdown while the hook is pending drops its future and
+    /// SV-R-061, SV-E-022 — a shutdown while the hook is pending drops its future and
     /// proceeds as for one during accept: drained, `Ok`.
     async fn ut_shutdown_during_pending_hook_drops_it_and_proceeds() {
         let dropped = Arc::new(core::sync::atomic::AtomicBool::new(false));

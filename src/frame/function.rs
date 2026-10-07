@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-011 — an unnamed code in 1–127 becomes a custom code carrying the raw
+    /// FR-R-011, FR-E-006 — an unnamed code in 1–127 becomes a custom code carrying the raw
     /// byte, including the user-defined ranges 65–72 and 100–110.
     fn ut_unnamed_code_becomes_custom() {
         for byte in [9, 10, 13, 14, 18, 19, 25, 42, 44, 65, 72, 100, 110, 127] {
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-013 — encoding a custom code holding a named byte is a reserved-code
+    /// FR-R-013, FR-E-008 — encoding a custom code holding a named byte is a reserved-code
     /// error, so one wire code keeps exactly one representation.
     fn ut_custom_with_named_code_is_reserved_error() {
         for (byte, _) in FunctionCode::NAMED {
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-014 — code 0 is invalid in either direction.
+    /// FR-R-014, FR-E-004 — code 0 is invalid in either direction.
     fn ut_code_zero_is_invalid() {
         assert_eq!(FunctionCode::decode(0), Err(Error::InvalidFunctionCode(0)));
         assert_eq!(
@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-015 — codes 128–255 never denote a request; they are exception
+    /// FR-R-015, FR-E-005 — codes 128–255 never denote a request; they are exception
     /// space.
     fn ut_codes_above_127_invalid_as_request() {
         for byte in [128, 129, 131, 200, 255] {
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-153 — a custom code Displays with its decimal byte value, since
+    /// FR-R-153, FR-E-023 — a custom code Displays with its decimal byte value, since
     /// there is no name to substitute.
     fn ut_function_code_display_custom() {
         assert_eq!(

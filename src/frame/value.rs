@@ -113,7 +113,7 @@ mod tests {
     use alloc::format;
 
     #[test]
-    /// FR-R-007 — each domain value is a transparent wrapper: the wrapped
+    /// FR-R-155 — each domain value is a transparent wrapper: the wrapped
     /// integer goes in and comes back out unchanged, in either direction.
     fn ut_values_are_transparent() {
         assert_eq!(UnitId::from(0x11).0, 0x11);
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-007 — no validation beyond the wire width: every value the field can
+    /// FR-R-155, FR-E-026 — no validation beyond the wire width: every value the field can
     /// hold is constructible, including the reserved unit range and a quantity
     /// no function code accepts.
     fn ut_values_impose_no_validation() {
@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    /// FR-R-152 — a domain value Displays as its bare wrapped value, with no
+    /// FR-R-152, FR-R-158 — a domain value Displays as its bare wrapped value, with no
     /// type name, field name, or punctuation; Debug is unaffected.
     fn ut_values_display_bare() {
         assert_eq!(format!("{}", UnitId(17)), "17");

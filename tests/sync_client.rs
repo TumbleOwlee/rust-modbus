@@ -1,4 +1,4 @@
-//! The blocking client (CL-R-070 … CL-R-079).
+//! The blocking client (CL-R-070 … CL-R-079, CL-R-104, CL-R-105).
 //!
 //! These are plain `#[test]` functions, not `#[tokio::test]`: the whole point of
 //! the blocking client is that the calling thread has no runtime, so a test that
@@ -61,7 +61,7 @@ fn serve_on_a_thread(
 }
 
 #[test]
-/// CL-R-073, CL-R-076 — a blocking client is constructed from an address by a
+/// CL-R-104, CL-R-076 — a blocking client is constructed from an address by a
 /// thread that owns no runtime, and owns the one it needs itself. A caller with
 /// a runtime would have used `Client`; this test would not compile against a
 /// constructor that demanded one.
@@ -352,7 +352,7 @@ fn it_sync_mirrors_every_async_request_method() {
 }
 
 #[test]
-/// CL-R-077 — two calls back to back with no sleep between them both succeed.
+/// CL-R-077, CL-E-041 — two calls back to back with no sleep between them both succeed.
 /// A facade that did not settle the exchange before returning would need the
 /// caller to pause; this pins that it does not.
 fn it_sync_back_to_back_calls_need_no_sleep() {
@@ -430,7 +430,7 @@ fn serve_silence() -> (SocketAddr, mpsc::Sender<()>, thread::JoinHandle<()>) {
 }
 
 #[test]
-/// CL-R-072, CL-R-073 — the response timeout of CL-R-030 fires on a blocking
+/// CL-R-072, CL-R-073, CL-E-042, CL-E-043 — the response timeout of CL-R-030 fires on a blocking
 /// call exactly as on an async one, and the client is desynchronized afterwards
 /// (CL-R-031) so the next call is refused without writing (CL-R-032).
 ///
@@ -495,7 +495,7 @@ fn it_sync_exception_surfaces_and_leaves_the_client_usable() {
 }
 
 #[test]
-/// CL-R-072 — the broadcast rules hold identically: a write to unit 0 returns
+/// CL-R-072, CL-E-044 — the broadcast rules hold identically: a write to unit 0 returns
 /// without awaiting a reply (CL-R-051) and a read to unit 0 fails before
 /// anything is written (CL-R-052).
 ///
@@ -556,7 +556,7 @@ fn it_sync_broadcast_rules_match_the_async_client() {
 }
 
 #[test]
-/// CL-R-075 — a *request* method called from inside a runtime is refused, not
+/// CL-R-075, CL-E-040 — a *request* method called from inside a runtime is refused, not
 /// just a constructor. The client is built outside the runtime, so the refusal
 /// comes from the method rather than from construction.
 fn it_sync_request_inside_a_runtime_is_refused() {
@@ -579,7 +579,7 @@ fn it_sync_request_inside_a_runtime_is_refused() {
 }
 
 #[test]
-/// CL-R-074 — every blocking type and every argument and return type is
+/// CL-R-074, CL-R-105 — every blocking type and every argument and return type is
 /// nameable through `rust_modbus` alone. This binding compiles only if no
 /// runtime type is required to spell the surface; were `SyncClient::connect` to
 /// take a `tokio::runtime::Handle`, or a method to return one, this would not.

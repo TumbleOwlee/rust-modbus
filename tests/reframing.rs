@@ -1,5 +1,5 @@
 //! Recovery from a corrupted frame on a self-locating framing, end to end
-//! (FR-R-144, CL-R-023, SV-R-050, TR-R-044).
+//! (FR-R-144, CL-R-098, SV-R-050, TR-R-044).
 //!
 //! This crate's own client against this crate's own server over a link with a
 //! noisy cable in the middle: a relay that corrupts one nominated frame and
@@ -26,7 +26,7 @@ const UNIT: UnitId = UnitId(0x11);
 const ADDRESS: Address = Address(4);
 const VALUE: RegisterValue = RegisterValue(0x022B);
 
-/// Shorter than the 1 s default (CL-R-030), so a link that has genuinely gone
+/// Shorter than the 1 s default (CL-R-100), so a link that has genuinely gone
 /// silent fails the test quickly rather than stalling the suite.
 const TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -258,27 +258,27 @@ where
 }
 
 #[tokio::test]
-/// CL-R-023, FR-R-144 — one corrupted response on RTU, whose boundary is
+/// CL-R-023, CL-R-098, CL-E-007, FR-R-144 — one corrupted response on RTU, whose boundary is
 /// silence, costs one request.
 async fn it_corrupted_response_costs_one_request_on_rtu() {
     corrupted_response_costs_one_request::<Rtu>(corrupt_crc).await;
 }
 
 #[tokio::test]
-/// TR-R-044 — one corrupted response on ASCII, whose boundary is a delimiter,
+/// TR-R-044, CL-E-007 — one corrupted response on ASCII, whose boundary is a delimiter,
 /// costs one request.
 async fn it_corrupted_response_costs_one_request_on_ascii() {
     corrupted_response_costs_one_request::<Ascii>(corrupt_lrc).await;
 }
 
 #[tokio::test]
-/// SV-R-050 — one corrupted request on RTU does not end the connection.
+/// SV-R-050, SV-E-004 — one corrupted request on RTU does not end the connection.
 async fn it_corrupted_request_leaves_the_server_serving_on_rtu() {
     corrupted_request_leaves_the_server_serving::<Rtu>(corrupt_crc).await;
 }
 
 #[tokio::test]
-/// SV-R-050 — one corrupted request on ASCII does not end the connection
+/// SV-R-050, SV-E-004 — one corrupted request on ASCII does not end the connection
 /// either: the frame is dropped and `serve_link` keeps serving.
 async fn it_corrupted_request_leaves_the_server_serving_on_ascii() {
     corrupted_request_leaves_the_server_serving::<Ascii>(corrupt_lrc).await;

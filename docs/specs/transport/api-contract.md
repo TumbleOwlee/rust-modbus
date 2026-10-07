@@ -1,20 +1,14 @@
 # Transport — API Contract
 
-The stable public surface owned by the transport area: the transport
-abstraction, the TCP and RTU implementations, and every configuration field that
-controls a socket or a serial port.
+The stable public surface owned by the transport area: the transport abstraction, the TCP and RTU implementations, and every configuration field that controls a socket or a serial port.
 
-Per the ownership rule in [`../README.md`](../README.md), serial parameters and
-socket options are specified here, not in the areas that happen to expose them.
+Per the ownership rule in [`../README.md`](../README.md), serial parameters and socket options are specified here, not in the areas that happen to expose them.
 
 ---
 
-## 1. Transport abstraction
+## Transport abstraction
 
-The seam is a **generic bound, not a trait of our own**: anything that is an
-async duplex byte stream serves (TR-R-001), so `tokio::io::duplex` substitutes
-for a socket or a serial port in tests without a shim. A `Transport` trait would
-add dyn-safety and `async_trait` cost while naming nothing the bound does not.
+The seam is a **generic bound, not a trait of our own**: anything that is an async duplex byte stream serves (TR-R-001), so `tokio::io::duplex` substitutes for a socket or a serial port in tests without a shim. A `Transport` trait would add dyn-safety and `async_trait` cost while naming nothing the bound does not.
 
 ```rust
 pub struct FrameTransport<S, F> { /* stream, read buffer, config */ }
@@ -36,16 +30,9 @@ where
 }
 ```
 
-The four coding methods mirror the frame area's direction-explicit rule
-(FR-R-005): a PDU is not self-describing, so the caller states the direction. A
-client sends requests and receives responses; a server does the reverse. That is
-the whole of the difference between the roles at this layer (TR-R-002).
+The four coding methods mirror the frame area's direction-explicit rule (FR-R-005): a PDU is not self-describing, so the caller states the direction. A client sends requests and receives responses; a server does the reverse. That is the whole of the difference between the roles at this layer (TR-R-002).
 
-`TransportConfig` carries what boundary detection needs and nothing else — the
-RTU inter-frame interval of TR-R-011, derived from a `SerialConfig` or set
-directly, and the ASCII inter-character timeout of TR-R-076, fixed at 1 second
-by default and not derived from any serial parameter. TCP and RTU-over-TCP
-boundaries are found in the bytes and ignore both fields (TR-R-048).
+`TransportConfig` carries what boundary detection needs and nothing else — the RTU inter-frame interval of TR-R-011, derived from a `SerialConfig` or set directly, and the ASCII inter-character timeout of TR-R-076, fixed at 1 second by default and not derived from any serial parameter (TR-R-091). TCP and RTU-over-TCP boundaries are found in the bytes and ignore both fields (TR-R-048).
 
 ```rust
 pub struct TransportConfig {
@@ -62,16 +49,11 @@ impl SerialConfig {
 }
 ```
 
-The interval lives on `SerialConfig` as well as on `TransportConfig`, so the
-3.5-character-time rule is computable — and testable — with the `rtu` feature
-off and no port present. `open_serial` derives one from the other, so a port and
-its timing cannot disagree.
+The interval lives on `SerialConfig` as well as on `TransportConfig`, so the 3.5-character-time rule (TR-R-011, TR-R-086) is computable — and testable — with the `rtu` feature off and no port present. `open_serial` derives one from the other, so a port and its timing cannot disagree.
 
-## 2. Read-only ADU reader
+## Read-only ADU reader
 
-For a stream offering only `AsyncRead` — a listen-only serial port, or bytes
-replayed from a capture — `FrameTransport` cannot be used, since it requires
-`AsyncWrite` too (TR-R-077).
+For a stream offering only `AsyncRead` — a listen-only serial port, or bytes replayed from a capture — `FrameTransport` cannot be used, since it requires `AsyncWrite` too (TR-R-077).
 
 ```rust
 pub struct AduReader<S, F> { /* stream, read buffer, config, direction */ }
@@ -88,15 +70,9 @@ where
 }
 ```
 
-`recv_adu` applies the same boundary rule as `FrameTransport::recv_request`/
-`recv_response` (TR-R-010..012, TR-R-045) and the same TR-R-044/TR-R-046
-recovery-vs-terminal behavior on failure (TR-R-080), but returns the ADU's raw
-bytes rather than a decoded `(Header, Pdu)` pair (TR-R-079): the caller decodes
-via `F::decode_request`/`F::decode_response`. `direction` is consulted only by
-a `ContentLength` boundary (RTU-over-stream); `Prefixed`, `Delimited`, and
-`Silence` boundaries ignore it (TR-R-078).
+`recv_adu` applies the same boundary rule as `FrameTransport::recv_request`/`recv_response` (TR-R-010, TR-R-011, TR-R-012, TR-R-045) and the same TR-R-044/TR-R-083/TR-R-046 recovery-vs-terminal behavior on failure (TR-R-080), but returns the ADU's raw bytes rather than a decoded `(Header, Pdu)` pair (TR-R-079): the caller decodes via `F::decode_request`/`F::decode_response`. `direction` is consulted only by a `ContentLength` boundary (RTU-over-stream); `Prefixed`, `Delimited`, and `Silence` boundaries ignore it (TR-R-078).
 
-## 3. TCP configuration
+## TCP configuration
 
 ```rust
 pub type TcpTransport = FrameTransport<TcpStream, Tcp>;
@@ -124,17 +100,11 @@ impl TcpListener {
 }
 ```
 
-`connect_tcp` and `accept` are `connect_tcp_framed::<Tcp>` and
-`accept_framed::<Tcp>` under their existing names (TR-R-024), kept so the common
-case needs no turbofish and no existing call site changes. A gateway link is
-`connect_tcp_framed::<RtuOverTcp>`, which gets the connect timeout and the
-`TCP_NODELAY` default of TR-R-021 and TR-R-022 unchanged — nothing about
-establishing the socket differs, only what is read off it.
+`connect_tcp` and `accept` are `connect_tcp_framed::<Tcp>` and `accept_framed::<Tcp>` under their existing names (TR-R-024), kept so the common case needs no turbofish and no existing call site changes. A gateway link is `connect_tcp_framed::<RtuOverTcp>`, which gets the connect timeout and the `TCP_NODELAY` default of TR-R-021 and TR-R-022 unchanged — nothing about establishing the socket differs, only what is read off it.
 
-`local_addr` exists so a test can bind port 0 and read the assigned port back,
-which the testing conventions require of every listener.
+`local_addr` exists so a test can bind port 0 and read the assigned port back, which the testing conventions require of every listener (NF-R-023).
 
-## 4. RTU serial configuration
+## RTU serial configuration
 
 ```rust
 pub struct SerialConfig {
@@ -163,88 +133,65 @@ pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<Seria
 pub use tokio_serial::SerialStream;
 ```
 
-The defaults are the Modbus serial-line defaults (TR-R-031). The enums are the
-crate's own rather than re-exported from the serial backend, so the backend is
-not part of the public API and the types exist with the `rtu` feature off — the
-inter-frame interval of TR-R-011 is computed from them, which the ASCII and TCP
-paths never need but the pure calculation is testable without a serial port.
+The defaults are the Modbus serial-line defaults (TR-R-031). The enums are the crate's own rather than re-exported from the serial backend, so the backend is not part of the public API and the types exist with the `rtu` feature off — the inter-frame interval of TR-R-011 is computed from them, which the ASCII and TCP paths never need but the pure calculation is testable without a serial port.
 
-The *stream* is the one exception, and a deliberate one: unlike the configuration
-enums it is not a value this crate could define for itself — it is the thing the
-backend hands back — and it is already in the public signatures, so declining to
-name it would not keep the backend out of the API, only out of reach (TR-R-034).
+The *stream* is the one exception, and a deliberate one: unlike the configuration enums it is not a value this crate could define for itself — it is the thing the backend hands back — and it is already in the public signatures, so declining to name it would not keep the backend out of the API, only out of reach (TR-R-034).
 
-`open_serial` is generic over the framing because a serial line carries RTU or
-ASCII framing at the operator's choice, over identical port settings.
+`open_serial` is generic over the framing because a serial line carries RTU or ASCII framing at the operator's choice, over identical port settings (TR-R-030).
 
-## 5. RS-485 kernel direction control
+## RS-485 kernel direction control
 
 ```rust
 #[cfg(feature = "rs485")]
 pub struct SerialConfig {
     // ...existing fields unchanged...
-    pub rs485: Option<Rs485Config>,   // TR-R-052; default None
+    pub rs485: Option<Rs485Config>,   // TR-R-052, TR-R-092; default None
 }
 
 #[cfg(feature = "rs485")]
 pub struct Rs485Config {
     pub rts_on_send: RtsPolarity,      // TR-R-050; level asserted while transmitting
-    pub delay_before_send: Duration,   // TR-R-050, TR-R-056
-    pub delay_after_send: Duration,    // TR-R-050, TR-R-056
+    pub delay_before_send: Duration,   // TR-R-050, TR-R-056, TR-R-093
+    pub delay_after_send: Duration,    // TR-R-050, TR-R-056, TR-R-093
 }
 
 #[cfg(feature = "rs485")]
 pub enum RtsPolarity { High, Low }     // TR-R-057
 ```
 
-`Option<Rs485Config>` is used rather than a `bool` plus loose fields — there is
-no way to construct "disabled, but with delays set", which would mean nothing.
-Delays are `Duration`, not a newtype: `Duration` already carries its unit (unlike
-a bare integer, which is what the typed-domain-value rule exists to prevent), and
-`TransportConfig.inter_frame_interval: Duration` is the existing precedent in this
-crate. `RtsPolarity` has two variants rather than the kernel's two independent
-flag bits; TR-R-057 fixes after-send as the complement.
+`Option<Rs485Config>` is used rather than a `bool` plus loose fields — there is no way to construct "disabled, but with delays set", which would mean nothing (TR-R-052). Delays are `Duration`, not a newtype: `Duration` already carries its unit (unlike a bare integer, which is what the typed-domain-value rule exists to prevent), and `TransportConfig.inter_frame_interval: Duration` is the existing precedent in this crate (TR-R-056). `RtsPolarity` has two variants rather than the kernel's two independent flag bits; TR-R-057 fixes after-send as the complement.
 
-Per NF-R-017 these types are exhaustive, so the new `SerialConfig` field and the
-new `Error` variant below are both breaking changes.
+Per NF-R-017 these types are exhaustive, so the new `SerialConfig` field and the new `Error` variant below are both breaking changes.
 
-## 6. Feature flags
+## Feature flags
 
-| Feature | Default | Gates |
-|---|---|---|
-| `std` | on | everything outside the frame area (NF-R-002) |
-| `rtu` | **off** | `open_serial` and the serial backend (TR-R-032) |
-| `rs485` | **off** | The `TIOCSRS485` ioctl, `Rs485Config`, `RtsPolarity`, `SerialConfig.rs485`, `Error::Rs485Unsupported`; implies `rtu`; the crate's only unsafe code, `target_os = "linux"` only (TR-R-050, TR-R-051, TR-R-055) |
-| `tls` | **off** | Everything in §7, `Error::TlsHandshake`; implies `std` (TR-R-060) |
+| Feature | Default | Gates | Req |
+|---|---|---|---|
+| `std` | on | everything outside the frame area | NF-R-002 |
+| `rtu` | **off** | `open_serial` and the serial backend | TR-R-032 |
+| `rs485` | **off** | The `TIOCSRS485` ioctl, `Rs485Config`, `RtsPolarity`, `SerialConfig.rs485`, `Error::Rs485Unsupported`; implies `rtu`; the crate's only unsafe code, `target_os = "linux"` only | TR-R-050, TR-R-051, TR-R-055 |
+| `tls` | **off** | Everything under `## TLS` below, `Error::TlsHandshake`; implies `std` | TR-R-060 |
 
-`rtu` implies `std`. `rs485` implies `rtu`. The frame area's RTU *framing* is not
-gated: encoding an RTU ADU is pure computation and stays available on `no_std`.
-Only opening a physical port, and configuring its RS-485 mode, is gated.
+`rtu` implies `std`. `rs485` implies `rtu` (TR-R-051). The frame area's RTU *framing* is not gated: encoding an RTU ADU is pure computation and stays available on `no_std`. Only opening a physical port, and configuring its RS-485 mode, is gated (TR-R-032, TR-R-050).
 
-## 7. Error variants
+## Error variants
 
 Added by this area, all gated on `std`:
 
-| Variant | Fields | Requirements |
+| Variant | Fields | Req |
 |---|---|---|
 | `Io` | `kind: std::io::ErrorKind` | TR-R-040 |
-| `Timeout` | `what: &'static str` | TR-R-021, TR-R-041 |
-| `ConnectionClosed` | — | TR-R-014 |
-| `Configuration` | `field: &'static str` | TR-R-031 |
+| `Timeout` | `what: &'static str` | TR-R-089, TR-R-041, TR-R-076 |
+| `ConnectionClosed` | — | TR-R-088 |
+| `Configuration` | `field: &'static str` | TR-R-031, TR-R-093 |
 | `Rs485Unsupported` | — (`#[cfg(feature = "rs485")]`) | TR-R-054 |
-| `TlsHandshake` | `source: rustls::Error, peer_cert: Option<CertificateDer<'static>>` (`#[cfg(feature = "tls")]`) | TR-R-067, TR-R-069 |
+| `TlsHandshake` | `source: rustls::Error, peer_cert: Option<CertificateDer<'static>>` (`#[cfg(feature = "tls")]`) | TR-R-067, TR-R-069, TR-R-096 |
 
-`Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error`
-derives `PartialEq`, which `io::Error` does not implement; the kind is the part a
-caller matches on, and preserving the OS message would cost every existing
-equality assertion in the crate.
+`Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error` derives `PartialEq`, which `io::Error` does not implement; the kind is the part a caller matches on, and preserving the OS message would cost every existing equality assertion in the crate (TR-R-040).
 
-## 8. TLS
+## TLS
 
-Behind the `tls` feature. Client and server each build a `rustls` config
-per-call via `builder_with_provider` with the `ring` crypto provider — never
-`CryptoProvider::install_default`, so embedding this crate alongside a
-consumer's own rustls usage cannot collide (TR-R-061).
+Behind the `tls` feature. Client and server each build a `rustls` config per-call via `builder_with_provider` with the `ring` crypto provider — never `CryptoProvider::install_default`, so embedding this crate alongside a consumer's own rustls usage cannot collide (TR-R-061).
 
 ```rust
 pub const MODBUS_TLS_PORT: u16 = 802; // TR-R-068, documentation only
@@ -315,8 +262,4 @@ impl TlsListener {
 }
 ```
 
-`connect_tls`/`connect_tls_framed` and `TlsListener::accept`/`accept_framed`
-follow this crate's existing `Tcp`-fixed-convenience-plus-`_framed`-generic
-pairing (TR-R-024). The handshake runs entirely inside the connector/listener,
-before `FrameTransport` construction; `FrameTransport` itself needs no change,
-since `tokio_rustls::TlsStream` already satisfies TR-R-001's bound (TR-R-064).
+`connect_tls`/`connect_tls_framed` and `TlsListener::accept`/`accept_framed` follow this crate's existing `Tcp`-fixed-convenience-plus-`_framed`-generic pairing (TR-R-024). The handshake runs entirely inside the connector/listener, before `FrameTransport` construction; `FrameTransport` itself needs no change, since `tokio_rustls::TlsStream` already satisfies TR-R-001's bound (TR-R-064).

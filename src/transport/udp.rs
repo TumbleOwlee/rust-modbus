@@ -1,5 +1,5 @@
 //! A UDP transport carrying one MBAP-framed ADU per datagram (TR-R-070 …
-//! TR-R-074).
+//! TR-R-074, TR-R-097, TR-R-098).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -284,7 +284,7 @@ pub async fn connect_udp(
 /// # Errors
 ///
 /// Fails if the socket does, or if the datagram does not decode. Either
-/// failure leaves the socket fully usable for the next receive (TR-R-074).
+/// failure leaves the socket fully usable for the next receive (TR-R-098).
 /// The source address is not reported on failure — only on a successful
 /// decode.
 pub async fn recv_datagram_request<F: Framing>(
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// TR-R-074 — a datagram that fails to decode surfaces as a typed error and
+    /// TR-R-098 — a datagram that fails to decode surfaces as a typed error and
     /// costs nothing beyond itself: the next datagram, however malformed the
     /// first one was, still decodes normally.
     async fn ut_decode_failure_leaves_udp_transport_usable() {

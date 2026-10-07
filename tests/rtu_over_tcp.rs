@@ -25,7 +25,7 @@ fn ephemeral() -> SocketAddr {
     SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
 }
 
-/// Shorter than the 1 s default (CL-R-030), so a link that has genuinely gone
+/// Shorter than the 1 s default (CL-R-100), so a link that has genuinely gone
 /// silent fails the test quickly rather than stalling the suite.
 const TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -156,7 +156,7 @@ async fn it_register_write_round_trips_over_the_gateway() {
 }
 
 #[tokio::test]
-/// FR-R-147, CL-R-042 — an exception response derives its extent of 5 bytes
+/// FR-R-147, CL-R-042, FR-ADU-E-014 — an exception response derives its extent of 5 bytes
 /// from the rule alone, arrives at the client as a typed exception, and leaves
 /// the connection usable for the next request.
 async fn it_exception_response_round_trips_over_the_gateway() {
@@ -186,7 +186,7 @@ async fn it_exception_response_round_trips_over_the_gateway() {
 }
 
 #[tokio::test]
-/// CL-R-023, FR-R-150 — RTU over a stream is not self-locating: a corrupted
+/// CL-R-023, CL-R-098, FR-R-150, FR-ADU-E-016 — RTU over a stream is not self-locating: a corrupted
 /// response's extent was read out of that response's own (now wrong) bytes, so
 /// the client cannot tell where the next frame begins and gives up on the
 /// stream, unlike the same corruption over serial RTU (see `reframing.rs`),
@@ -273,7 +273,7 @@ async fn it_corrupted_crc_desynchronizes_the_client() {
 }
 
 #[tokio::test]
-/// SV-R-021 — a request addressed to a unit the server is not configured for
+/// SV-R-021, SV-E-010 — a request addressed to a unit the server is not configured for
 /// draws no response at all, and the connection stays open: the request after
 /// it, on the very same connection, is answered normally.
 async fn it_nonmatching_unit_draws_no_response_and_the_connection_stays_open() {
@@ -291,7 +291,7 @@ async fn it_nonmatching_unit_draws_no_response_and_the_connection_stays_open() {
     // stream, so a single `recv_response` below would return it instead of
     // the second request's. A `recv_response` cancelled by a timeout instead
     // would abandon the read mid-flight and mark the transport unusable on
-    // its own terms (TR-R-041) — a fact about giving up, not about whether
+    // its own terms (TR-R-090) — a fact about giving up, not about whether
     // the peer answered, so it would prove nothing about SV-R-021 here.
     transport
         .send_request(
