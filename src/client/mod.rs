@@ -2219,4 +2219,214 @@ mod tests {
         );
         let _ = answering.await;
     }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-099 — a response that fails to decode is the answer to the request
+    /// awaiting it: the request fails with that error and does not go on to
+    /// take the well-formed reply the peer sends after it.
+    async fn ut_undecodable_response_ends_the_wait() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+
+        let good = Rtu::encode_response(&UnitId(0x11), &registers()).expect("the response encodes");
+        let mut corrupt = good.clone();
+        let last = corrupt.last_mut().expect("the ADU carries a CRC");
+        *last ^= 0xFF;
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 8];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            server
+                .write_all(&corrupt)
+                .await
+                .expect("writes the corrupt");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server.write_all(&good).await.expect("writes the good one");
+            server
+        });
+
+        let failed = client.call(UnitId(0x11), read_holding()).await;
+        assert!(
+            matches!(failed, Err(Error::Checksum { .. })),
+            "the request kept waiting past the frame that failed, got {failed:?}"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-008 — a response split in two by a spurious gap on RTU arrives as
+    /// two frames: each half fails its checksum on its own receive, and the
+    /// link stays usable for the request after them.
+    async fn ut_frame_split_by_a_spurious_gap_costs_two_frames() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+
+        let response = ResponsePdu::ReadHoldingRegisters {
+            registers: vec![
+                RegisterValue(0x022B),
+                RegisterValue(0x0000),
+                RegisterValue(0x0064),
+            ],
+        };
+        let whole = Rtu::encode_response(&UnitId(0x11), &response).expect("the response encodes");
+        let (head, tail) = whole.split_at(5);
+        let (head, tail) = (head.to_vec(), tail.to_vec());
+        let reply = whole.clone();
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 8];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the first request arrives whole");
+            server.write_all(&head).await.expect("writes the head");
+            // A gap longer than the inter-frame interval (TR-R-011) mid-frame.
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server.write_all(&tail).await.expect("writes the tail");
+
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the second request arrives whole");
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the third request arrives whole");
+            server.write_all(&reply).await.expect("writes the reply");
+            server
+        });
+
+        let first = client.call(UnitId(0x11), read_holding()).await;
+        assert!(
+            matches!(first, Err(Error::Checksum { .. })),
+            "the head is a frame of its own and fails its checksum, got {first:?}"
+        );
+        assert!(!client.is_desynchronized(), "the head took the link down");
+        let second = client.call(UnitId(0x11), read_holding()).await;
+        assert!(
+            matches!(second, Err(Error::Checksum { .. })),
+            "the tail is a frame of its own and fails its checksum, got {second:?}"
+        );
+        assert!(!client.is_desynchronized(), "the tail took the link down");
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Ok(Some(response)),
+            "the request after the split frame was refused"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-010 — a reply a server sends to a broadcast (contrary to the
+    /// protocol) is not read by the broadcast, stays in the stream, and is
+    /// taken as the answer to the next exchange in place of the real one.
+    async fn ut_reply_to_a_broadcast_desynchronizes_the_next_exchange() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+
+        client
+            .write_single_register(UnitId(0), Address(0x0001), RegisterValue(0x0003))
+            .await
+            .expect("the broadcast returns without reading a reply");
+
+        let stale = ResponsePdu::WriteSingleRegister {
+            address: Address(0x0001),
+            value: RegisterValue(0x0003),
+        };
+        let answering = tokio::spawn(async move {
+            let (unit, _) = server.recv_request().await.expect("the broadcast arrives");
+            assert_eq!(unit, UnitId(0));
+            // The misbehaving server answers the broadcast under its own address.
+            server
+                .send_response(&UnitId(0x11), &stale)
+                .await
+                .expect("writes the stale reply");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server.recv_request().await.expect("the read arrives");
+            server
+                .send_response(&UnitId(0x11), &registers())
+                .await
+                .expect("writes the real reply");
+            server
+        });
+        // Let the stale reply land before the next exchange starts, with
+        // silence on both sides so every ADU is a frame of its own.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::UnexpectedFunction {
+                expected: FunctionCode::ReadHoldingRegisters,
+                actual: FunctionCode::WriteSingleRegister,
+            }),
+            "the next exchange took the broadcast's stale reply as its answer"
+        );
+        let _ = answering.await;
+    }
+
+    #[tokio::test]
+    /// CL-E-014 — the peer closes cleanly before any response byte: the
+    /// transport's end-of-stream `Io { kind: UnexpectedEof }` reaches the
+    /// caller and the client is desynchronized.
+    async fn ut_peer_close_before_a_response_is_unexpected_eof() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            drop(server);
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Io {
+                kind: std::io::ErrorKind::UnexpectedEof,
+            })
+        );
+        assert!(client.is_desynchronized());
+        let _ = answering.await;
+    }
+
+    #[tokio::test]
+    /// CL-E-015, CL-E-025 — the peer closes mid-ADU: the request fails with
+    /// `ConnectionClosed`, the client is desynchronized, and its state is
+    /// `Unusable(PeerClosed)`.
+    async fn ut_peer_close_mid_adu_is_connection_closed() {
+        let (client, mut server) = duplex(1024);
+        let mut client = Client::<_, Tcp>::new(FrameTransport::new(client));
+
+        let answering = tokio::spawn(async move {
+            let mut request = [0u8; 12];
+            server
+                .read_exact(&mut request)
+                .await
+                .expect("the request arrives whole");
+            // MBAP header for transaction 1 promising 5 more bytes, then only
+            // the unit id and function code before the close.
+            server
+                .write_all(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x11, 0x03])
+                .await
+                .expect("writes the head");
+            drop(server);
+        });
+
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::ConnectionClosed)
+        );
+        assert!(client.is_desynchronized());
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::PeerClosed)
+        );
+        let _ = answering.await;
+    }
 }
