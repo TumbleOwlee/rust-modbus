@@ -183,3 +183,28 @@ async fn it_exception_responses_cross_the_transport() {
     assert_eq!(client.recv_response().await, Ok((header(), expected)));
     server.await.expect("server completes");
 }
+
+#[tokio::test]
+/// TR-E-023 — a peer that resets the connection surfaces as the I/O error
+/// carrying `ErrorKind::ConnectionReset`, not as a clean close.
+async fn it_peer_reset_surfaces_connection_reset() {
+    let listener = tokio::net::TcpListener::bind(ephemeral())
+        .await
+        .expect("binds");
+    let addr = listener.local_addr().expect("reports its address");
+
+    let mut client = connect_tcp(addr, TcpConfig::default())
+        .await
+        .expect("connects");
+    let (accepted, _peer) = listener.accept().await.expect("accepts");
+    // A zero linger makes the close abortive: the kernel sends RST, not FIN.
+    accepted.set_zero_linger().expect("sets SO_LINGER");
+    drop(accepted);
+
+    assert_eq!(
+        client.recv_response().await,
+        Err(Error::Io {
+            kind: std::io::ErrorKind::ConnectionReset,
+        })
+    );
+}
