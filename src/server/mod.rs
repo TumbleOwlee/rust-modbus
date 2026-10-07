@@ -183,7 +183,7 @@ where
     /// response, if any, is sent to that datagram's source address. No
     /// connection identity is assigned and neither [`Service::on_connect`]
     /// nor [`Service::on_disconnect`] fires, since a datagram is not part of
-    /// a connection (SV-R-031): every notification instead carries the
+    /// a connection (SV-R-066): every notification instead carries the
     /// sentinel [`UDP_CONNECTION`] (`ConnectionId(0)`), paired with the
     /// datagram's source address where known, so a service can still see who
     /// it answered without a synthesized identity.
@@ -374,7 +374,7 @@ enum Accepted<T> {
 /// The `ConnectionId` every UDP-dispatched notification carries (SV-R-057, SV-R-066).
 ///
 /// A UDP datagram is not part of a connection, so no identity is allocated
-/// for it (SV-R-031 does not apply): every datagram uses this fixed value
+/// for it (SV-R-066): every datagram uses this fixed value
 /// instead of one from [`Server::next_id`], whose `AtomicU64` starts at 1
 /// (`next_connection: AtomicU64::new(1)`, this file) and so never produces
 /// `0` — the two paths' identifiers can never collide.
