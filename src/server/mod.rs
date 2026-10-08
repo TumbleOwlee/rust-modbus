@@ -357,8 +357,7 @@ where
     /// Wait for the next decoded datagram, reporting socket receive failures
     /// to the service (SV-R-073).
     ///
-    /// A decode failure is reported through [`Service::on_error`] and never to
-    /// the receive hook (SV-R-075). `Continue` keeps `datagrams` and receives
+    /// A decode failure is never reported to the receive hook (SV-R-075). `Continue` keeps `datagrams` and receives
     /// again once the hook's future has completed (SV-R-077). `Stop` drains
     /// them and returns the error (SV-R-078, SV-R-051). A shutdown while
     /// receiving, or while the hook is pending, drains and returns `Ok`; the
