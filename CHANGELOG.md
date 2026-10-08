@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - `ListenerFailure` (`Transient` / `Fatal`) and `Error::listener_failure()`: classifies an `Io` error by its OS code, so a service can tell a transient accept or receive error (`EMFILE`, `ECONNABORTED`, Windows `WSAECONNRESET`) from a dead listener. Errors without an OS code, and every error on platforms other than Unix and Windows, are `Fatal`.
+- `Service::on_receive_error`: `serve_udp`'s counterpart to `on_accept_error`, notified when receiving from the socket fails. The default answers `Continue` for a transient error (`Error::listener_failure()`) and `Stop` otherwise.
 - `Service::on_accept_error` and `AcceptErrorAction` (`Continue` / `Stop`): a service can now keep `serve`, `serve_framed` and `serve_tls` running after a failed `accept()`. On `Continue`, live connections are kept and accepting resumes once the hook's future completes, so the hook can back off by awaiting. The default answer is `Stop`, which drains live connections and returns the error as before.
 
 ### Changed
@@ -16,6 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Breaking:** the futures returned by `ClientTransport::send_request` and `recv_response` are now `Send`, so a `Client::call` future awaited generically over `T: ClientTransport<F>` can be handed to `tokio::spawn`. The `FrameTransport`, `UdpTransport` and `SyncClient` implementations require `F: Send` and `F::Header: Sync` where needed; a custom `ClientTransport` implementation must return `Send` futures.
 - **Breaking:** `Server::serve_link` returns `Err(error)` when its link ends with `Disconnect::Failed(error)`, instead of `Ok(())`. It still returns `Ok(())` when the link is closed by the peer, refused, or shut down, and returns only after `on_disconnect` has completed.
 - **Breaking:** `Error::Io` gains `raw_os_error: Option<i32>`, the OS error code when there is one, and its `Display` appends ` (os error n)`. A pattern `Error::Io { kind }` needs `..`. `libc` is now a dependency on every Unix target with `std`.
+- `Server::serve_udp` now returns `Err(error)` when a receive from the socket fails and `on_receive_error` answers `Stop`, after in-flight datagrams finish. Previously a receive failure never ended serving.
 
 ## [0.2.0] - 2026-08-26
 
