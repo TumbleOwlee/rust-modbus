@@ -81,11 +81,16 @@ async fn it_connect_refused_is_distinct_from_a_timeout() {
     let addr = listener.local_addr().expect("reports its address");
     drop(listener);
 
-    assert_eq!(
-        connect_tcp(addr, TcpConfig::default()).await.err(),
-        Some(Error::Io {
-            kind: std::io::ErrorKind::ConnectionRefused,
-        })
+    let refused = connect_tcp(addr, TcpConfig::default()).await.err();
+    assert!(
+        matches!(
+            refused,
+            Some(Error::Io {
+                kind: std::io::ErrorKind::ConnectionRefused,
+                ..
+            })
+        ),
+        "{refused:?}"
     );
 }
 
@@ -201,10 +206,15 @@ async fn it_peer_reset_surfaces_connection_reset() {
     accepted.set_zero_linger().expect("sets SO_LINGER");
     drop(accepted);
 
-    assert_eq!(
-        client.recv_response().await,
-        Err(Error::Io {
-            kind: std::io::ErrorKind::ConnectionReset,
-        })
+    let reset = client.recv_response().await;
+    assert!(
+        matches!(
+            reset,
+            Err(Error::Io {
+                kind: std::io::ErrorKind::ConnectionReset,
+                ..
+            })
+        ),
+        "{reset:?}"
     );
 }

@@ -276,6 +276,7 @@ mod tests {
     async fn ut_default_on_accept_error_answers_stop() {
         let error = Error::Io {
             kind: std::io::ErrorKind::OutOfMemory,
+            raw_os_error: None,
         };
         assert_eq!(
             Minimal.on_accept_error(&error).await,

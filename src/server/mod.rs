@@ -437,6 +437,7 @@ where
             // (SV-R-052, TR-R-014).
             Err(Error::Io {
                 kind: std::io::ErrorKind::UnexpectedEof,
+                ..
             }) => return Disconnect::Closed,
             Err(error) => {
                 service.on_error(conn, &error).await;
@@ -2084,6 +2085,7 @@ mod tests {
     fn io_error() -> Error {
         Error::Io {
             kind: std::io::ErrorKind::OutOfMemory,
+            raw_os_error: None,
         }
     }
 

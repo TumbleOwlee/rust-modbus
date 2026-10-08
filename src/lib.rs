@@ -215,6 +215,8 @@ pub use client::{PipelineConfig, PipelinedClient, PipelinedUdpClient};
 pub use client::{SyncAsciiClient, SyncRtuClient};
 #[cfg(feature = "sync")]
 pub use client::{SyncClient, SyncRtuOverTcpClient, SyncTcpClient};
+#[cfg(feature = "std")]
+pub use error::ListenerFailure;
 pub use error::{Error, Result};
 pub use frame::{
     Address, AduBoundary, Ascii, DeviceIdObject, DiagnosticSubFunction, Direction, ExceptionCode,

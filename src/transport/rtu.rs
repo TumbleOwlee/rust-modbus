@@ -69,6 +69,7 @@ fn convert(error: tokio_serial::Error) -> Error {
             tokio_serial::ErrorKind::Io(kind) => kind,
             tokio_serial::ErrorKind::Unknown => std::io::ErrorKind::Other,
         },
+        raw_os_error: None,
     }
 }
 
@@ -192,23 +193,31 @@ mod tests {
 
         assert_eq!(
             convert_kind(BackendKind::NoDevice),
-            Error::Io { kind: Io::NotFound }
+            Error::Io {
+                kind: Io::NotFound,
+                raw_os_error: None
+            }
         );
         assert_eq!(
             convert_kind(BackendKind::InvalidInput),
             Error::Io {
-                kind: Io::InvalidInput
+                kind: Io::InvalidInput,
+                raw_os_error: None
             }
         );
         assert_eq!(
             convert_kind(BackendKind::Io(Io::BrokenPipe)),
             Error::Io {
-                kind: Io::BrokenPipe
+                kind: Io::BrokenPipe,
+                raw_os_error: None
             }
         );
         assert_eq!(
             convert_kind(BackendKind::Unknown),
-            Error::Io { kind: Io::Other }
+            Error::Io {
+                kind: Io::Other,
+                raw_os_error: None
+            }
         );
     }
 
