@@ -180,14 +180,35 @@ Added by this area, all gated on `std`:
 
 | Variant | Fields | Req |
 |---|---|---|
-| `Io` | `kind: std::io::ErrorKind` | TR-R-040 |
+| `Io` | `kind: std::io::ErrorKind`, `raw_os_error: Option<i32>` | TR-R-040, TR-R-099, TR-R-100 |
 | `Timeout` | `what: &'static str` | TR-R-089, TR-R-041, TR-R-076 |
 | `ConnectionClosed` | — | TR-R-088 |
 | `Configuration` | `field: &'static str` | TR-R-031, TR-R-093 |
 | `Rs485Unsupported` | — (`#[cfg(feature = "rs485")]`) | TR-R-054 |
 | `TlsHandshake` | `source: rustls::Error, peer_cert: Option<CertificateDer<'static>>` (`#[cfg(feature = "tls")]`) | TR-R-067, TR-R-069, TR-R-096 |
 
-`Io` carries the `ErrorKind` rather than the `std::io::Error` because `Error` derives `PartialEq`, which `io::Error` does not implement; the kind is the part a caller matches on, and preserving the OS message would cost every existing equality assertion in the crate (TR-R-040).
+`Io` carries the `ErrorKind` and the raw OS code rather than the `std::io::Error` because `Error` derives `PartialEq`, which `io::Error` does not implement; `Option<i32>` keeps `PartialEq`/`Eq` (TR-R-067). The OS code is what separates errors std reports under one kind — `ENOBUFS` and `EBADF` are both `Uncategorized` — and is the input to `listener_failure` (TR-R-040, TR-R-099, TR-R-102).
+
+### Listener-failure classification
+
+Gated on `std`.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListenerFailure {
+    Transient,   // still usable; retrying may succeed
+    Fatal,       // can no longer accept or receive
+}
+
+impl Error {
+    pub fn listener_failure(&self) -> Option<ListenerFailure>;
+}
+```
+
+| Item | Req |
+|---|---|
+| `ListenerFailure` | TR-R-106 |
+| `Error::listener_failure` | TR-R-101, TR-R-102, TR-R-103, TR-R-104, TR-R-105 |
 
 ## TLS
 
