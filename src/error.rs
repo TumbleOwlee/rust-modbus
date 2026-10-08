@@ -499,6 +499,7 @@ mod tests {
         assert_eq!(Error::Timeout { what: "connect" }.listener_failure(), None);
     }
 
+    #[cfg(unix)]
     fn classify_os(code: i32) -> Option<ListenerFailure> {
         Error::from(std::io::Error::from_raw_os_error(code)).listener_failure()
     }
