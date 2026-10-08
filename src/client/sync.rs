@@ -73,7 +73,7 @@ fn build_runtime() -> Result<Runtime> {
     Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|error| Error::Io { kind: error.kind() })
+        .map_err(Error::from)
 }
 
 impl<F: ClientFraming + Send> SyncClient<TcpStream, F>

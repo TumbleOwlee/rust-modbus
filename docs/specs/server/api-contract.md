@@ -56,6 +56,8 @@ handle.shutdown().await;      // returns once every handler has finished
 
 `serve_link`'s result is its link's end (SV-R-062): `Err(error)` for `Disconnect::Failed(error)`, `Ok(())` for every other reason, returned only after `on_disconnect` has completed (SV-R-068). Unlike a listener, a link is not one connection among many — once it fails nothing is served, and the caller awaiting `serve_link` is the one that decides whether to reopen the port. The listener entry points are unaffected (SV-R-051).
 
+`serve_udp`'s result is its socket's fate: `Err(error)` once `on_receive_error` answers `Stop` and in-flight datagrams have finished (SV-R-078), `Ok(())` on shutdown (SV-R-079).
+
 The address a listener is bound to is read back through the transport area's `TcpListener::local_addr`, not through the server: the server never binds, so it never owns the address (SV-R-070).
 
 ## The service trait
@@ -84,6 +86,15 @@ pub trait Service: Send + Sync + 'static {
     fn on_accept_error(&self, error: &Error)
         -> impl Future<Output = AcceptErrorAction> + Send { async { AcceptErrorAction::Stop } }
 
+    fn on_receive_error(&self, error: &Error)
+        -> impl Future<Output = AcceptErrorAction> + Send {
+        let action = match error.listener_failure() {
+            Some(ListenerFailure::Transient) => AcceptErrorAction::Continue,
+            _ => AcceptErrorAction::Stop,
+        };
+        async move { action }
+    }
+
     #[cfg(feature = "tls")]
     fn on_tls_handshake_failed(&self, peer: SocketAddr, error: &Error)
         -> impl Future<Output = ()> + Send { async {} }
@@ -92,7 +103,9 @@ pub trait Service: Send + Sync + 'static {
 
 `on_tls_handshake_failed` (SV-R-056) fires instead of `on_connect`/`on_error` when a TLS handshake fails before any `Connection` exists — no `ConnectionId` was ever assigned, so a peer address is all there is to name the attempt with. Default no-op, like the other notifications.
 
-`on_accept_error` (SV-R-059) answers with an `AcceptErrorAction`, not a `bool`, for the same reason `on_connect` answers with an `Acceptance`. It is not feature-gated. The server awaits it before the next `accept`, so back-off lives in the service, which knows which errors are transient (`EMFILE`, `ECONNABORTED`) — the crate cannot pick a delay right for every deployment. Applies to `serve_tls`'s raw TCP accept only; a failed handshake stays on `on_tls_handshake_failed`.
+`on_accept_error` (SV-R-059) answers with an `AcceptErrorAction`, not a `bool`, for the same reason `on_connect` answers with an `Acceptance`. It is not feature-gated. The server awaits it before the next `accept`, so back-off lives in the service, which reads `error.listener_failure()` (TR-R-101) to tell a transient accept error from a dead listener and awaits its own delay before `Continue` — the crate classifies but cannot pick a delay right for every deployment. Applies to `serve_tls`'s raw TCP accept only; a failed handshake stays on `on_tls_handshake_failed`.
+
+`on_receive_error` (SV-R-073) is `serve_udp`'s counterpart to `on_accept_error`: it fires when receiving from the socket fails, never for a datagram that fails to decode (SV-R-075) or a response that fails to send (SV-R-076), and answers the same `AcceptErrorAction`. Its default classifies (SV-R-074) rather than answering `Stop`, because a UDP socket reports transient per-peer conditions — Windows' `WSAECONNRESET` after an ICMP port-unreachable — through the same receive call that reports a dead socket (SV-E-039). It is not feature-gated.
 
 `&self`, not `&mut self`: that is how SV-R-003 is enforced in the type system — concurrent connections hold the same service, so mutable state lives behind the implementor's own lock. `Send + Sync + 'static` is what lets a connection be handled in its own task.
 

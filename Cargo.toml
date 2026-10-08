@@ -17,18 +17,18 @@ categories = ["network-programming", "asynchronous"]
 # NF-R-002. The frame area is `core` + `alloc` only and never needs this; the
 # client, server, and transport areas require it, since Tokio does. Default-on
 # so the common case stays ergonomic, and CI builds without it (NF-R-003) so a
-# `std` dependency cannot creep back into the frame area unnoticed.
+# `std` dependency cannot creep back into the frame area unnoticed. Also
+# carries `libc` for the Unix errno table (TR-R-104).
 default = ["std"]
-std = ["dep:tokio"]
+std = ["dep:tokio", "dep:libc"]
 # TR-R-032. Off by default so a TCP-only consumer acquires no serial
 # dependency; the frame area's RTU *framing* is not gated, only opening a port.
 rtu = ["std", "dep:tokio-serial"]
 # TR-R-051. Off by default; implies `rtu` so RS-485 configuration is only
 # reachable through the serial opener it configures. Linux-only in effect
 # (TR-R-054): the ioctl this feature gates is declared only under
-# `target_os = "linux"`, so the `libc` dependency below is scoped there and
-# never enters a non-Linux dependency tree.
-rs485 = ["rtu", "dep:libc"]
+# `target_os = "linux"`.
+rs485 = ["rtu"]
 # NF-R-026, CL-R-070. Off by default; gates the blocking client. Implies `std`
 # because it owns a Tokio runtime, so it can never appear in the bare-metal
 # build of NF-R-003. Purely additive (NF-R-018): enabling it changes nothing
@@ -94,11 +94,10 @@ tokio-rustls = { version = "0.26.6", optional = true, default-features = false, 
 rustls-pki-types = { version = "1.15.1", optional = true, default-features = false, features = ["alloc"] }
 rustls-native-certs = { version = "0.8.4", optional = true, default-features = false }
 
-# TR-R-050, TR-R-055. The `TIOCSRS485` ioctl is declared by neither `libc` nor
-# `nix`, but the raw syscall plumbing (`ioctl`, error numbers) is `libc`'s.
-# Scoped to Linux since the feature is Linux-only in effect (TR-R-054), so no
-# other target's dependency tree acquires it.
-[target.'cfg(target_os = "linux")'.dependencies]
+# TR-R-104, TR-R-050, TR-R-055. `libc` supplies the errno constants of the
+# transient table on every Unix (TR-R-104), and the `TIOCSRS485` syscall
+# plumbing on Linux (TR-R-050, TR-R-055).
+[target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true, default-features = false }
 
 [dev-dependencies]

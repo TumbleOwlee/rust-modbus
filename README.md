@@ -60,7 +60,7 @@ cargo add rust-modbus --features tls
 
 | Feature | Default | What it gates |
 | --- | --- | --- |
-| `std` | **on** | Everything above the frame layer: `Client`, `Server`, `FrameTransport`, TCP, UDP. Pulls in Tokio. |
+| `std` | **on** | Everything above the frame layer: `Client`, `Server`, `FrameTransport`, TCP, UDP. Pulls in Tokio, and `libc` on Unix. |
 | `rtu` | off | Opening a real serial port: `open_serial`, `SerialTransport`, `RtuClient`, `AsciiClient`. Implies `std`. |
 | `rs485` | off | RS-485 kernel direction control (`TIOCSRS485`) on Linux. Implies `rtu`. |
 | `sync` | off | The blocking client: `SyncClient` and its aliases. Implies `std`. |
@@ -297,10 +297,12 @@ how a serial line is served — and how the crate's own tests serve an in-memory
 pipe. `ServerConfig::unit` defaults to `None`, meaning *answer every unit*; a
 default of `Some(UnitId(1))` would silently drop every other unit's requests.
 
-Beyond `on_request`, `Service` has three optional hooks with sensible defaults:
+Beyond `on_request`, `Service` has optional hooks with sensible defaults:
 `on_connect` (answer `Acceptance::Reject` to close a peer unread), `on_disconnect`,
-and `on_error`. `on_error` is separate because most per-request failures do not
-end the connection.
+`on_error`, `on_accept_error` (a listener's accept failed) and `on_receive_error`
+(`serve_udp`'s socket receive failed); with `tls` there is also
+`on_tls_handshake_failed`. `on_error` is separate because most per-request failures
+do not end the connection.
 
 ### Over UDP
 
@@ -312,6 +314,10 @@ connection to accept — a UDP peer is stateless, so this reuses the same
 let socket = tokio::net::UdpSocket::bind("127.0.0.1:502").await?;
 server.serve_udp(socket).await?;
 ```
+
+A failed receive from the socket goes to `on_receive_error`. The default keeps
+serving on a transient error and returns it otherwise; an override can back off
+by awaiting before answering `AcceptErrorAction::Continue`.
 
 ### Over TLS
 

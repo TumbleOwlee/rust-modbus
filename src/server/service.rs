@@ -4,7 +4,7 @@
 use core::future::Future;
 use core::net::SocketAddr;
 
-use crate::error::Error;
+use crate::error::{Error, ListenerFailure};
 use crate::frame::{ExceptionCode, RequestPdu, ResponsePdu, UnitId};
 
 /// Which connection a notification concerns (SV-R-031, SV-R-036).
@@ -129,9 +129,14 @@ pub enum Acceptance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcceptErrorAction {
     /// Keep every live connection and accept again, once
-    /// [`on_accept_error`](Service::on_accept_error) has completed (SV-R-060).
+    /// [`on_accept_error`](Service::on_accept_error) has completed (SV-R-060);
+    /// for [`on_receive_error`](Service::on_receive_error), receive again
+    /// (SV-R-077).
     Continue,
-    /// Drain live connections and return the error; the default (SV-R-059, SV-R-067).
+    /// Drain live connections and return the error; the default for
+    /// `on_accept_error` (SV-R-059, SV-R-067). For
+    /// [`on_receive_error`](Service::on_receive_error), drain in-flight
+    /// datagrams and return the error (SV-R-078).
     Stop,
 }
 
@@ -223,10 +228,30 @@ pub trait Service: Send + Sync + 'static {
     /// awaiting inside it; a shutdown requested meanwhile drops the future
     /// (SV-R-061). No [`Connection`]/[`ConnectionId`] exists, since no peer was
     /// accepted (SV-R-031). A TLS handshake failure is not reported here
-    /// (SV-R-056). The default answers `Stop`.
+    /// (SV-R-056). The default answers `Stop`. A service reads
+    /// [`Error::listener_failure`] to choose between `Continue` after its own
+    /// delay and `Stop` (SV-E-036).
     fn on_accept_error(&self, error: &Error) -> impl Future<Output = AcceptErrorAction> + Send {
         let _ = error;
         async { AcceptErrorAction::Stop }
+    }
+
+    /// Receiving from the socket failed under `serve_udp` (SV-R-073).
+    ///
+    /// Never fires for a datagram that fails to decode (SV-R-075) or a response
+    /// that fails to send (SV-R-076). On `Continue` the server receives again
+    /// once this future has completed, so a service backs off by awaiting
+    /// (SV-R-077); on `Stop` in-flight datagrams finish and the error is
+    /// returned (SV-R-078). A shutdown requested meanwhile drops the future
+    /// (SV-R-079). The default answers `Continue` on a transient error and
+    /// `Stop` otherwise (SV-R-074); it adds no delay, so a persistent
+    /// transient error spins (SV-E-040).
+    fn on_receive_error(&self, error: &Error) -> impl Future<Output = AcceptErrorAction> + Send {
+        let action = match error.listener_failure() {
+            Some(ListenerFailure::Transient) => AcceptErrorAction::Continue,
+            _ => AcceptErrorAction::Stop,
+        };
+        async move { action }
     }
 
     /// A TLS handshake failed before any connection was established (SV-R-056).
@@ -276,9 +301,41 @@ mod tests {
     async fn ut_default_on_accept_error_answers_stop() {
         let error = Error::Io {
             kind: std::io::ErrorKind::OutOfMemory,
+            raw_os_error: None,
         };
         assert_eq!(
             Minimal.on_accept_error(&error).await,
+            AcceptErrorAction::Stop
+        );
+    }
+
+    #[tokio::test]
+    /// SV-R-074, SV-E-040, SV-E-039, SV-E-042 — the default `on_receive_error`
+    /// continues on a transient error and stops on anything else.
+    async fn ut_default_on_receive_error_classifies() {
+        #[cfg(unix)]
+        {
+            let transient = Error::from(std::io::Error::from_raw_os_error(libc::ENOBUFS));
+            assert_eq!(
+                Minimal.on_receive_error(&transient).await,
+                AcceptErrorAction::Continue
+            );
+            let fatal = Error::from(std::io::Error::from_raw_os_error(libc::EBADF));
+            assert_eq!(
+                Minimal.on_receive_error(&fatal).await,
+                AcceptErrorAction::Stop
+            );
+        }
+        let no_code = Error::Io {
+            kind: std::io::ErrorKind::Other,
+            raw_os_error: None,
+        };
+        assert_eq!(
+            Minimal.on_receive_error(&no_code).await,
+            AcceptErrorAction::Stop
+        );
+        assert_eq!(
+            Minimal.on_receive_error(&Error::Malformed).await,
             AcceptErrorAction::Stop
         );
     }

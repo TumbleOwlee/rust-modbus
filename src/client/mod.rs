@@ -756,7 +756,7 @@ pub struct CommEventLog {
 fn classify_unusable_reason(error: &Error) -> UnusableReason {
     match error {
         Error::ConnectionClosed => UnusableReason::PeerClosed,
-        Error::Io { kind } => {
+        Error::Io { kind, .. } => {
             if *kind == std::io::ErrorKind::UnexpectedEof {
                 UnusableReason::PeerClosed
             } else {
@@ -2435,6 +2435,7 @@ mod tests {
             client.call(UnitId(0x11), read_holding()).await,
             Err(Error::Io {
                 kind: std::io::ErrorKind::UnexpectedEof,
+                raw_os_error: None,
             })
         );
         assert!(client.is_desynchronized());

@@ -106,6 +106,22 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-040** — I/O failures surface as a typed error carrying the underlying `std::io::ErrorKind`.
 
+**TR-R-099** — `Error::Io` carries `raw_os_error: Option<i32>` beside `kind`: `Some(n)` when the `std::io::Error` it was converted from reported OS error code `n` (`std::io::Error::raw_os_error`), `None` otherwise.
+
+**TR-R-100** — `Error::Io` renders through `Display` as `I/O error: ` followed by its `kind`'s `Display`, then ` (os error n)` when `raw_os_error` is `Some(n)` and nothing further when it is `None`; e.g. `I/O error: uncategorized error (os error 105)`.
+
+**TR-R-101** — `Error::listener_failure(&self) -> Option<ListenerFailure>` returns `None` for every variant other than `Io`.
+
+**TR-R-102** — `Error::listener_failure` returns `Some(ListenerFailure::Transient)` for an `Io` whose `raw_os_error` is `Some(n)` with `n` in the current platform's transient table (TR-R-104, TR-R-105).
+
+**TR-R-103** — `Error::listener_failure` returns `Some(ListenerFailure::Fatal)` for every `Io` not classified `Transient` by TR-R-102.
+
+**TR-R-104** — On Unix the transient table of TR-R-102 is `ECONNABORTED`, `ECONNRESET`, `EINTR`, `EAGAIN`, `EWOULDBLOCK`, `EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, `EPERM`, `ETIMEDOUT`, `ENETDOWN`, `EPROTO`, `ENOPROTOOPT`, `EHOSTDOWN`, `ENONET`, `EHOSTUNREACH`, `EOPNOTSUPP`, `ENETUNREACH`, each where the platform defines it.
+
+**TR-R-105** — On Windows the transient table of TR-R-102 is `WSAECONNRESET` (10054), `WSAECONNABORTED` (10053), `WSAEMFILE` (10024), `WSAENOBUFS` (10055), `WSAEINTR` (10004), `WSAEWOULDBLOCK` (10035), `WSAEMSGSIZE` (10040).
+
+**TR-R-106** — `ListenerFailure` has exactly the variants `Transient` (the listener or socket is still usable; retrying may succeed) and `Fatal` (it can no longer accept or receive), and is exhaustive (NF-R-017).
+
 **TR-R-041** — Timeouts surface as a distinct timeout error naming what timed out.
 
 **TR-R-090** — A transport that has timed out mid-ADU is treated as desynchronized and is not usable for a further receive (TR-R-041).

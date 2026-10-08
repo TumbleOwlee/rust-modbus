@@ -6,6 +6,82 @@
 
 use thiserror::Error as ThisError;
 
+/// Renders the ` (os error n)` suffix of an `Io` error (TR-R-100).
+#[cfg(feature = "std")]
+struct OsCode(Option<i32>);
+
+#[cfg(feature = "std")]
+impl core::fmt::Display for OsCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(n) => write!(f, " (os error {n})"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Whether a failed listener or socket is still usable (TR-R-106).
+#[cfg(feature = "std")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListenerFailure {
+    /// Still usable; retrying may succeed.
+    Transient,
+    /// Can no longer accept or receive.
+    Fatal,
+}
+
+/// Unix transient errno values (TR-R-104).
+#[cfg(all(feature = "std", unix))]
+const UNIX_TRANSIENT: &[i32] = &[
+    libc::ECONNABORTED,
+    libc::ECONNRESET,
+    libc::EINTR,
+    libc::EAGAIN,
+    libc::EWOULDBLOCK,
+    libc::EMFILE,
+    libc::ENFILE,
+    libc::ENOBUFS,
+    libc::ENOMEM,
+    libc::EPERM,
+    libc::ETIMEDOUT,
+    libc::ENETDOWN,
+    libc::EPROTO,
+    libc::ENOPROTOOPT,
+    libc::EHOSTDOWN,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    libc::ENONET,
+    libc::EHOSTUNREACH,
+    libc::EOPNOTSUPP,
+    libc::ENETUNREACH,
+];
+
+/// Windows transient codes (TR-R-105): `WSAECONNRESET`, `WSAECONNABORTED`,
+/// `WSAEMFILE`, `WSAENOBUFS`, `WSAEINTR`, `WSAEWOULDBLOCK`, `WSAEMSGSIZE`.
+#[cfg(feature = "std")]
+const WINDOWS_TRANSIENT: [i32; 7] = [10054, 10053, 10024, 10055, 10004, 10035, 10040];
+
+#[cfg(all(feature = "std", unix))]
+const OTHER_TRANSIENT: &[i32] = UNIX_TRANSIENT;
+/// No table outside Unix and Windows (TR-E-048).
+#[cfg(all(feature = "std", not(unix)))]
+const OTHER_TRANSIENT: &[i32] = &[];
+
+#[cfg(feature = "std")]
+const TRANSIENT: &[i32] = if cfg!(windows) {
+    &WINDOWS_TRANSIENT
+} else {
+    OTHER_TRANSIENT
+};
+
+/// `Transient` iff `code` is in `table` (TR-R-102, TR-R-103, TR-E-049).
+#[cfg(feature = "std")]
+fn classify(code: Option<i32>, table: &[i32]) -> ListenerFailure {
+    match code {
+        Some(n) if table.contains(&n) => ListenerFailure::Transient,
+        _ => ListenerFailure::Fatal,
+    }
+}
+
 /// A Modbus encoding or decoding failure.
 #[derive(Debug, Clone, PartialEq, ThisError)]
 #[cfg_attr(not(feature = "tls"), derive(Eq))]
@@ -137,14 +213,18 @@ pub enum Error {
 
     /// An I/O failure on a socket or a serial port (TR-R-040).
     ///
-    /// The kind is carried rather than the [`std::io::Error`] itself: this enum
-    /// is compared for equality throughout the crate's tests, and `io::Error`
-    /// implements no `PartialEq`. The kind is the part a caller matches on.
+    /// The kind and the raw OS code are carried rather than the
+    /// [`std::io::Error`] itself: this enum is compared for equality
+    /// throughout the crate's tests, and `io::Error` implements no
+    /// `PartialEq`. The code separates errors std reports under one kind
+    /// (`ENOBUFS` and `EBADF`).
     #[cfg(feature = "std")]
-    #[error("I/O error: {kind}")]
+    #[error("I/O error: {kind}{}", OsCode(*.raw_os_error))]
     Io {
         /// What the operating system reported.
         kind: std::io::ErrorKind,
+        /// The OS error code, when the failure came from the OS (TR-R-099).
+        raw_os_error: Option<i32>,
     },
 
     /// An operation did not complete within its time limit (TR-R-089,
@@ -249,6 +329,16 @@ pub enum Error {
 
 #[cfg(feature = "std")]
 impl Error {
+    /// Classifies an `Io` error by its OS code; `None` for every other
+    /// variant (TR-R-101). `on_accept_error` and `on_receive_error` read it
+    /// to tell a transient failure from a dead listener (SV-E-036, SV-R-074).
+    pub fn listener_failure(&self) -> Option<ListenerFailure> {
+        match *self {
+            Self::Io { raw_os_error, .. } => Some(classify(raw_os_error, TRANSIENT)),
+            _ => None,
+        }
+    }
+
     /// Whether this failure ends the byte stream itself, rather than costing
     /// one frame.
     ///
@@ -269,7 +359,10 @@ impl Error {
 #[cfg(feature = "std")]
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
-        Self::Io { kind: error.kind() }
+        Self::Io {
+            kind: error.kind(),
+            raw_os_error: error.raw_os_error(),
+        }
     }
 }
 
@@ -287,7 +380,8 @@ mod tests {
     fn ut_stream_failures_are_distinguished_from_frame_failures() {
         assert!(
             Error::Io {
-                kind: std::io::ErrorKind::BrokenPipe
+                kind: std::io::ErrorKind::BrokenPipe,
+                raw_os_error: None
             }
             .ends_stream()
         );
@@ -325,7 +419,8 @@ mod tests {
         assert_ne!(
             handshake,
             Error::Io {
-                kind: std::io::ErrorKind::Other
+                kind: std::io::ErrorKind::Other,
+                raw_os_error: None
             }
         );
         assert_ne!(handshake, Error::Timeout { what: "connect" });
@@ -341,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    /// TR-R-040 — an I/O failure surfaces as a typed variant carrying the
+    /// TR-R-040, TR-R-099 — an I/O failure surfaces as a typed variant carrying the
     /// kind the platform reported, not as a formatted string.
     fn ut_io_error_maps_to_kind() {
         let error: Error = std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into();
@@ -349,7 +444,150 @@ mod tests {
             error,
             Error::Io {
                 kind: std::io::ErrorKind::ConnectionRefused,
+                raw_os_error: None,
             }
+        );
+    }
+
+    #[test]
+    /// TR-R-099 — `Io` keeps the OS code when there is one, `None` otherwise.
+    fn ut_io_error_keeps_raw_os_error() {
+        let os = std::io::Error::from_raw_os_error(5);
+        let kind = os.kind();
+        assert_eq!(
+            Error::from(os),
+            Error::Io {
+                kind,
+                raw_os_error: Some(5)
+            }
+        );
+        let Error::Io { raw_os_error, .. } =
+            Error::from(std::io::Error::from(std::io::ErrorKind::Other))
+        else {
+            panic!("not Io")
+        };
+        assert_eq!(raw_os_error, None);
+    }
+
+    #[test]
+    /// TR-R-100 — `Display` appends ` (os error n)` only when a code exists.
+    fn ut_io_display_appends_os_code() {
+        let kind = std::io::ErrorKind::Other;
+        assert_eq!(
+            Error::Io {
+                kind,
+                raw_os_error: Some(105)
+            }
+            .to_string(),
+            "I/O error: other error (os error 105)"
+        );
+        assert_eq!(
+            Error::Io {
+                kind,
+                raw_os_error: None
+            }
+            .to_string(),
+            "I/O error: other error"
+        );
+    }
+
+    #[test]
+    /// TR-R-101 — only `Io` has a listener-failure classification.
+    fn ut_listener_failure_is_none_off_io() {
+        assert_eq!(Error::Malformed.listener_failure(), None);
+        assert_eq!(Error::ConnectionClosed.listener_failure(), None);
+        assert_eq!(Error::Timeout { what: "connect" }.listener_failure(), None);
+    }
+
+    #[cfg(unix)]
+    fn classify_os(code: i32) -> Option<ListenerFailure> {
+        Error::from(std::io::Error::from_raw_os_error(code)).listener_failure()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// TR-R-102, TR-R-104 — every code of the Unix table is transient.
+    fn ut_unix_transient_codes_classify_transient() {
+        let codes = [
+            libc::ECONNABORTED,
+            libc::ECONNRESET,
+            libc::EINTR,
+            libc::EAGAIN,
+            libc::EWOULDBLOCK,
+            libc::EMFILE,
+            libc::ENFILE,
+            libc::ENOBUFS,
+            libc::ENOMEM,
+            libc::EPERM,
+            libc::ETIMEDOUT,
+            libc::ENETDOWN,
+            libc::EPROTO,
+            libc::ENOPROTOOPT,
+            libc::EHOSTDOWN,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            libc::ENONET,
+            libc::EHOSTUNREACH,
+            libc::EOPNOTSUPP,
+            libc::ENETUNREACH,
+        ];
+        for code in codes {
+            assert_eq!(
+                classify_os(code),
+                Some(ListenerFailure::Transient),
+                "{code}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// TR-R-103 — a code outside the table is fatal.
+    fn ut_other_os_codes_classify_fatal() {
+        for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+            assert_eq!(classify_os(code), Some(ListenerFailure::Fatal), "{code}");
+        }
+    }
+
+    #[test]
+    /// TR-R-103, TR-E-049 — without an OS code the kind is never consulted.
+    fn ut_io_without_os_code_is_fatal() {
+        for kind in [
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::Interrupted,
+        ] {
+            assert_eq!(
+                Error::Io {
+                    kind,
+                    raw_os_error: None
+                }
+                .listener_failure(),
+                Some(ListenerFailure::Fatal)
+            );
+        }
+    }
+
+    #[test]
+    /// TR-E-048 — a platform with no table classifies everything fatal.
+    fn ut_empty_table_classifies_everything_fatal() {
+        assert_eq!(classify(Some(10054), &[]), ListenerFailure::Fatal);
+        assert_eq!(classify(None, &[]), ListenerFailure::Fatal);
+    }
+
+    #[test]
+    /// TR-R-102, TR-R-105, SV-E-039, SV-E-042 — the Windows table, incl.
+    /// `WSAECONNRESET` and `WSAEMSGSIZE`.
+    fn ut_windows_transient_table() {
+        assert_eq!(WINDOWS_TRANSIENT.len(), 7);
+        for code in [10054, 10053, 10024, 10055, 10004, 10035, 10040] {
+            assert!(WINDOWS_TRANSIENT.contains(&code), "{code}");
+        }
+        assert_eq!(
+            classify(Some(10054), &WINDOWS_TRANSIENT),
+            ListenerFailure::Transient
+        );
+        assert_eq!(
+            classify(Some(10040), &WINDOWS_TRANSIENT),
+            ListenerFailure::Transient
         );
     }
 }

@@ -641,6 +641,7 @@ mod shared {
             } else {
                 Error::Io {
                     kind: std::io::ErrorKind::UnexpectedEof,
+                    raw_os_error: None,
                 }
             });
         }
@@ -1015,6 +1016,7 @@ mod tests {
             server.recv_request().await,
             Err(Error::Io {
                 kind: std::io::ErrorKind::UnexpectedEof,
+                raw_os_error: None,
             })
         );
 
@@ -1823,6 +1825,7 @@ mod failure_tests {
             transport.send_request(&first, &read_holding()).await,
             Err(Error::Io {
                 kind: io::ErrorKind::BrokenPipe,
+                raw_os_error: None,
             })
         );
         let abandoned_len = transport.stream.written.len();
@@ -1879,7 +1882,10 @@ mod failure_tests {
 
         assert_eq!(
             client.call(UnitId(0x11), read_holding()).await,
-            Err(Error::Io { kind })
+            Err(Error::Io {
+                kind,
+                raw_os_error: None
+            })
         );
         assert_eq!(
             client.state(),

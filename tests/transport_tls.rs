@@ -116,13 +116,18 @@ async fn it_connect_tls_tcp_refused_is_distinct_from_handshake_failure() {
     let addr = listener.local_addr().expect("reports its address");
     drop(listener);
 
-    assert_eq!(
-        connect_tls(addr, TcpConfig::default(), trusting_ca())
-            .await
-            .err(),
-        Some(Error::Io {
-            kind: std::io::ErrorKind::ConnectionRefused,
-        })
+    let refused = connect_tls(addr, TcpConfig::default(), trusting_ca())
+        .await
+        .err();
+    assert!(
+        matches!(
+            refused,
+            Some(Error::Io {
+                kind: std::io::ErrorKind::ConnectionRefused,
+                ..
+            })
+        ),
+        "{refused:?}"
     );
 }
 
