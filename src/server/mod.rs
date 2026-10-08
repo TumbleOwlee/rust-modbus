@@ -188,10 +188,12 @@ where
     /// datagram's source address where known, so a service can still see who
     /// it answered without a synthesized identity.
     ///
-    /// A datagram that fails to receive or decode is reported through
-    /// [`Service::on_error`] and costs nothing beyond itself (SV-R-058,
-    /// TR-R-098): unlike a stream, a UDP socket carries no boundary state a
-    /// bad datagram could desynchronize, so this never ends serving.
+    /// A datagram that fails to decode costs nothing beyond itself (SV-R-058,
+    /// TR-R-098) and is never reported to [`Service::on_receive_error`]
+    /// (SV-R-075), and neither is a failure sending a response (SV-R-076). A
+    /// failed receive from the socket is reported to
+    /// [`Service::on_receive_error`], whose answer decides whether serving goes
+    /// on (SV-R-073, SV-R-077, SV-R-078).
     ///
     /// Built on [`recv_datagram_request`](crate::transport::recv_datagram_request)
     /// and [`send_datagram_response_into`](crate::transport::send_datagram_response_into)
@@ -200,24 +202,23 @@ where
     ///
     /// # Errors
     ///
-    /// Currently infallible; the result is part of the signature so that a
-    /// future serving failure needs no API change.
+    /// Fails when receiving from the socket fails and the service answers
+    /// [`AcceptErrorAction::Stop`] to [`Service::on_receive_error`] (by
+    /// default, for anything other than a transient error); in-flight
+    /// datagrams are finished before the error is returned (SV-R-078,
+    /// SV-R-051). Shutdown returns `Ok(())` (SV-R-079).
     pub async fn serve_udp(self, socket: tokio::net::UdpSocket) -> Result<()> {
         let socket = Arc::new(socket);
         let mut datagrams: JoinSet<()> = JoinSet::new();
         let mut signal = self.shutdown.subscribe();
         let mut buf = alloc::vec![0u8; Tcp::MAX_ADU_LEN];
         loop {
-            let received = tokio::select! {
-                biased;
-                () = shutdown_requested(&mut signal) => {
-                    while datagrams.join_next().await.is_some() {}
-                    return Ok(());
-                }
-                received = recv_datagram_request::<Tcp>(&socket, &mut buf) => received,
-            };
+            let received = self
+                .next_datagram(&mut datagrams, &mut signal, &mut buf, UdpRecv(&socket))
+                .await;
             match received {
-                Ok((header, request, peer)) => {
+                Accepted::Done(result) => return result,
+                Accepted::Got((header, request, peer)) => {
                     let service = Arc::clone(&self.service);
                     let config = self.config;
                     let socket = Arc::clone(&socket);
@@ -234,10 +235,6 @@ where
                         )
                         .await;
                     });
-                }
-                Err(error) => {
-                    let conn = Connection::new(UDP_CONNECTION, None);
-                    self.service.on_error(&conn, &error).await;
                 }
             }
         }
@@ -357,17 +354,88 @@ where
         }
     }
 
+    /// Wait for the next decoded datagram, reporting socket receive failures
+    /// to the service (SV-R-073).
+    ///
+    /// A decode failure is reported through [`Service::on_error`] and never to
+    /// the receive hook (SV-R-075). `Continue` keeps `datagrams` and receives
+    /// again once the hook's future has completed (SV-R-077). `Stop` drains
+    /// them and returns the error (SV-R-078, SV-R-051). A shutdown while
+    /// receiving, or while the hook is pending, drains and returns `Ok`; the
+    /// hook's future is dropped, not awaited (SV-R-079).
+    async fn next_datagram(
+        &self,
+        datagrams: &mut JoinSet<()>,
+        signal: &mut watch::Receiver<bool>,
+        buf: &mut [u8],
+        mut recv: impl RecvDatagram,
+    ) -> Accepted<(MbapHeader, RequestPdu, core::net::SocketAddr)> {
+        loop {
+            let received = tokio::select! {
+                biased;
+                () = shutdown_requested(signal) => {
+                    while datagrams.join_next().await.is_some() {}
+                    return Accepted::Done(Ok(()));
+                }
+                received = recv.recv(buf) => received,
+            };
+            let error = match received {
+                Ok(datagram) => return Accepted::Got(datagram),
+                Err(error @ Error::Io { .. }) => error,
+                Err(error) => {
+                    let conn = Connection::new(UDP_CONNECTION, None);
+                    self.service.on_error(&conn, &error).await;
+                    continue;
+                }
+            };
+            let action = tokio::select! {
+                biased;
+                () = shutdown_requested(signal) => {
+                    while datagrams.join_next().await.is_some() {}
+                    return Accepted::Done(Ok(()));
+                }
+                action = self.service.on_receive_error(&error) => action,
+            };
+            if action == AcceptErrorAction::Stop {
+                while datagrams.join_next().await.is_some() {}
+                return Accepted::Done(Err(error));
+            }
+        }
+    }
+
     /// Allocate the next connection identifier (SV-R-031).
     fn next_id(&self) -> ConnectionId {
         ConnectionId(self.next_connection.fetch_add(1, Ordering::Relaxed))
     }
 }
 
-/// Outcome of [`Server::next_accept`].
+/// One receive from a datagram socket. A trait rather than an `AsyncFnMut`
+/// parameter: the latter's future does not infer `Send` for `serve_udp`.
+trait RecvDatagram {
+    fn recv<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = Result<(MbapHeader, RequestPdu, core::net::SocketAddr)>> + Send + 'a;
+}
+
+/// The socket receive of `serve_udp`.
+struct UdpRecv<'s>(&'s tokio::net::UdpSocket);
+
+impl RecvDatagram for UdpRecv<'_> {
+    fn recv<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = Result<(MbapHeader, RequestPdu, core::net::SocketAddr)>> + Send + 'a
+    {
+        recv_datagram_request::<Tcp>(self.0, buf)
+    }
+}
+
+/// Outcome of [`Server::next_accept`] and [`Server::next_datagram`].
 enum Accepted<T> {
-    /// A connection was accepted.
+    /// A connection was accepted, or a datagram received.
     Got(T),
-    /// Serving is over: shutdown (`Ok`) or a listener failure answered `Stop`.
+    /// Serving is over: shutdown (`Ok`) or a listener or socket failure answered `Stop`.
     Done(Result<()>),
 }
 
@@ -1029,7 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-062 — a link its peer closes cleanly returns `Ok(())`.
+    /// SV-R-062, SV-E-041 — a link its peer closes cleanly returns `Ok(())`.
     async fn ut_serve_link_returns_ok_when_closed() {
         let service = Recorder::new(|_| Ok(registers()));
         let (serving, client) = link(Arc::clone(&service));
@@ -2142,6 +2210,300 @@ mod tests {
             flag.store(true, Ordering::SeqCst);
         });
         (ended, release)
+    }
+
+    /// A service recording receive errors and answering as scripted.
+    struct ReceiveWatcher {
+        seen: Mutex<Vec<Error>>,
+        actions: Mutex<std::collections::VecDeque<AcceptErrorAction>>,
+        /// When set, the hook waits for a permit before answering (SV-R-077).
+        gate: Option<Arc<tokio::sync::Semaphore>>,
+        /// When set, the hook never completes; the flag records its drop (SV-R-079).
+        hang: Option<Arc<core::sync::atomic::AtomicBool>>,
+    }
+
+    impl ReceiveWatcher {
+        fn new(
+            actions: &[AcceptErrorAction],
+            gate: Option<Arc<tokio::sync::Semaphore>>,
+            hang: Option<Arc<core::sync::atomic::AtomicBool>>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                actions: Mutex::new(actions.iter().copied().collect()),
+                gate,
+                hang,
+            })
+        }
+
+        fn seen(&self) -> Vec<Error> {
+            self.seen.lock().expect("no test panics holding it").clone()
+        }
+    }
+
+    impl Service for Arc<ReceiveWatcher> {
+        async fn on_request(
+            &self,
+            _conn: &Connection,
+            _unit: UnitId,
+            request: RequestPdu,
+        ) -> core::result::Result<Option<ResponsePdu>, ExceptionCode> {
+            match request {
+                RequestPdu::ReadHoldingRegisters { quantity, .. } if quantity.0 == 1 => {
+                    Ok(Some(ResponsePdu::ReadHoldingRegisters {
+                        registers: alloc::vec![RegisterValue(0); 130],
+                    }))
+                }
+                _ => Ok(Some(registers())),
+            }
+        }
+
+        async fn on_receive_error(&self, error: &Error) -> AcceptErrorAction {
+            self.seen
+                .lock()
+                .expect("no test panics holding it")
+                .push(error.clone());
+            if let Some(flag) = &self.hang {
+                let _guard = DropFlag(Arc::clone(flag));
+                core::future::pending::<()>().await;
+            }
+            if let Some(gate) = &self.gate {
+                gate.acquire().await.expect("never closed").forget();
+            }
+            self.actions
+                .lock()
+                .expect("no test panics holding it")
+                .pop_front()
+                .unwrap_or(AcceptErrorAction::Stop)
+        }
+    }
+
+    type Datagram = (MbapHeader, RequestPdu, SocketAddr);
+
+    fn datagram() -> Datagram {
+        (header(1, 1), read_holding(), ephemeral())
+    }
+
+    /// A scripted receive: yields each result in turn, then never completes.
+    struct ScriptedRecv {
+        script: std::collections::VecDeque<Result<Datagram>>,
+        calls: Arc<core::sync::atomic::AtomicUsize>,
+    }
+
+    impl RecvDatagram for ScriptedRecv {
+        fn recv<'a>(
+            &'a mut self,
+            _buf: &'a mut [u8],
+        ) -> impl Future<Output = Result<Datagram>> + Send + 'a {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let next = self.script.pop_front();
+            async move {
+                match next {
+                    Some(result) => result,
+                    None => core::future::pending().await,
+                }
+            }
+        }
+    }
+
+    fn scripted_datagrams(
+        script: Vec<Result<Datagram>>,
+        calls: Arc<core::sync::atomic::AtomicUsize>,
+    ) -> ScriptedRecv {
+        ScriptedRecv {
+            script: script.into(),
+            calls,
+        }
+    }
+
+    #[tokio::test]
+    /// SV-R-073 — the hook receives the receive error.
+    async fn ut_receive_error_is_reported_with_the_error() {
+        let watcher = ReceiveWatcher::new(&[AcceptErrorAction::Continue], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut datagrams = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = server
+            .next_datagram(
+                &mut datagrams,
+                &mut signal,
+                &mut [],
+                scripted_datagrams(vec![Err(io_error()), Ok(datagram())], calls),
+            )
+            .await;
+        assert!(matches!(received, Accepted::Got(_)));
+        assert_eq!(watcher.seen(), alloc::vec![io_error()]);
+    }
+
+    #[tokio::test]
+    /// SV-R-075 — a datagram that fails to decode never reaches `on_receive_error`.
+    async fn ut_udp_decode_failure_is_not_a_receive_error() {
+        let watcher = ReceiveWatcher::new(&[], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut datagrams = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = server
+            .next_datagram(
+                &mut datagrams,
+                &mut signal,
+                &mut [],
+                scripted_datagrams(vec![Err(Error::Malformed), Ok(datagram())], calls),
+            )
+            .await;
+        assert!(matches!(received, Accepted::Got(_)));
+        assert!(watcher.seen().is_empty());
+    }
+
+    #[tokio::test]
+    /// SV-R-077, SV-E-037 — `Continue` keeps in-flight datagrams and receives
+    /// again only once the hook's future has completed.
+    async fn ut_receive_continue_keeps_datagrams_and_receives_after_hook() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let watcher = ReceiveWatcher::new(
+            &[AcceptErrorAction::Continue],
+            Some(Arc::clone(&gate)),
+            None,
+        );
+        let server = Server::new(Arc::clone(&watcher));
+        let mut datagrams = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let (ended, release) = held_connection(&mut datagrams);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let seen = Arc::clone(&watcher);
+        let held = Arc::clone(&ended);
+        let driver = async {
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(seen.seen().len(), 1, "the hook is pending");
+            assert_eq!(observed.load(Ordering::SeqCst), 1, "held by the hook");
+            assert!(!held.load(Ordering::SeqCst), "in-flight datagram kept");
+            gate.add_permits(1);
+        };
+        let (received, ()) = tokio::join!(
+            server.next_datagram(
+                &mut datagrams,
+                &mut signal,
+                &mut [],
+                scripted_datagrams(vec![Err(io_error()), Ok(datagram())], Arc::clone(&calls)),
+            ),
+            driver
+        );
+        assert!(matches!(received, Accepted::Got(_)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(datagrams.len(), 1);
+        release.add_permits(1);
+        while datagrams.join_next().await.is_some() {}
+        assert!(ended.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    /// SV-R-078, SV-R-051, SV-E-037 — `Stop` drains in-flight datagrams, then
+    /// returns the error.
+    async fn ut_receive_stop_drains_then_returns_error() {
+        let watcher = ReceiveWatcher::new(&[], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let mut datagrams = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let ended = live_connection(&mut datagrams, 20);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = server
+            .next_datagram(
+                &mut datagrams,
+                &mut signal,
+                &mut [],
+                scripted_datagrams(vec![Err(io_error())], calls),
+            )
+            .await;
+        assert!(matches!(received, Accepted::Done(Err(e)) if e == io_error()));
+        assert!(ended.load(Ordering::SeqCst), "drained before returning");
+    }
+
+    #[tokio::test]
+    /// SV-R-079, SV-E-038 — a shutdown while the hook is pending drops it and
+    /// returns `Ok(())` after draining.
+    async fn ut_shutdown_during_pending_receive_hook_drops_it() {
+        let dropped = Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let watcher = ReceiveWatcher::new(&[], None, Some(Arc::clone(&dropped)));
+        let server = Server::new(Arc::clone(&watcher));
+        let mut datagrams = JoinSet::new();
+        let mut signal = server.shutdown.subscribe();
+        let ended = live_connection(&mut datagrams, 20);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&watcher);
+        let driver = async {
+            while seen.seen().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            server.shutdown.send_replace(true);
+        };
+        let (received, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                server.next_datagram(
+                    &mut datagrams,
+                    &mut signal,
+                    &mut [],
+                    scripted_datagrams(vec![Err(io_error())], calls),
+                ),
+                driver
+            )
+        })
+        .await
+        .expect("shutdown ends the wait");
+        assert!(matches!(received, Accepted::Done(Ok(()))));
+        assert!(dropped.load(Ordering::SeqCst), "the hook future is dropped");
+        assert!(ended.load(Ordering::SeqCst), "drained before returning");
+    }
+
+    #[tokio::test]
+    /// SV-R-076 — a response that fails to send never reaches
+    /// `on_receive_error`. The failure induced is the encode refusal
+    /// (SV-E-013, TR-R-097) inside `send_datagram_response_into`, the only send
+    /// failure a test can provoke; a `send_to` error takes the same path, the
+    /// spawned `serve_datagram`, and never reaches the receive loop.
+    async fn ut_udp_send_failure_is_not_a_receive_error() {
+        let watcher = ReceiveWatcher::new(&[], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let handle = server.handle();
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(server.serve_udp(socket));
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("sends the unanswerable request");
+        client
+            .send_request(
+                &header(2, 1),
+                &RequestPdu::ReadHoldingRegisters {
+                    address: Address(0),
+                    quantity: Quantity(2),
+                },
+            )
+            .await
+            .expect("sends the second request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers()))
+        );
+
+        handle.shutdown().await;
+        let result = tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("serving ends")
+            .expect("the task finishes");
+        assert_eq!(result, Ok(()));
+        assert!(watcher.seen().is_empty());
     }
 
     #[tokio::test]
