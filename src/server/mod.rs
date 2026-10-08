@@ -188,9 +188,10 @@ where
     /// datagram's source address where known, so a service can still see who
     /// it answered without a synthesized identity.
     ///
-    /// A datagram that fails to decode costs nothing beyond itself (SV-R-058,
-    /// TR-R-098) and is never reported to [`Service::on_receive_error`]
-    /// (SV-R-075), and neither is a failure sending a response (SV-R-076). A
+    /// A datagram that fails to decode, or a response that fails to send, costs
+    /// nothing beyond itself (SV-R-058, TR-R-098) and is reported to
+    /// [`Service::on_error`] with [`UDP_CONNECTION`] (SV-R-080), never to
+    /// [`Service::on_receive_error`] (SV-R-075, SV-R-076). A
     /// failed receive from the socket is reported to
     /// [`Service::on_receive_error`], whose answer decides whether serving goes
     /// on (SV-R-073, SV-R-077, SV-R-078).
@@ -357,7 +358,8 @@ where
     /// Wait for the next decoded datagram, reporting socket receive failures
     /// to the service (SV-R-073).
     ///
-    /// A decode failure is never reported to the receive hook (SV-R-075). `Continue` keeps `datagrams` and receives
+    /// A decode failure goes to [`Service::on_error`] (SV-R-080), never to the
+    /// receive hook (SV-R-075). `Continue` keeps `datagrams` and receives
     /// again once the hook's future has completed (SV-R-077). `Stop` drains
     /// them and returns the error (SV-R-078, SV-R-051). A shutdown while
     /// receiving, or while the hook is pending, drains and returns `Ok`; the
@@ -2021,7 +2023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// SV-R-058 — a datagram that fails to decode is reported and costs
+    /// SV-R-058, SV-R-080 — a datagram that fails to decode is reported and costs
     /// nothing beyond itself: the next datagram, however malformed the first
     /// one was, is answered normally.
     async fn ut_udp_decode_failure_does_not_disturb_other_datagrams() {
@@ -2214,6 +2216,8 @@ mod tests {
     /// A service recording receive errors and answering as scripted.
     struct ReceiveWatcher {
         seen: Mutex<Vec<Error>>,
+        /// Every `on_error` notification (SV-R-080).
+        reported: Mutex<Vec<(ConnectionId, Error)>>,
         actions: Mutex<std::collections::VecDeque<AcceptErrorAction>>,
         /// When set, the hook waits for a permit before answering (SV-R-077).
         gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -2229,6 +2233,7 @@ mod tests {
         ) -> Arc<Self> {
             Arc::new(Self {
                 seen: Mutex::new(Vec::new()),
+                reported: Mutex::new(Vec::new()),
                 actions: Mutex::new(actions.iter().copied().collect()),
                 gate,
                 hang,
@@ -2241,6 +2246,13 @@ mod tests {
     }
 
     impl Service for Arc<ReceiveWatcher> {
+        async fn on_error(&self, conn: &Connection, error: &Error) {
+            self.reported
+                .lock()
+                .expect("no test panics holding it")
+                .push((conn.id(), error.clone()));
+        }
+
         async fn on_request(
             &self,
             _conn: &Connection,
@@ -2503,6 +2515,78 @@ mod tests {
             .expect("the task finishes");
         assert_eq!(result, Ok(()));
         assert!(watcher.seen().is_empty());
+    }
+
+    #[tokio::test]
+    /// SV-R-080, SV-R-066 — under `serve_udp` a datagram that fails to decode
+    /// and a response that fails to send are both reported to `on_error` with
+    /// `ConnectionId(0)`.
+    async fn ut_udp_per_datagram_failures_reach_on_error_with_connection_zero() {
+        let watcher = ReceiveWatcher::new(&[], None, None);
+        let server = Server::new(Arc::clone(&watcher));
+        let handle = server.handle();
+        let socket = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        let addr = socket.local_addr().expect("reports its address");
+        let serving = tokio::spawn(server.serve_udp(socket));
+
+        let raw = tokio::net::UdpSocket::bind(ephemeral())
+            .await
+            .expect("binds");
+        raw.connect(addr).await.expect("connects");
+        raw.send(&[0, 1, 0, 0, 0, 2, 1, 0])
+            .await
+            .expect("sends garbage");
+
+        let mut client =
+            crate::transport::connect_udp(addr, crate::transport::UdpConfig::default())
+                .await
+                .expect("connects");
+        client
+            .send_request(&header(1, 1), &read_holding())
+            .await
+            .expect("sends the unanswerable request");
+        client
+            .send_request(
+                &header(2, 1),
+                &RequestPdu::ReadHoldingRegisters {
+                    address: Address(0),
+                    quantity: Quantity(2),
+                },
+            )
+            .await
+            .expect("sends the second request");
+        assert_eq!(
+            client.recv_response().await,
+            Ok((header(2, 1), registers()))
+        );
+
+        handle.shutdown().await;
+        tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("serving ends")
+            .expect("the task finishes")
+            .expect("ok");
+        let reported = watcher
+            .reported
+            .lock()
+            .expect("no test panics holding it")
+            .clone();
+        assert_eq!(reported.len(), 2, "{reported:?}");
+        assert!(reported.iter().all(|(id, _)| *id == UDP_CONNECTION));
+        assert!(
+            reported
+                .iter()
+                .any(|(_, e)| *e == Error::InvalidFunctionCode(0)),
+            "{reported:?}"
+        );
+        assert!(
+            reported
+                .iter()
+                .any(|(_, e)| matches!(e, Error::PduTooLarge { .. })),
+            "{reported:?}"
+        );
     }
 
     #[tokio::test]
