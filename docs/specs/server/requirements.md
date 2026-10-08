@@ -130,7 +130,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 
 **SV-R-057** — The crate provides `Server::serve_udp`, taking an already-bound UDP socket. Each inbound datagram is dispatched to `Service`'s request-handling method (SV-R-003) independently and its response, if any, is sent to that datagram's source address.
 
-**SV-R-066** — Under `Server::serve_udp` (SV-R-057) no per-peer connection identity is assigned: every datagram reaches the service with the fixed `ConnectionId(0)`, and no connection lifecycle notification (SV-R-030, SV-R-031, SV-R-032, SV-R-033, SV-R-034, SV-R-035, SV-R-036) fires, since a UDP datagram is not part of a connection.
+**SV-R-066** — Under `Server::serve_udp` (SV-R-057) no per-peer connection identity is assigned: every datagram reaches the service with the fixed `ConnectionId(0)`, and no connection lifecycle notification (SV-R-030, SV-R-031, SV-R-032, SV-R-033, SV-R-035, SV-R-036) fires, since a UDP datagram is not part of a connection.
 
 **SV-R-058** — A request-handling failure on one datagram does not affect handling of any other datagram (per-datagram counterpart to SV-R-035's per-connection isolation).
 
@@ -147,6 +147,8 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public server types
 **SV-R-078** — On `AcceptErrorAction::Stop` from `on_receive_error`, `serve_udp` returns `Err(error)` with the error that failed the receive, only once every datagram's handling already in flight has finished.
 
 **SV-R-079** — A shutdown requested while `on_receive_error` is pending drops that future without awaiting its completion, and `serve_udp` returns `Ok(())` once every datagram's handling already in flight has finished (SV-R-041, SV-R-042, SV-R-044).
+
+**SV-R-080** — Under `serve_udp`, every per-datagram failure (a datagram that fails to decode, or a response that fails to send) is reported to `on_error` with the fixed `ConnectionId(0)` (SV-R-034, SV-R-066).
 
 **SV-R-059** — `Service` provides `on_accept_error`, notified when accepting from a listener fails in `serve`, `serve_framed` or `serve_tls`, taking the error that failed the accept and answering with an `AcceptErrorAction` (`Continue` or `Stop`). It has default behavior of answering `Stop`, so an existing implementor is unaffected. No `Connection`/`ConnectionId` is assigned, since no peer was accepted (SV-R-031). A TLS handshake failure is not an accept failure (SV-R-056).
 
