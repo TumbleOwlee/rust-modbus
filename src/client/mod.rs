@@ -216,6 +216,26 @@ where
     /// matching response arrives within the response timeout, or if the client
     /// is already desynchronized.
     pub async fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>> {
+        let response_timeout = self.config.response_timeout;
+        self.call_with_timeout(unit, request, response_timeout)
+            .await
+    }
+
+    /// Issue a request bounded by `response_timeout` instead of
+    /// [`ClientConfig::response_timeout`], for this exchange only
+    /// (CL-R-110, CL-R-111).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the request cannot be encoded, if the transport fails, if no
+    /// matching response arrives within the response timeout, or if the client
+    /// is already desynchronized.
+    pub async fn call_with_timeout(
+        &mut self,
+        unit: UnitId,
+        request: RequestPdu,
+        response_timeout: Duration,
+    ) -> Result<Option<ResponsePdu>> {
         if self.is_desynchronized() {
             return Err(Error::Desynchronized);
         }
@@ -244,10 +264,11 @@ where
         // Absolute, and fixed once the request is on the wire: waiting is never
         // extended by the time spent writing (CL-R-014) or by discarding a
         // response that was not ours (CL-R-097).
-        let deadline = Instant::now() + self.config.response_timeout;
+        let deadline = Instant::now().checked_add(response_timeout);
         loop {
-            let received =
-                match tokio::time::timeout_at(deadline, self.transport.recv_response()).await {
+            let receive = self.transport.recv_response();
+            let received = match deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, receive).await {
                     Ok(result) => result,
                     Err(_elapsed) => {
                         // Nothing failed; the wait ran out. What the peer sends
@@ -255,7 +276,10 @@ where
                         self.state = ClientState::Unusable(UnusableReason::Silent);
                         return Err(Error::Timeout { what: "response" });
                     }
-                };
+                },
+                // A timeout too large to form an instant means no deadline (CL-E-053).
+                None => receive.await,
+            };
             let (header_in, response) = match received {
                 Ok(received) => received,
                 Err(error) => {
@@ -823,6 +847,21 @@ mod tests {
             FrameTransport::new(server),
         )
     }
+
+    fn pair_with(
+        config: ClientConfig,
+    ) -> (
+        Client<FrameTransport<DuplexStream, Tcp>, Tcp>,
+        FrameTransport<DuplexStream, Tcp>,
+    ) {
+        let (client, server) = duplex(1024);
+        (
+            Client::with_config(FrameTransport::new(client), config),
+            FrameTransport::new(server),
+        )
+    }
+
+    const THREE_YEARS: Duration = Duration::from_secs(3 * 365 * 24 * 60 * 60);
 
     fn read_holding() -> RequestPdu {
         RequestPdu::ReadHoldingRegisters {
@@ -2475,5 +2514,255 @@ mod tests {
             ClientState::Unusable(UnusableReason::PeerClosed)
         );
         let _ = answering.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-053 — a configured response timeout too large to form an instant
+    /// means no deadline, not a panic.
+    async fn ut_unrepresentable_configured_timeout_waits_unbounded() {
+        let (mut client, mut server) = pair_with(ClientConfig {
+            response_timeout: Duration::MAX,
+        });
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        let outer = tokio::time::timeout(
+            Duration::from_secs(2 * 365 * 24 * 60 * 60),
+            client.call(UnitId(0x11), read_holding()),
+        )
+        .await;
+        assert!(outer.is_err());
+        assert!(!client.is_desynchronized());
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-110 — the per-call timeout replaces the configured one.
+    async fn ut_call_with_timeout_replaces_the_configured_timeout() {
+        let (mut client, mut server) = pair_with(ClientConfig {
+            response_timeout: Duration::from_millis(10),
+        });
+        let slow = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("sends");
+        });
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Ok(Some(registers()))
+        );
+        slow.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-112 — an elapsed per-call timeout is `Timeout` and leaves the
+    /// client `Unusable(Silent)`.
+    async fn ut_call_with_timeout_bounds_the_wait() {
+        let (mut client, mut server) = pair();
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::from_millis(50))
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Silent)
+        );
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50) && elapsed < Duration::from_secs(1));
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-111 — the per-call timeout covers that exchange only.
+    async fn ut_per_call_timeout_applies_to_that_exchange_only() {
+        let (mut client, mut server) = pair_with(ClientConfig {
+            response_timeout: Duration::from_millis(10),
+        });
+        let task = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("sends");
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        assert!(matches!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Ok(Some(_))
+        ));
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client.call(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() < Duration::from_millis(500));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-112 — discarded responses do not extend the per-call deadline.
+    async fn ut_per_call_deadline_is_not_extended_by_discards() {
+        let (mut client, mut server) = pair_with(ClientConfig {
+            response_timeout: Duration::from_secs(10),
+        });
+        let chatty = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            loop {
+                let stale = MbapHeader {
+                    transaction_id: TransactionId(999),
+                    unit_id: header.unit_id,
+                };
+                if server.send_response(&stale, &registers()).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(600)).await;
+            }
+        });
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
+        chatty.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-050 — a zero per-call timeout still writes the request, then times out.
+    async fn ut_zero_per_call_timeout_writes_then_times_out() {
+        let (mut client, mut server) = pair();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let (header, request) = server.recv_request().await.expect("receives");
+            let _ = tx.send((header.unit_id, request));
+            core::future::pending::<()>().await;
+        });
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::ZERO)
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Silent)
+        );
+        assert_eq!(rx.await.expect("written"), (UnitId(0x11), read_holding()));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-051 — a broadcast through the timed call writes the PDU and
+    /// yields `None`, whatever the timeout.
+    async fn ut_broadcast_ignores_per_call_timeout() {
+        let (client, server) = duplex(1024);
+        let mut client = Client::<_, Rtu>::new(FrameTransport::new(client));
+        let mut server = FrameTransport::<_, Rtu>::new(server);
+        let write = RequestPdu::WriteSingleCoil {
+            address: Address(0x00AC),
+            value: true,
+        };
+        for request in [read_holding(), write] {
+            assert_eq!(
+                client
+                    .call_with_timeout(UnitId(0), request.clone(), Duration::ZERO)
+                    .await,
+                Ok(None)
+            );
+            assert_eq!(server.recv_request().await, Ok((UnitId(0), request)));
+        }
+        assert_eq!(client.state(), ClientState::Untried);
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-110 — a far per-call timeout still bounds the wait.
+    async fn ut_far_per_call_timeout_still_bounds_the_wait() {
+        let (mut client, mut server) = pair();
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), THREE_YEARS)
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() >= THREE_YEARS);
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-053 — a per-call timeout too large to form an instant means no deadline.
+    async fn ut_unrepresentable_per_call_timeout_waits_unbounded() {
+        let (mut client, mut server) = pair();
+        let silent = tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        let outer = tokio::time::timeout(
+            Duration::from_secs(2 * 365 * 24 * 60 * 60),
+            client.call_with_timeout(UnitId(0x11), read_holding(), Duration::MAX),
+        )
+        .await;
+        assert!(outer.is_err());
+        assert!(!client.is_desynchronized());
+        silent.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-112 — the per-call wait discards stale replies, then accepts the match.
+    async fn ut_per_call_wait_discards_stale_replies_then_accepts_the_match() {
+        let (mut client, mut server) = pair_with(ClientConfig {
+            response_timeout: Duration::from_secs(10),
+        });
+        let task = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            let stale = MbapHeader {
+                transaction_id: TransactionId(999),
+                unit_id: header.unit_id,
+            };
+            for _ in 0..2 {
+                server
+                    .send_response(&stale, &registers())
+                    .await
+                    .expect("sends");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("sends");
+        });
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client
+                .call_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Ok(Some(registers()))
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+        task.abort();
     }
 }
