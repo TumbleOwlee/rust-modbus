@@ -112,6 +112,13 @@ exception responses included, so a custom function code (FR-R-011) is issuable
 and an echo is inspectable. `None` means the request was a broadcast and no
 reply was awaited (CL-R-053).
 
+```rust
+pub async fn call_with_timeout(&mut self, unit: UnitId, request: RequestPdu, response_timeout: Duration)
+    -> Result<Option<ResponsePdu>>;
+```
+
+`call_with_timeout` is `call` with `response_timeout` in place of `ClientConfig::response_timeout`, for this exchange only (CL-R-110, CL-R-111, CL-R-112).
+
 Two responses carry several values with no single natural payload, so each gets
 a struct rather than a tuple (CL-R-060):
 
@@ -250,13 +257,15 @@ impl<F: ClientFraming + Send> SyncClient<SerialStream, F> where F::Header: Sync 
 }
 ```
 
-Request methods, all twenty of `## Request methods`, with `async` removed:
+Request methods, all twenty-one of `## Request methods`, with `async` removed:
 
 ```rust
 pub fn read_coils(&mut self, unit: UnitId, address: Address, quantity: Quantity)
     -> Result<Vec<bool>>;
 // … the remaining eighteen typed methods, signatures identical to `## Request methods` …
 pub fn call(&mut self, unit: UnitId, request: RequestPdu) -> Result<Option<ResponsePdu>>;
+pub fn call_with_timeout(&mut self, unit: UnitId, request: RequestPdu, response_timeout: Duration)
+    -> Result<Option<ResponsePdu>>;
 ```
 
 And the state projection of CL-R-078:
@@ -290,6 +299,8 @@ impl<T> PipelinedClient<T> {
 
     pub async fn send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu>;
     pub async fn try_send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu>;
+    pub async fn send_with_timeout(&self, unit: UnitId, request: RequestPdu, response_timeout: Duration) -> Result<ResponsePdu>;
+    pub async fn try_send_with_timeout(&self, unit: UnitId, request: RequestPdu, response_timeout: Duration) -> Result<ResponsePdu>;
 
     pub fn is_desynchronized(&self) -> bool;
 }
@@ -300,6 +311,8 @@ fails immediately with `TooManyInFlight` instead (CL-R-108). Neither returns
 `Option<ResponsePdu>` the way `Client::call` does — both types are fixed to
 `Tcp` framing, where broadcast is impossible, so the `None` arm `call` needs
 for RTU/ASCII broadcasts can never occur here.
+
+`send_with_timeout`/`try_send_with_timeout` are `send`/`try_send` with `response_timeout` in place of `PipelineConfig::response_timeout`, for that request only (CL-R-113, CL-R-114, CL-R-115).
 
 ```rust
 pub struct PipelineConfig {
