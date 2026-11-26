@@ -10,6 +10,8 @@ mod rs485;
 mod rtu;
 mod serial;
 mod tcp;
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(feature = "tls")]
 mod tls;
 mod udp;
@@ -89,6 +91,17 @@ impl TransportConfig {
     }
 }
 
+/// A stream that can drop its received-but-unread input (TR-R-107).
+pub trait DiscardInput {
+    /// Discard every byte the stream has received and not yet yielded to a
+    /// read.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the stream cannot clear its input.
+    fn discard_input(&mut self) -> std::io::Result<()>;
+}
+
 /// A byte stream carrying framed Modbus ADUs (TR-R-002).
 ///
 /// Generic over the stream so anything async and duplex serves — a socket, a
@@ -108,6 +121,10 @@ pub struct FrameTransport<S, F> {
     /// Set while a receive is in flight; a receive that never returned left the
     /// buffer in an unknown state (TR-R-090).
     receiving: bool,
+    /// Set only by `with_discard` (TR-R-109). A function pointer because
+    /// `send_request` is generic over every `S`, so it cannot name
+    /// `S: DiscardInput` itself.
+    discard: Option<fn(&mut S) -> std::io::Result<()>>,
     /// Which framing this transport speaks.
     framing: PhantomData<F>,
 }
@@ -130,6 +147,7 @@ where
             outgoing: Vec::new(),
             config,
             receiving: false,
+            discard: None,
             framing: PhantomData,
         }
     }
@@ -137,6 +155,12 @@ where
     /// Recover the underlying stream.
     pub fn into_inner(self) -> S {
         self.stream
+    }
+
+    /// The discard function, only over a framing that finds its own
+    /// boundaries (TR-R-111, TR-E-051).
+    fn discarding(&self) -> Option<fn(&mut S) -> std::io::Result<()>> {
+        self.discard.filter(|_| F::boundary().is_self_locating())
     }
 
     /// Send a request (TR-R-003).
@@ -147,6 +171,13 @@ where
     pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()> {
         self.outgoing.clear();
         F::encode_request_into(header, pdu, &mut self.outgoing)?;
+        if let Some(discard) = self.discarding() {
+            // TR-R-112, TR-R-114: drops retained bytes and any receive
+            // abandoned mid-ADU along with the stream's queued input.
+            self.buffer.clear();
+            self.receiving = false;
+            discard(&mut self.stream)?;
+        }
         shared::send(&mut self.stream, &mut self.outgoing).await
     }
 
@@ -694,6 +725,30 @@ pub trait ClientTransport<F: Framing> {
 
     /// Receive a response (TR-R-075).
     fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;
+
+    /// Whether this is a *discarding transport* (TR-R-111): one that discards
+    /// stale input before each request (TR-R-112). Defaults to `false`.
+    fn discards_input(&self) -> bool {
+        false
+    }
+}
+
+impl<S, F> FrameTransport<S, F>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + DiscardInput,
+    F: Framing,
+{
+    /// Wrap a stream that can discard its input (TR-R-109).
+    ///
+    /// Over RTU or ASCII framing the transport then discards stale input
+    /// before each request (TR-R-112). Over TCP or RTU-over-TCP framing it
+    /// does not (TR-E-051).
+    pub fn with_discard(stream: S, config: TransportConfig) -> Self {
+        Self {
+            discard: Some(<S as DiscardInput>::discard_input),
+            ..Self::with_config(stream, config)
+        }
+    }
 }
 
 impl<S, F> ClientTransport<F> for FrameTransport<S, F>
@@ -712,6 +767,10 @@ where
 
     fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send {
         FrameTransport::recv_response(self)
+    }
+
+    fn discards_input(&self) -> bool {
+        self.discarding().is_some()
     }
 }
 
@@ -1895,5 +1954,227 @@ mod failure_tests {
             client.call(UnitId(0x11), read_holding()).await,
             Err(Error::Desynchronized)
         );
+    }
+}
+
+#[cfg(test)]
+mod discard_tests {
+    use super::test_support::DiscardingDuplex;
+    use super::tests::read_holding;
+    use super::*;
+    use crate::frame::{Ascii, RegisterValue, Rtu, RtuOverTcp, Tcp, UnitId};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+
+    const RTU_REQUEST: [u8; 8] = [0x11, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x76, 0x87];
+
+    fn registers(values: [u16; 3]) -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: values.iter().copied().map(RegisterValue).collect(),
+        }
+    }
+
+    #[test]
+    /// TR-R-109, TR-R-111, TR-R-090, TR-E-051 — only `with_discard` over a
+    /// self-locating framing yields a discarding transport.
+    fn ut_discards_input_by_construction_and_framing() {
+        let stream = || DiscardingDuplex::new(duplex(8).0);
+        let cfg = TransportConfig::default;
+        let t = FrameTransport::<_, Rtu>::with_discard(stream(), cfg());
+        assert!(ClientTransport::<Rtu>::discards_input(&t));
+        let t = FrameTransport::<_, Ascii>::with_discard(stream(), cfg());
+        assert!(ClientTransport::<Ascii>::discards_input(&t));
+        let t = FrameTransport::<_, Tcp>::with_discard(stream(), cfg());
+        assert!(!ClientTransport::<Tcp>::discards_input(&t));
+        let t = FrameTransport::<_, RtuOverTcp>::with_discard(stream(), cfg());
+        assert!(!ClientTransport::<RtuOverTcp>::discards_input(&t));
+        let t = FrameTransport::<_, Rtu>::new(stream());
+        assert!(!ClientTransport::<Rtu>::discards_input(&t));
+        let t = FrameTransport::<_, Rtu>::with_config(stream(), cfg());
+        assert!(!ClientTransport::<Rtu>::discards_input(&t));
+    }
+
+    #[tokio::test]
+    /// TR-R-111 — a UDP transport never discards.
+    async fn ut_udp_transport_never_discards() {
+        let a = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let b = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        a.connect(b.local_addr().expect("has an address"))
+            .await
+            .expect("connects");
+        let t = UdpTransport::<Tcp>::new(a);
+        assert!(!ClientTransport::<Tcp>::discards_input(&t));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-107, TR-R-112 — a stale response already received is discarded
+    /// before the request is written; the next receive sees only fresh bytes.
+    async fn ut_send_request_discards_stream_input_first() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Rtu>::with_discard(
+            DiscardingDuplex::new(near),
+            TransportConfig::default(),
+        );
+        let stale = Rtu::encode_response(&UnitId(0x11), &registers([1, 2, 3])).expect("encodes");
+        peer.write_all(&stale).await.expect("writes");
+        t.send_request(&UnitId(0x11), &read_holding())
+            .await
+            .expect("sends");
+        let mut request = [0u8; 8];
+        peer.read_exact(&mut request).await.expect("reads request");
+        assert_eq!(request, RTU_REQUEST);
+        let fresh = Rtu::encode_response(&UnitId(0x11), &registers([4, 5, 6])).expect("encodes");
+        peer.write_all(&fresh).await.expect("writes");
+        assert_eq!(
+            t.recv_response().await,
+            Ok((UnitId(0x11), registers([4, 5, 6])))
+        );
+        assert_eq!(t.into_inner().discards(), 1);
+    }
+
+    #[tokio::test]
+    /// TR-R-112, TR-R-082 — bytes read beyond an ADU's boundary and retained
+    /// are discarded by the next request.
+    async fn ut_send_request_discards_retained_bytes() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Ascii>::with_discard(
+            DiscardingDuplex::new(near),
+            TransportConfig::default(),
+        );
+        let a = Ascii::encode_response(&UnitId(0x11), &registers([1, 2, 3])).expect("encodes");
+        let b = Ascii::encode_response(&UnitId(0x11), &registers([4, 5, 6])).expect("encodes");
+        let c = Ascii::encode_response(&UnitId(0x11), &registers([7, 8, 9])).expect("encodes");
+        let mut both = a;
+        both.extend_from_slice(&b);
+        peer.write_all(&both).await.expect("writes");
+        assert_eq!(
+            t.recv_response().await,
+            Ok((UnitId(0x11), registers([1, 2, 3])))
+        );
+        t.send_request(&UnitId(0x11), &read_holding())
+            .await
+            .expect("sends");
+        let mut request = [0u8; 17];
+        peer.read_exact(&mut request).await.expect("reads request");
+        peer.write_all(&c).await.expect("writes");
+        assert_eq!(
+            t.recv_response().await,
+            Ok((UnitId(0x11), registers([7, 8, 9])))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-113, TR-E-050 — a failed discard fails the send with the I/O error
+    /// and writes nothing.
+    async fn ut_discard_failure_writes_nothing() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Rtu>::with_discard(
+            DiscardingDuplex::failing(near, std::io::ErrorKind::BrokenPipe),
+            TransportConfig::default(),
+        );
+        assert_eq!(
+            t.send_request(&UnitId(0x11), &read_holding()).await,
+            Err(Error::Io {
+                kind: std::io::ErrorKind::BrokenPipe,
+                raw_os_error: None
+            })
+        );
+        let mut byte = [0u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), peer.read(&mut byte))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-114, TR-E-024 — a receive abandoned mid-ADU leaves the transport
+    /// usable; the next send removes the partial bytes.
+    async fn ut_abandoned_mid_adu_receive_recovers_after_send() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Ascii>::with_discard(
+            DiscardingDuplex::new(near),
+            TransportConfig::default(),
+        );
+        peer.write_all(b":1103").await.expect("writes");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), t.recv_response())
+                .await
+                .is_err()
+        );
+        t.send_request(&UnitId(0x11), &read_holding())
+            .await
+            .expect("sends");
+        let mut request = [0u8; 17];
+        peer.read_exact(&mut request).await.expect("reads request");
+        let ok = Ascii::encode_response(&UnitId(0x11), &registers([1, 2, 3])).expect("encodes");
+        peer.write_all(&ok).await.expect("writes");
+        assert_eq!(
+            t.recv_response().await,
+            Ok((UnitId(0x11), registers([1, 2, 3])))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-114, TR-E-024 — a receive abandoned before any byte arrived leaves
+    /// an RTU discarding transport usable.
+    async fn ut_abandoned_silent_receive_recovers_on_rtu() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Rtu>::with_discard(
+            DiscardingDuplex::new(near),
+            TransportConfig::default(),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), t.recv_response())
+                .await
+                .is_err()
+        );
+        t.send_request(&UnitId(0x11), &read_holding())
+            .await
+            .expect("sends");
+        let mut request = [0u8; 8];
+        peer.read_exact(&mut request).await.expect("reads request");
+        let ok = Rtu::encode_response(&UnitId(0x11), &registers([1, 2, 3])).expect("encodes");
+        peer.write_all(&ok).await.expect("writes");
+        assert_eq!(
+            t.recv_response().await,
+            Ok((UnitId(0x11), registers([1, 2, 3])))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-R-090, TR-E-051 — over TCP framing `with_discard` changes nothing: a
+    /// receive abandoned mid-ADU still desynchronizes the transport.
+    async fn ut_non_discarding_framing_keeps_desync_rule() {
+        let (mut peer, near) = duplex(1024);
+        let mut t = FrameTransport::<_, Tcp>::with_discard(
+            DiscardingDuplex::new(near),
+            TransportConfig::default(),
+        );
+        peer.write_all(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x11])
+            .await
+            .expect("writes");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), t.recv_response())
+                .await
+                .is_err()
+        );
+        t.send_request(
+            &crate::frame::MbapHeader {
+                transaction_id: crate::frame::TransactionId(1),
+                unit_id: UnitId(0x11),
+            },
+            &read_holding(),
+        )
+        .await
+        .expect("sends");
+        assert_eq!(
+            t.recv_response().await,
+            Err(Error::Timeout { what: "receive" })
+        );
+        assert_eq!(t.into_inner().discards(), 0);
     }
 }
