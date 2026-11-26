@@ -60,14 +60,14 @@ pipeline = ["std", "dep:tokio-util"]
 [dependencies]
 crc = { version = "3.4.0", default-features = false }
 thiserror = { version = "2.0.21", default-features = false }
-winnow = { version = "1.0.4", default-features = false, features = ["alloc", "ascii", "binary"] }
+winnow = { version = "1.0.5", default-features = false, features = ["alloc", "ascii", "binary"] }
 # The async runtime (ARCHITECTURE.md). Optional so the bare-metal build of
 # NF-R-003 keeps it out entirely.
 # `sync`, `rt` and `macros` are the server's: a `watch` channel for shutdown, a
 # `JoinSet` of connection tasks, and `select!`. Without them the crate builds
 # only because `[dev-dependencies]` enables them and Cargo unifies features
 # across targets — a library-only consumer would not compile.
-tokio = { version = "1.53", optional = true, default-features = false, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+tokio = { version = "1.54", optional = true, default-features = false, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # The only maintained async serial port for Tokio; wraps `serialport`.
 tokio-serial = { version = "5.5", optional = true, default-features = false }
 # CL-R-090, CL-R-091. Per-transaction-id timeout tracking for the pipelined
@@ -86,13 +86,13 @@ serde = { version = "1", optional = true, default-features = false, features = [
 # process-global default (`CryptoProvider::install_default`) -- built
 # per-config via `builder_with_provider` -- so embedding this crate alongside a
 # consumer's own rustls usage cannot collide.
-rustls = { version = "0.23.45", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
+rustls = { version = "0.23.46", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
 tokio-rustls = { version = "0.26.6", optional = true, default-features = false, features = ["ring"] }
 # PEM parsing via `PemObject` (its `alloc`-gated `from_pem_slice`/`pem_slice_iter`):
 # rustls-pemfile is unmaintained (RUSTSEC-2025-0134) and is itself a thin
 # wrapper around this same code, per the advisory's own migration guidance.
-rustls-pki-types = { version = "1.15.1", optional = true, default-features = false, features = ["alloc"] }
-rustls-native-certs = { version = "0.8.4", optional = true, default-features = false }
+rustls-pki-types = { version = "1.16.0", optional = true, default-features = false, features = ["alloc"] }
+rustls-native-certs = { version = "0.8.5", optional = true, default-features = false }
 
 # TR-R-104, TR-R-050, TR-R-055. `libc` supplies the errno constants of the
 # transient table on every Unix (TR-R-104), and the `TIOCSRS485` syscall
@@ -106,9 +106,9 @@ libc = { version = "0.2", optional = true, default-features = false }
 # samples them. Dev-only -- nothing reaches a consumer's dependency tree.
 proptest = "1"
 # The runtime and the in-memory duplex pair every transport test runs on.
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "test-util"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "test-util"] }
 # The pty test pinning TR-R-053 needs a real pty pair; only `openpty` is used.
-nix = { version = "0.31", default-features = false, features = ["term"] }
+nix = { version = "0.32", default-features = false, features = ["term"] }
 # Exercises the serde round trips against real JSON text (NF-R-025). Dev-only.
 serde_json = "1"
 

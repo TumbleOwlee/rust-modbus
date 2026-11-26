@@ -118,6 +118,12 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-061** — The client exposes a raw method taking a request PDU and yielding the response PDU as received, including an exception response. This is how a custom function code (FR-R-011) is issued and how a caller inspects a response the typed methods interpret.
 
+**CL-R-110** — `Client` exposes `call_with_timeout`, a raw method taking the arguments of CL-R-061 plus a response timeout; that timeout bounds the wait for the exchange's response in place of the configured response timeout (CL-R-030).
+
+**CL-R-111** — The timeout passed to `call_with_timeout` (CL-R-110) applies to that exchange only: a later exchange issued without one is bounded by the configured response timeout (CL-R-030).
+
+**CL-R-112** — `call_with_timeout(unit, request, t)` (CL-R-110) behaves exactly as `call(unit, request)` does on a client whose configured response timeout is `t`. That covers the deadline start (CL-R-014), discarding non-corresponding responses (CL-R-021), and the result when `t` elapses: `Timeout { what: "response" }` with the client unusable for reason `Silent` (CL-R-031, CL-R-037).
+
 **CL-R-062** — A typed method reading bits returns exactly the quantity of bits requested, discarding the padding bits of the final byte (FR-R-024).
 
 **CL-R-063** — The client does not validate request field ranges itself. Range rules are frame-area behavior (FR-R-021, FR-R-027, FR-R-031) and surface from encoding, so one rule has one home.
@@ -134,7 +140,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-070** — The crate provides a blocking client, gated behind an off-by-default `sync` feature that implies `std`.
 
-**CL-R-071** — The blocking client exposes one method for every request method of the async client: each typed method of CL-R-060 and the raw method of CL-R-061. No request issuable through the async client is unreachable from the blocking one, and no request method exists on one surface and not the other.
+**CL-R-071** — The blocking client exposes one method for every request method of the async client: each typed method of CL-R-060, the raw method of CL-R-061, and the raw method with a per-call timeout of CL-R-110. No request issuable through the async client is unreachable from the blocking one, and no request method exists on one surface and not the other.
 
 **CL-R-072** — Every guarantee the async client makes holds identically in the blocking one: the response timeout of CL-R-030, the desynchronization rules of CL-R-031, CL-R-032 and CL-R-033, the broadcast rules of CL-R-050, CL-R-051, CL-R-052 and CL-R-053, and the exception surfacing of CL-R-040, CL-R-041 and CL-R-042. The blocking client obtains them by delegating to the async client, not by reimplementing any of them.
 
@@ -195,6 +201,12 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 **CL-R-091** — On `PipelinedUdpClient`, a response timeout on one in-flight request fails only that request; it does not desynchronize the connection and does not affect any other in-flight request.
 
 **CL-R-109** — On `PipelinedUdpClient`, an I/O failure desynchronizes the whole connection, as CL-R-031 states, unlike the timeout of CL-R-091.
+
+**CL-R-113** — `PipelinedClient` and `PipelinedUdpClient` expose `send_with_timeout` and `try_send_with_timeout`. Each takes the arguments of `send` (CL-R-086) / `try_send` (CL-R-108) plus a response timeout that bounds the wait for that request's response in place of `PipelineConfig::response_timeout` (CL-R-093), and otherwise behaves as the method it extends.
+
+**CL-R-114** — A timeout passed to `send_with_timeout`/`try_send_with_timeout` (CL-R-113) bounds only that request: every other in-flight request and every later request keeps its own timeout.
+
+**CL-R-115** — When a timeout passed to `send_with_timeout`/`try_send_with_timeout` (CL-R-113) elapses, the consequences are those of an elapsed configured timeout on the same type: the whole connection desynchronizes on `PipelinedClient` (CL-R-090), and only that request fails on `PipelinedUdpClient` (CL-R-091).
 
 **CL-R-092** — Recovery from a desynchronized `PipelinedClient`/`PipelinedUdpClient` is by discarding the handle and constructing a new one, exactly as CL-R-033 states for `Client<T, F>`; neither type silently resynchronizes.
 
