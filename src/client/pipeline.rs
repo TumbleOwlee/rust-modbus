@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::time::Instant;
 use tokio_util::time::DelayQueue;
 use tokio_util::time::delay_queue::Key;
 
@@ -200,6 +201,7 @@ struct Core<T> {
     next_transaction: Mutex<TransactionId>,
     semaphore: Arc<Semaphore>,
     desynchronized: Arc<AtomicBool>,
+    response_timeout: Duration,
     _marker: core::marker::PhantomData<T>,
 }
 
@@ -209,6 +211,7 @@ enum Command {
         transaction: TransactionId,
         unit: UnitId,
         request: RequestPdu,
+        response_timeout: Duration,
         reply: oneshot::Sender<Result<ResponsePdu>>,
     },
 }
@@ -231,12 +234,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let desynchronized = Arc::new(AtomicBool::new(false));
         let semaphore = Arc::new(Semaphore::new(usize::from(config.max_in_flight)));
-        tokio::spawn(run::<T>(
-            transport,
-            command_rx,
-            Arc::clone(&desynchronized),
-            config.response_timeout,
-        ));
+        tokio::spawn(run::<T>(transport, command_rx, Arc::clone(&desynchronized)));
         Self {
             core: Arc::new(Core {
                 command_tx,
@@ -244,6 +242,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
                 next_transaction: Mutex::new(TransactionId(1)),
                 semaphore,
                 desynchronized,
+                response_timeout: config.response_timeout,
                 _marker: core::marker::PhantomData,
             }),
         }
@@ -257,11 +256,29 @@ impl<T: PipelineTransport> PipelinedClient<T> {
     /// Fails if the transport fails, if no matching response arrives within
     /// the response timeout, or if the client is already desynchronized.
     pub async fn send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu> {
+        self.send_with_timeout(unit, request, self.core.response_timeout)
+            .await
+    }
+
+    /// [`PipelinedClient::send`] bounded by `response_timeout` instead of
+    /// [`PipelineConfig::response_timeout`], for this request only
+    /// (CL-R-113, CL-R-114). When it elapses the consequences are the type's
+    /// own (CL-R-115).
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedClient::send`].
+    pub async fn send_with_timeout(
+        &self,
+        unit: UnitId,
+        request: RequestPdu,
+        response_timeout: Duration,
+    ) -> Result<ResponsePdu> {
         let permit = Arc::clone(&self.core.semaphore)
             .acquire_owned()
             .await
             .expect("the semaphore is never closed while a handle referencing it is alive");
-        self.dispatch(unit, request, permit).await
+        self.dispatch(unit, request, response_timeout, permit).await
     }
 
     /// Whether this handle currently refuses every request (CL-R-096),
@@ -281,10 +298,28 @@ impl<T: PipelineTransport> PipelinedClient<T> {
     /// Fails with [`Error::TooManyInFlight`] at the limit, without writing to
     /// the transport. Otherwise as [`PipelinedClient::send`].
     pub async fn try_send(&self, unit: UnitId, request: RequestPdu) -> Result<ResponsePdu> {
+        self.try_send_with_timeout(unit, request, self.core.response_timeout)
+            .await
+    }
+
+    /// [`PipelinedClient::try_send`] bounded by `response_timeout` instead of
+    /// [`PipelineConfig::response_timeout`], for this request only
+    /// (CL-R-113, CL-R-114). When it elapses the consequences are the type's
+    /// own (CL-R-115).
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedClient::try_send`].
+    pub async fn try_send_with_timeout(
+        &self,
+        unit: UnitId,
+        request: RequestPdu,
+        response_timeout: Duration,
+    ) -> Result<ResponsePdu> {
         let permit = Arc::clone(&self.core.semaphore)
             .try_acquire_owned()
             .map_err(|_| Error::TooManyInFlight)?;
-        self.dispatch(unit, request, permit).await
+        self.dispatch(unit, request, response_timeout, permit).await
     }
 
     /// Register a request with the background task and await its answer.
@@ -296,6 +331,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
         &self,
         unit: UnitId,
         request: RequestPdu,
+        response_timeout: Duration,
         _permit: OwnedSemaphorePermit,
     ) -> Result<ResponsePdu> {
         if self.core.desynchronized.load(Ordering::Acquire) {
@@ -319,6 +355,7 @@ impl<T: PipelineTransport> PipelinedClient<T> {
                 transaction,
                 unit,
                 request,
+                response_timeout,
                 reply: reply_tx,
             })
             .expect("the background task outlives every live handle, `self` included");
@@ -362,7 +399,6 @@ async fn run<T: PipelineTransport>(
     transport: T,
     mut command_rx: mpsc::UnboundedReceiver<Command>,
     desynchronized: Arc<AtomicBool>,
-    response_timeout: Duration,
 ) {
     let (reader, mut writer) = transport.split();
     // Held across every loop iteration below, replaced only once it
@@ -374,7 +410,7 @@ async fn run<T: PipelineTransport>(
     // `DelayQueue` key so a response that resolves the entry can cancel its
     // still-pending timer — otherwise a stale timer could fire later against
     // a *different* request that reuses the same id.
-    let mut in_flight: HashMap<TransactionId, (oneshot::Sender<Result<ResponsePdu>>, Key)> =
+    let mut in_flight: HashMap<TransactionId, (oneshot::Sender<Result<ResponsePdu>>, Deadline)> =
         HashMap::new();
     // Every id this handle has ever written a request under, bounded at the
     // 65536-bit transaction id space, never cleared. Distinguishes CL-R-088
@@ -385,7 +421,13 @@ async fn run<T: PipelineTransport>(
     loop {
         tokio::select! {
             cmd = command_rx.recv() => {
-                let Some(Command::Send { transaction, unit, request, reply }) = cmd else {
+                let Some(Command::Send {
+                    transaction,
+                    unit,
+                    request,
+                    response_timeout,
+                    reply,
+                }) = cmd else {
                     // Every handle dropped: `writer` (and, once `recv_fut`
                     // resolves or is dropped, `reader`) drop with this
                     // function returning, closing the transport (CL-R-107).
@@ -401,8 +443,14 @@ async fn run<T: PipelineTransport>(
                 let header = <Tcp as ClientFraming>::request_header(unit, transaction);
                 match T::send_request(&mut writer, &header, &request).await {
                     Ok(()) => {
-                        let key = deadlines.insert(transaction, response_timeout);
-                        in_flight.insert(transaction, (reply, key));
+                        let deadline = match Instant::now().checked_add(response_timeout) {
+                            Some(when) => Deadline::At {
+                                when,
+                                key: arm(&mut deadlines, transaction, when),
+                            },
+                            None => Deadline::Unbounded,
+                        };
+                        in_flight.insert(transaction, (reply, deadline));
                     }
                     Err(error) => {
                         desynchronized.store(true, Ordering::Release);
@@ -419,9 +467,11 @@ async fn run<T: PipelineTransport>(
                 match received {
                     Ok((header, response)) => {
                         let transaction = header.transaction_id;
-                        if let Some((reply, key)) = in_flight.remove(&transaction) {
+                        if let Some((reply, deadline)) = in_flight.remove(&transaction) {
                             // Resolved on time: its timer must not fire later.
-                            deadlines.remove(&key);
+                            if let Deadline::At { key, .. } = deadline {
+                                deadlines.remove(&key);
+                            }
                             let _ = reply.send(Ok(response));
                         } else if *issued
                             .get(usize::from(transaction.0))
@@ -448,6 +498,12 @@ async fn run<T: PipelineTransport>(
             }
             Some(expired) = poll_fn(|cx| deadlines.poll_expired(cx)), if !deadlines.is_empty() => {
                 let transaction = expired.into_inner();
+                if let Some((_, Deadline::At { when, key })) = in_flight.get_mut(&transaction)
+                    && Instant::now() < *when
+                {
+                    *key = arm(&mut deadlines, transaction, *when);
+                    continue;
+                }
                 if let Some((reply, _key)) = in_flight.remove(&transaction) {
                     let _ = reply.send(Err(Error::Timeout { what: "response" }));
                     if T::TIMEOUT_DESYNCS {
@@ -462,15 +518,39 @@ async fn run<T: PipelineTransport>(
     }
 }
 
+/// When an in-flight request stops waiting.
+enum Deadline {
+    /// The timeout could not form an instant: no timer (CL-E-053).
+    Unbounded,
+    /// `key` is the pending `DelayQueue` timer, which may fire before `when` (see `arm`).
+    At { when: Instant, key: Key },
+}
+
+/// `DelayQueue` panics on a deadline more than 2^36 ms away, so later deadlines are reached by re-arming.
+const MAX_ARM: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+fn arm(
+    deadlines: &mut DelayQueue<TransactionId>,
+    transaction: TransactionId,
+    when: Instant,
+) -> Key {
+    let step = Instant::now()
+        .checked_add(MAX_ARM)
+        .map_or(when, |cap| when.min(cap));
+    deadlines.insert_at(transaction, step)
+}
+
 /// Fail every still-registered request with [`Error::Desynchronized`],
 /// cancelling each one's pending timer (CL-R-090, CL-R-109,
 /// CL-R-089).
 fn fail_all(
-    in_flight: &mut HashMap<TransactionId, (oneshot::Sender<Result<ResponsePdu>>, Key)>,
+    in_flight: &mut HashMap<TransactionId, (oneshot::Sender<Result<ResponsePdu>>, Deadline)>,
     deadlines: &mut DelayQueue<TransactionId>,
 ) {
-    for (_, (reply, key)) in in_flight.drain() {
-        deadlines.remove(&key);
+    for (_, (reply, deadline)) in in_flight.drain() {
+        if let Deadline::At { key, .. } = deadline {
+            deadlines.remove(&key);
+        }
         let _ = reply.send(Err(Error::Desynchronized));
     }
 }
@@ -1122,5 +1202,248 @@ mod tests {
                 "request {i} must resolve with its own response, not another's"
             );
         }
+    }
+
+    const THREE_YEARS: Duration = Duration::from_secs(3 * 365 * 24 * 60 * 60);
+
+    /// A server that takes the first request and never answers.
+    fn silent(mut server: FrameTransport<DuplexStream, Tcp>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-053 — a configured response timeout too large to form an instant
+    /// means no deadline, not a panic.
+    async fn ut_unrepresentable_configured_timeout_waits_unbounded() {
+        let (client, server) = pipeline_pair_with_config(PipelineConfig {
+            response_timeout: Duration::MAX,
+            ..PipelineConfig::default()
+        });
+        let task = silent(server);
+        let outer = tokio::time::timeout(
+            Duration::from_secs(2 * 365 * 24 * 60 * 60),
+            client.send(UnitId(0x11), read_holding()),
+        )
+        .await;
+        assert!(outer.is_err());
+        assert!(!client.is_desynchronized());
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-093 — a configured timeout beyond the timer wheel's reach still
+    /// bounds the wait.
+    async fn ut_far_configured_timeout_still_bounds_the_wait() {
+        let (client, server) = pipeline_pair_with_config(PipelineConfig {
+            response_timeout: THREE_YEARS,
+            ..PipelineConfig::default()
+        });
+        let task = silent(server);
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() >= THREE_YEARS);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-113 — both per-request variants bound the wait by their own
+    /// timeout in place of the configured one.
+    async fn ut_send_with_timeout_replaces_the_configured_timeout() {
+        for try_variant in [false, true] {
+            let (client, mut server) = pipeline_pair_with_config(PipelineConfig {
+                response_timeout: Duration::from_millis(10),
+                ..PipelineConfig::default()
+            });
+            let slow = tokio::spawn(async move {
+                let (header, _) = server.recv_request().await.expect("receives");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                server
+                    .send_response(&header, &registers())
+                    .await
+                    .expect("sends");
+            });
+            let timeout = Duration::from_secs(1);
+            let result = if try_variant {
+                client
+                    .try_send_with_timeout(UnitId(0x11), read_holding(), timeout)
+                    .await
+            } else {
+                client
+                    .send_with_timeout(UnitId(0x11), read_holding(), timeout)
+                    .await
+            };
+            assert_eq!(result, Ok(registers()));
+            slow.abort();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-113 — `try_send_with_timeout` fails at the in-flight limit as
+    /// `try_send` does.
+    async fn ut_try_send_with_timeout_fails_at_the_limit() {
+        let (client, mut server) = pipeline_pair_with_config(PipelineConfig {
+            max_in_flight: 1,
+            ..PipelineConfig::default()
+        });
+        let c1 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        server.recv_request().await.expect("receives first");
+        assert_eq!(
+            client
+                .try_send_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Err(Error::TooManyInFlight)
+        );
+        t1.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-114 — a later request without a per-request timeout keeps the
+    /// configured one.
+    async fn ut_later_requests_keep_the_configured_timeout() {
+        let (client, mut server) = pipeline_pair_with_config(PipelineConfig {
+            response_timeout: Duration::from_millis(10),
+            ..PipelineConfig::default()
+        });
+        let task = tokio::spawn(async move {
+            let (header, _) = server.recv_request().await.expect("receives");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            server
+                .send_response(&header, &registers())
+                .await
+                .expect("sends");
+            let _ = server.recv_request().await;
+            core::future::pending::<()>().await;
+        });
+        assert_eq!(
+            client
+                .send_with_timeout(UnitId(0x11), read_holding(), Duration::from_secs(1))
+                .await,
+            Ok(registers())
+        );
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client.send(UnitId(0x11), read_holding()).await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() < Duration::from_millis(500));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-115 — an elapsed per-request timeout desynchronizes the whole TCP
+    /// connection, including a request with a longer timeout.
+    async fn ut_short_per_request_timeout_desynchronizes_tcp() {
+        let (client, mut server) = pipeline_pair();
+        let c1 = client.clone();
+        let c2 = client.clone();
+        let t1 = tokio::spawn(async move { c1.send(UnitId(0x11), read_holding()).await });
+        let t2 = tokio::spawn(async move {
+            c2.send_with_timeout(UnitId(0x11), read_holding(), Duration::from_millis(10))
+                .await
+        });
+        server.recv_request().await.expect("receives first");
+        server.recv_request().await.expect("receives second");
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            t2.await.expect("task"),
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(t1.await.expect("task"), Err(Error::Desynchronized));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(client.is_desynchronized());
+    }
+
+    #[tokio::test]
+    /// CL-R-114, CL-R-115 — on UDP a short per-request timeout fails only
+    /// that request; the other stays in flight past it and is answered.
+    ///
+    /// Real clock: see `ut_udp_timeout_fails_only_that_request`.
+    async fn ut_udp_short_per_request_timeout_fails_only_that_request() {
+        let (client, mut peer) = udp_pair().await;
+        let c1 = client.clone();
+        let c2 = client.clone();
+        let t1 = tokio::spawn(async move {
+            c1.send_with_timeout(UnitId(0x01), read_holding(), Duration::from_millis(100))
+                .await
+        });
+        let t2 = tokio::spawn(async move { c2.send(UnitId(0x02), read_holding()).await });
+        let mut kept = None;
+        for _ in 0..2 {
+            let (header, _) = peer.recv_request().await.expect("receives");
+            if header.unit_id == UnitId(0x02) {
+                kept = Some(header);
+            }
+        }
+        let kept = kept.expect("the second request arrived");
+        assert_eq!(
+            t1.await.expect("task"),
+            Err(Error::Timeout { what: "response" })
+        );
+        peer.send_response(&kept, &registers())
+            .await
+            .expect("answers the one still in flight");
+        assert_eq!(t2.await.expect("task"), Ok(registers()));
+        assert!(!client.is_desynchronized());
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-050 — a zero per-request timeout writes the request, then times out
+    /// with the consequences of CL-R-115.
+    async fn ut_zero_per_request_timeout_writes_then_times_out() {
+        let (client, mut server) = pipeline_pair();
+        let received = tokio::spawn(async move {
+            let (header, request) = server.recv_request().await.expect("receives");
+            (header.unit_id, request)
+        });
+        assert_eq!(
+            client
+                .send_with_timeout(UnitId(0x11), read_holding(), Duration::ZERO)
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(
+            received.await.expect("task"),
+            (UnitId(0x11), read_holding())
+        );
+        assert!(client.is_desynchronized());
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-113 — a far per-request timeout still bounds the wait.
+    async fn ut_far_per_request_timeout_still_bounds_the_wait() {
+        let (client, server) = pipeline_pair();
+        let task = silent(server);
+        let start = tokio::time::Instant::now();
+        assert_eq!(
+            client
+                .send_with_timeout(UnitId(0x11), read_holding(), THREE_YEARS)
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert!(start.elapsed() >= THREE_YEARS);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-053 — a per-request timeout too large to form an instant means no
+    /// deadline.
+    async fn ut_unrepresentable_per_request_timeout_waits_unbounded() {
+        let (client, server) = pipeline_pair();
+        let task = silent(server);
+        let outer = tokio::time::timeout(
+            Duration::from_secs(2 * 365 * 24 * 60 * 60),
+            client.send_with_timeout(UnitId(0x11), read_holding(), Duration::MAX),
+        )
+        .await;
+        assert!(outer.is_err());
+        assert!(!client.is_desynchronized());
+        task.abort();
     }
 }
