@@ -14,7 +14,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rust_modbus::{
     Address, ClientConfig, DiagnosticSubFunction, Error, ExceptionCode, ExceptionResponse,
@@ -427,6 +427,62 @@ fn serve_silence() -> (SocketAddr, mpsc::Sender<()>, thread::JoinHandle<()>) {
         done_tx,
         handle,
     )
+}
+
+#[test]
+/// CL-R-071 — the raw call with a per-call timeout completes over a real socket.
+fn it_sync_call_with_timeout_completes_an_exchange() {
+    let (address, responder) = serve_on_a_thread(1, |_| ResponsePdu::ReadHoldingRegisters {
+        registers: vec![RegisterValue(0x022B), RegisterValue(0x0000)],
+    });
+
+    let mut client = SyncTcpClient::connect(address, TcpConfig::default(), ClientConfig::default())
+        .expect("connects");
+
+    assert_eq!(
+        client.call_with_timeout(
+            UnitId(0x11),
+            RequestPdu::ReadHoldingRegisters {
+                address: Address(0x006B),
+                quantity: Quantity(2),
+            },
+            Duration::from_secs(5)
+        ),
+        Ok(Some(ResponsePdu::ReadHoldingRegisters {
+            registers: vec![RegisterValue(0x022B), RegisterValue(0x0000)],
+        }))
+    );
+    responder.join().expect("the responder finishes");
+}
+
+#[test]
+/// CL-R-071, CL-R-072, CL-R-110 — the per-call timeout, not the configured
+/// one, bounds a blocking call and desynchronizes the client when it elapses.
+fn it_sync_call_with_timeout_bounds_the_wait() {
+    let (address, release, responder) = serve_silence();
+    let config = ClientConfig {
+        response_timeout: Duration::from_secs(30),
+    };
+    let mut client =
+        SyncTcpClient::connect(address, TcpConfig::default(), config).expect("connects");
+
+    let start = Instant::now();
+    assert_eq!(
+        client.call_with_timeout(
+            UnitId(1),
+            RequestPdu::ReadHoldingRegisters {
+                address: Address(0x006B),
+                quantity: Quantity(2),
+            },
+            Duration::from_millis(50)
+        ),
+        Err(Error::Timeout { what: "response" })
+    );
+    assert!(start.elapsed() < Duration::from_secs(30));
+    assert!(client.is_desynchronized());
+
+    drop(release);
+    responder.join().expect("the responder finishes");
 }
 
 #[test]

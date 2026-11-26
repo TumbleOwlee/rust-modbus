@@ -6,6 +6,8 @@
 //! second implementation of a timeout, a broadcast rule, or a desynchronization
 //! rule to keep in step.
 
+use core::time::Duration;
+
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Handle, Runtime};
 
@@ -163,6 +165,24 @@ where
         // borrows the client it came from.
         let Self { client, runtime } = self;
         runtime.block_on(client.call(unit, request))
+    }
+
+    /// Blocking counterpart of [`Client::call_with_timeout`] (CL-R-071, CL-R-110).
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`Error::BlockingInAsyncContext`] if called from a thread
+    /// already driving a runtime (CL-R-075), and otherwise exactly as the async
+    /// [`Client::call_with_timeout`] does (CL-R-072).
+    pub fn call_with_timeout(
+        &mut self,
+        unit: UnitId,
+        request: RequestPdu,
+        response_timeout: Duration,
+    ) -> Result<Option<ResponsePdu>> {
+        refuse_inside_a_runtime()?;
+        let Self { client, runtime } = self;
+        runtime.block_on(client.call_with_timeout(unit, request, response_timeout))
     }
 
     /// Function code 1, blocking (CL-R-071).
