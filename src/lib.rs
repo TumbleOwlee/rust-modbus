@@ -232,10 +232,10 @@ pub use server::{
 };
 #[cfg(feature = "std")]
 pub use transport::{
-    AduReader, ClientTransport, DataBits, FlowControl, FrameTransport, Parity, RtuOverTcpTransport,
-    SerialConfig, StopBits, TcpConfig, TcpListener, TcpTransport, TransportConfig, UdpConfig,
-    UdpTransport, connect_tcp, connect_tcp_framed, connect_udp, recv_datagram_request,
-    send_datagram_response_into,
+    AduReader, ClientTransport, DataBits, DiscardInput, FlowControl, FrameTransport, Parity,
+    RtuOverTcpTransport, SerialConfig, StopBits, TcpConfig, TcpListener, TcpTransport,
+    TransportConfig, UdpConfig, UdpTransport, connect_tcp, connect_tcp_framed, connect_udp,
+    recv_datagram_request, send_datagram_response_into,
 };
 #[cfg(feature = "tls")]
 pub use transport::{

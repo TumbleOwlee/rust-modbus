@@ -8,7 +8,7 @@ Per the ownership rule in [`../README.md`](../README.md), serial parameters and 
 
 ## Transport abstraction
 
-The seam is a **generic bound, not a trait of our own**: anything that is an async duplex byte stream serves (TR-R-001), so `tokio::io::duplex` substitutes for a socket or a serial port in tests without a shim. A `Transport` trait would add dyn-safety and `async_trait` cost while naming nothing the bound does not.
+The stream seam is a **generic bound, not a trait of our own**: anything that is an async duplex byte stream serves (TR-R-001), so `tokio::io::duplex` substitutes for a socket or a serial port in tests without a shim. A `Transport` trait would add dyn-safety and `async_trait` cost while naming nothing the bound does not. `DiscardInput` (TR-R-107) is not a second seam: it is an opt-in capability, required only by `with_discard` (TR-R-109), that a test meets with a duplex wrapper.
 
 ```rust
 pub struct FrameTransport<S, F> { /* stream, read buffer, config */ }
@@ -20,6 +20,8 @@ where
 {
     pub fn new(stream: S) -> Self;
     pub fn with_config(stream: S, config: TransportConfig) -> Self;
+    // TR-R-109.
+    pub fn with_discard(stream: S, config: TransportConfig) -> Self where S: DiscardInput;
 
     pub async fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> Result<()>;
     pub async fn recv_request(&mut self) -> Result<(F::Header, RequestPdu)>;
@@ -28,7 +30,15 @@ where
 
     pub fn into_inner(self) -> S;
 }
+
+// TR-R-107.
+#[cfg(feature = "std")]
+pub trait DiscardInput {
+    fn discard_input(&mut self) -> std::io::Result<()>;
+}
 ```
+
+`ClientTransport<F>` gains the provided method `fn discards_input(&self) -> bool { false }` (TR-R-111).
 
 The four coding methods mirror the frame area's direction-explicit rule (FR-R-005): a PDU is not self-describing, so the caller states the direction. A client sends requests and receives responses; a server does the reverse. That is the whole of the difference between the roles at this layer (TR-R-002).
 
@@ -123,6 +133,7 @@ pub enum FlowControl { None, Software, Hardware }
 #[cfg(feature = "rtu")]
 pub type SerialTransport<F> = FrameTransport<SerialStream, F>;
 
+// Built by with_discard (TR-R-110).
 #[cfg(feature = "rtu")]
 pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<SerialTransport<F>>;
 
@@ -131,6 +142,10 @@ pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<Seria
 // declare the backend itself and keep the version in step.
 #[cfg(feature = "rtu")]
 pub use tokio_serial::SerialStream;
+
+// TR-R-108.
+#[cfg(feature = "rtu")]
+impl DiscardInput for SerialStream { /* … */ }
 ```
 
 The defaults are the Modbus serial-line defaults (TR-R-031). The enums are the crate's own rather than re-exported from the serial backend, so the backend is not part of the public API and the types exist with the `rtu` feature off — the inter-frame interval of TR-R-011 is computed from them, which the ASCII and TCP paths never need but the pure calculation is testable without a serial port.

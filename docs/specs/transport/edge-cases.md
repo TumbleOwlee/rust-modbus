@@ -36,8 +36,10 @@ Boundary behavior, error semantics, and the constraints that are **intentional**
 | **TR-E-021** | Peer closes part-way through an ADU | `ConnectionClosed`; the partial bytes are dropped (TR-R-088) |
 | **TR-E-022** | A serial peer closes immediately after a complete RTU frame | The frame is delivered; a close after a whole ADU is not a severed one |
 | **TR-E-023** | Peer resets the connection | The I/O error carrying `ErrorKind::ConnectionReset` |
-| **TR-E-024** | A receive times out mid-ADU | The transport is desynchronized: a further receive fails, and recovery is a reconnect (TR-R-090) |
+| **TR-E-024** | A receive times out mid-ADU | The transport is desynchronized: a further receive fails, and recovery is a reconnect (TR-R-090); a discarding transport stays usable, the partial bytes removed by the next `send_request` (TR-R-114) |
 | **TR-E-025** | Serial device disappears mid-session | Whatever `ErrorKind` the platform reports, surfaced through the I/O error; the transport is not usable afterwards |
+| **TR-E-050** | `discard_input` fails before a request on a discarding transport | `send_request` fails with `Io` carrying the platform's kind; nothing written (TR-R-113); the client is desynchronized as for any I/O failure (CL-R-031) |
+| **TR-E-051** | Transport built by `with_discard` over TCP or RTU-over-TCP framing | `discards_input()` is `false`; no discard before a send and today's desynchronization rules apply (TR-R-111) |
 
 - **TR-E-026** — Both peer-close cases (TR-E-020, TR-E-021) are errors, because the receive methods return `Result` with no vacant success value; they are distinguished by variant, which is what TR-R-014 and TR-R-088 require.
 - **TR-E-027** — Sending imposes no timeout of its own; receiving imposes none beyond RTU's inter-frame interval and ASCII's inter-character timeout (TR-R-076): per-request timing belongs to the client (TR-R-042). A caller wanting a bounded receive wraps it in `tokio::time::timeout` — and then owns the desynchronization that TR-R-090 describes.

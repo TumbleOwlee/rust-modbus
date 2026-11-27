@@ -1,5 +1,6 @@
 //! Async Modbus client (initiator). See `docs/specs/client/`.
 
+mod fit;
 mod framing;
 #[cfg(feature = "pipeline")]
 mod pipeline;
@@ -63,7 +64,9 @@ pub enum UnusableReason {
         kind: std::io::ErrorKind,
     },
     /// The response timeout elapsed with no matching response (CL-R-031,
-    /// CL-R-037).
+    /// CL-R-037); never reported for a response timeout over a discarding
+    /// transport (CL-R-116). An ASCII inter-character timeout still yields
+    /// `Silent`.
     Silent,
     /// A frame did not decode on a framing that is not self-locating
     /// (CL-R-098, CL-R-037).
@@ -93,7 +96,7 @@ pub enum ClientState {
     /// The last exchange was answered, including with an exception (CL-R-036).
     Answered,
     /// The last exchange was not answered, and the client is still usable
-    /// (CL-R-098).
+    /// (CL-R-098, CL-R-116).
     Unanswered,
     /// Every further request will be refused (CL-R-032). The reason names what
     /// the client observed at the moment it became so.
@@ -272,8 +275,13 @@ where
                     Ok(result) => result,
                     Err(_elapsed) => {
                         // Nothing failed; the wait ran out. What the peer sends
-                        // next is now unaccounted for (CL-R-031).
-                        self.state = ClientState::Unusable(UnusableReason::Silent);
+                        // next is unaccounted for (CL-R-031), unless the next
+                        // request's discard removes it (CL-R-116).
+                        self.state = if self.transport.discards_input() {
+                            ClientState::Unanswered
+                        } else {
+                            ClientState::Unusable(UnusableReason::Silent)
+                        };
                         return Err(Error::Timeout { what: "response" });
                     }
                 },
@@ -301,6 +309,14 @@ where
             if !F::is_response_to(&header, &header_in) {
                 // Another exchange's reply, or a late one. Discard it and keep
                 // waiting against the same deadline (CL-R-021, CL-R-097).
+                continue;
+            }
+            // Dropped, not failed: the deadline is unextended and the state
+            // untouched (CL-R-117, CL-R-118). A reply that fits yet is late
+            // is indistinguishable from the answer (CL-E-054).
+            if self.transport.discards_input()
+                && (response.function() != expected || !fit::fits(&request, &response))
+            {
                 continue;
             }
             // The peer answered. What it said may still be wrong, but the link
@@ -1228,7 +1244,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// CL-R-031, CL-E-009 — a timeout still desynchronizes on RTU, unchanged by
+    /// CL-R-031, CL-E-009, CL-E-055 — a timeout still desynchronizes on RTU, unchanged by
     /// CL-R-098's framing rule: a late response carries only a unit
     /// identifier, so it would satisfy CL-R-020 for the *next* request and be
     /// delivered as that request's answer.
@@ -2764,5 +2780,388 @@ mod tests {
         );
         assert!(start.elapsed() < Duration::from_secs(1));
         task.abort();
+    }
+}
+
+#[cfg(test)]
+mod discard_tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::frame::{
+        Address, ExceptionCode, ExceptionResponse, Framing, FunctionCode, Quantity, RegisterValue,
+        RequestPdu, ResponsePdu, Rtu, UnitId,
+    };
+    use crate::transport::test_support::DiscardingDuplex;
+    use crate::transport::{FrameTransport, TransportConfig};
+    use alloc::vec;
+    use core::time::Duration;
+    use tokio::io::{AsyncWriteExt, DuplexStream, duplex};
+
+    const TIMEOUT: Duration = Duration::from_millis(100);
+    const UNIT: UnitId = UnitId(0x11);
+
+    type DiscardingClient = Client<FrameTransport<DiscardingDuplex, Rtu>, Rtu>;
+    type Server = FrameTransport<DuplexStream, Rtu>;
+
+    fn config() -> ClientConfig {
+        ClientConfig {
+            response_timeout: TIMEOUT,
+        }
+    }
+
+    fn discarding_rtu_pair() -> (DiscardingClient, Server) {
+        let (client_end, server_end) = duplex(1024);
+        let transport = FrameTransport::with_discard(
+            DiscardingDuplex::new(client_end),
+            TransportConfig::default(),
+        );
+        (
+            Client::with_config(transport, config()),
+            FrameTransport::new(server_end),
+        )
+    }
+
+    fn read_holding() -> RequestPdu {
+        RequestPdu::ReadHoldingRegisters {
+            address: Address(0x006B),
+            quantity: Quantity(3),
+        }
+    }
+
+    fn regs(values: &[u16]) -> ResponsePdu {
+        ResponsePdu::ReadHoldingRegisters {
+            registers: values.iter().copied().map(RegisterValue).collect(),
+        }
+    }
+
+    fn three_registers() -> ResponsePdu {
+        regs(&[1, 2, 3])
+    }
+
+    fn write_single_reply() -> ResponsePdu {
+        ResponsePdu::WriteSingleRegister {
+            address: Address(1),
+            value: RegisterValue(2),
+        }
+    }
+
+    async fn after_a_timeout(client: &mut DiscardingClient, server: &mut Server) {
+        let (result, _) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request arrives");
+        });
+        assert_eq!(result, Err(Error::Timeout { what: "response" }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-116, CL-R-031, CL-E-001, CL-E-028, CL-E-031 — a response timeout
+    /// over a discarding transport leaves the client usable and unanswered.
+    async fn ut_timeout_over_discarding_transport_leaves_client_usable() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        after_a_timeout(&mut client, &mut server).await;
+        assert_eq!(client.state(), ClientState::Unanswered);
+        assert!(!client.is_desynchronized());
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-024, CL-E-009, CL-R-033 — a late reply already received is removed
+    /// by the next request's discard, and the discard writes nothing.
+    async fn ut_late_reply_is_removed_by_the_next_requests_discard() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        after_a_timeout(&mut client, &mut server).await;
+        server
+            .send_response(&UNIT, &three_registers())
+            .await
+            .expect("late reply");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            let (_, request) = server.recv_request().await.expect("exactly one request");
+            assert_eq!(request, read_holding());
+            server
+                .send_response(&UNIT, &regs(&[4, 5, 6]))
+                .await
+                .expect("answers");
+        });
+        assert_eq!(result, Ok(Some(regs(&[4, 5, 6]))));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-054, CL-R-024 — a late reply that fits and arrives after the
+    /// discard is delivered as the answer: the residual misattribution.
+    async fn ut_fitting_late_reply_after_discard_is_delivered() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        after_a_timeout(&mut client, &mut server).await;
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &three_registers())
+                .await
+                .expect("late");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server
+                .send_response(&UNIT, &regs(&[4, 5, 6]))
+                .await
+                .expect("fresh");
+        });
+        assert_eq!(result, Ok(Some(three_registers())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-117, CL-R-022, CL-E-003 — a reply with another function's code is
+    /// dropped and the wait continues.
+    async fn ut_foreign_function_reply_is_dropped_over_discarding_transport() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &write_single_reply())
+                .await
+                .expect("foreign");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server
+                .send_response(&UNIT, &three_registers())
+                .await
+                .expect("answer");
+        });
+        assert_eq!(result, Ok(Some(three_registers())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-117, CL-R-118 — dropped replies never extend the deadline.
+    async fn ut_dropped_replies_do_not_extend_the_deadline_over_discarding_transport() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let started = tokio::time::Instant::now();
+        let call = async {
+            let result = client.call(UNIT, read_holding()).await;
+            (result, started.elapsed())
+        };
+        let ((result, elapsed), ()) = tokio::join!(call, async {
+            server.recv_request().await.expect("request");
+            for round in 0..5 {
+                let reply = if round % 2 == 0 {
+                    write_single_reply()
+                } else {
+                    regs(&[1])
+                };
+                server.send_response(&UNIT, &reply).await.expect("junk");
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        });
+        assert_eq!(result, Err(Error::Timeout { what: "response" }));
+        assert!(
+            elapsed >= TIMEOUT && elapsed < TIMEOUT + Duration::from_millis(20),
+            "{elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-118 — a reply of the wrong length is dropped, on the raw method.
+    async fn ut_wrong_length_reply_is_dropped_over_discarding_transport() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &regs(&[9]))
+                .await
+                .expect("short");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            server
+                .send_response(&UNIT, &three_registers())
+                .await
+                .expect("answer");
+        });
+        assert_eq!(result, Ok(Some(three_registers())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-118 — the same through a typed method.
+    async fn ut_wrong_length_reply_is_dropped_on_typed_method() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let (result, ()) = tokio::join!(
+            client.read_holding_registers(UNIT, Address(0x006B), Quantity(3)),
+            async {
+                server.recv_request().await.expect("request");
+                server
+                    .send_response(&UNIT, &regs(&[9]))
+                    .await
+                    .expect("short");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                server
+                    .send_response(&UNIT, &three_registers())
+                    .await
+                    .expect("answer");
+            }
+        );
+        assert_eq!(
+            result,
+            Ok(vec![RegisterValue(1), RegisterValue(2), RegisterValue(3)])
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-118 — an exception response is not length-checked.
+    async fn ut_exception_reply_is_not_length_checked() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let exception = ResponsePdu::Exception(ExceptionResponse {
+            function: FunctionCode::ReadHoldingRegisters,
+            exception: ExceptionCode::IllegalDataAddress,
+        });
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &exception)
+                .await
+                .expect("exception");
+        });
+        assert_eq!(result, Ok(Some(exception)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-056 — functions with no request-determined length accept any
+    /// length.
+    async fn ut_unchecked_function_accepts_any_length() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let id = ResponsePdu::ReportServerId {
+            data: vec![1, 2, 3, 4, 5],
+        };
+        let (result, ()) = tokio::join!(client.call(UNIT, RequestPdu::ReportServerId), async {
+            server.recv_request().await.expect("request");
+            server.send_response(&UNIT, &id).await.expect("answer");
+        });
+        assert_eq!(result, Ok(Some(id)));
+
+        let custom = ResponsePdu::Custom {
+            code: 0x41,
+            data: vec![7; 9],
+        };
+        let request = RequestPdu::Custom {
+            code: 0x41,
+            data: vec![],
+        };
+        let (result, ()) = tokio::join!(client.call(UNIT, request), async {
+            server.recv_request().await.expect("request");
+            server.send_response(&UNIT, &custom).await.expect("answer");
+        });
+        assert_eq!(result, Ok(Some(custom)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-R-112, CL-E-050 — a zero per-call timeout writes, times out, and
+    /// leaves the client unanswered.
+    async fn ut_zero_per_call_timeout_over_discarding_transport_is_unanswered() {
+        let (mut client, _server) = discarding_rtu_pair();
+        assert_eq!(
+            client
+                .call_with_timeout(UNIT, read_holding(), Duration::ZERO)
+                .await,
+            Err(Error::Timeout { what: "response" })
+        );
+        assert_eq!(client.state(), ClientState::Unanswered);
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-057 — an undecodable frame still ends the request.
+    async fn ut_undecodable_frame_still_ends_the_request_over_discarding_transport() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        let mut corrupt = Rtu::encode_response(&UNIT, &three_registers()).expect("encodes");
+        *corrupt.last_mut().expect("carries a CRC") ^= 0xFF;
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            let _ = server.recv_request().await.expect("request");
+            let mut raw = server.into_inner();
+            raw.write_all(&corrupt).await.expect("corrupt");
+        });
+        assert!(matches!(result, Err(Error::Checksum { .. })), "{result:?}");
+        assert_eq!(client.state(), ClientState::Unanswered);
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-010 — a reply to a broadcast received before the next request is
+    /// removed by its discard.
+    async fn ut_broadcast_reply_is_removed_by_the_next_discard() {
+        let (mut client, mut server) = discarding_rtu_pair();
+        client
+            .write_single_register(UnitId(0), Address(1), RegisterValue(3))
+            .await
+            .expect("broadcast");
+        server.recv_request().await.expect("broadcast arrives");
+        server
+            .send_response(&UNIT, &three_registers())
+            .await
+            .expect("stray reply");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &regs(&[4, 5, 6]))
+                .await
+                .expect("answer");
+        });
+        assert_eq!(result, Ok(Some(regs(&[4, 5, 6]))));
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// TR-E-050 — a failed discard fails the call and desynchronizes the
+    /// client.
+    async fn ut_discard_failure_desynchronizes_the_client() {
+        let (client_end, _server_end) = duplex(1024);
+        let transport = FrameTransport::<_, Rtu>::with_discard(
+            DiscardingDuplex::failing(client_end, std::io::ErrorKind::BrokenPipe),
+            TransportConfig::default(),
+        );
+        let mut client = Client::<_, Rtu>::with_config(transport, config());
+        assert!(matches!(
+            client.call(UNIT, read_holding()).await,
+            Err(Error::Io {
+                kind: std::io::ErrorKind::BrokenPipe,
+                ..
+            })
+        ));
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Io {
+                kind: std::io::ErrorKind::BrokenPipe
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// CL-E-055 — a transport built by `new` keeps the old rules even over a
+    /// stream that can discard.
+    async fn ut_new_transport_keeps_the_old_rules() {
+        let (client_end, mut server_end) = duplex(1024);
+        let mut client = Client::<_, Rtu>::with_config(
+            FrameTransport::new(DiscardingDuplex::new(client_end)),
+            config(),
+        );
+        let mut server = FrameTransport::<_, Rtu>::new(&mut server_end);
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+        });
+        assert_eq!(result, Err(Error::Timeout { what: "response" }));
+        assert_eq!(
+            client.state(),
+            ClientState::Unusable(UnusableReason::Silent)
+        );
+
+        let (client_end, server_end) = duplex(1024);
+        let mut client = Client::<_, Rtu>::with_config(
+            FrameTransport::new(DiscardingDuplex::new(client_end)),
+            config(),
+        );
+        let mut server = FrameTransport::<_, Rtu>::new(server_end);
+        let (result, ()) = tokio::join!(client.call(UNIT, read_holding()), async {
+            server.recv_request().await.expect("request");
+            server
+                .send_response(&UNIT, &write_single_reply())
+                .await
+                .expect("foreign");
+        });
+        assert!(matches!(result, Err(Error::UnexpectedFunction { .. })));
+    }
+
+    #[test]
+    /// CL-E-055 — `Client::into_inner` keeps the transport's capability.
+    fn ut_into_inner_keeps_the_discard_capability() {
+        let (client, _server) = discarding_rtu_pair();
+        assert!(ClientTransport::<Rtu>::discards_input(&client.into_inner()));
     }
 }

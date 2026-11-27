@@ -21,6 +21,7 @@ pub struct Client<T, F> { /* transport, config, next transaction id, state */ }
 pub trait ClientTransport<F: Framing> {
     fn send_request(&mut self, header: &F::Header, pdu: &RequestPdu) -> impl Future<Output = Result<()>> + Send; // TR-R-081
     fn recv_response(&mut self) -> impl Future<Output = Result<(F::Header, ResponsePdu)>> + Send;                 // TR-R-081
+    fn discards_input(&self) -> bool { false }                                                                    // TR-R-111
 }
 
 impl<T, F> Client<T, F>
@@ -179,7 +180,7 @@ that variant already means.
 
 `Timeout { what: "response" }` is the transport area's existing variant reused,
 not a fourth one: a caller distinguishes a response timeout from a connect
-timeout by the field, and CL-R-031 means the client is desynchronized either way.
+timeout by the field, and CL-R-031 means the client is desynchronized either way, except over a discarding transport (CL-R-031, CL-R-116).
 
 ## Reported state
 
@@ -197,7 +198,7 @@ pub enum ClientState {
     /// The last exchange was answered, including with an exception (CL-R-036).
     Answered,
     /// The last exchange was not answered, and the client is still usable
-    /// (CL-R-098).
+    /// (CL-R-098, CL-R-116).
     Unanswered,
     /// Every further request will be refused (CL-R-032).
     Unusable(UnusableReason),
@@ -208,7 +209,7 @@ pub enum UnusableReason {
     PeerClosed,
     /// The platform reported an I/O failure, in either direction.
     Io { kind: std::io::ErrorKind },
-    /// The response timeout elapsed with no matching response (CL-R-031).
+    /// The response timeout elapsed with no matching response (CL-R-031); never reported for a response timeout over a discarding transport (CL-R-116).
     Silent,
     /// A frame did not decode on a framing that is not self-locating
     /// (CL-R-098).

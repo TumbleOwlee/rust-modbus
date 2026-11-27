@@ -19,7 +19,7 @@ use crate::frame::Framing;
 #[cfg(feature = "rs485")]
 use crate::transport::rs485;
 use crate::transport::serial::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
-use crate::transport::{FrameTransport, TransportConfig};
+use crate::transport::{DiscardInput, FrameTransport, TransportConfig};
 
 /// A transport over a serial port, framed as the caller chooses.
 ///
@@ -28,6 +28,8 @@ use crate::transport::{FrameTransport, TransportConfig};
 pub type SerialTransport<F> = FrameTransport<SerialStream, F>;
 
 /// Open a serial port (TR-R-030).
+///
+/// The transport discards stale input before each request (TR-R-110).
 ///
 /// The inter-frame interval the RTU boundary rule needs is derived from the
 /// same configuration, so the port and its timing cannot disagree (TR-R-011).
@@ -54,7 +56,15 @@ pub fn open_serial<F: Framing>(path: &str, config: SerialConfig) -> Result<Seria
     if let Some(rs485_config) = &config.rs485 {
         rs485::apply(&port, rs485_config)?;
     }
-    Ok(FrameTransport::with_config(port, transport))
+    Ok(FrameTransport::with_discard(port, transport))
+}
+
+/// Discards the port's operating-system input queue (TR-R-108).
+impl DiscardInput for SerialStream {
+    fn discard_input(&mut self) -> std::io::Result<()> {
+        tokio_serial::SerialPort::clear(self, tokio_serial::ClearBuffer::Input)
+            .map_err(std::io::Error::from)
+    }
 }
 
 /// Map the backend's failure onto the crate's own (TR-R-040).
@@ -340,5 +350,49 @@ mod tests {
                 what: "ascii inter-character"
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    /// TR-R-107, TR-R-108 — discarding a pty slave drops what the master wrote
+    /// before, and nothing written after.
+    async fn ut_serial_stream_discards_queued_input() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut master, mut slave) = SerialStream::pair().expect("pty pair");
+        master.write_all(b"stale").await.expect("writes");
+        tokio::time::sleep(core::time::Duration::from_millis(50)).await;
+        DiscardInput::discard_input(&mut slave).expect("discards");
+        master.write_all(b"new").await.expect("writes");
+        let mut buf = [0u8; 16];
+        let n = slave.read(&mut buf).await.expect("reads");
+        assert_eq!(buf.get(..n), Some(&b"new"[..]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// TR-R-110 — `open_serial` builds a discarding transport for RTU and
+    /// ASCII.
+    fn ut_open_serial_builds_a_discarding_transport() {
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+
+        use crate::frame::Ascii;
+        use crate::transport::ClientTransport;
+
+        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let slave_path = ptsname_r(&master).expect("ptsname_r");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let _guard = runtime.enter();
+
+        let rtu = open_serial::<Rtu>(&slave_path, SerialConfig::default()).expect("opens");
+        assert!(ClientTransport::<Rtu>::discards_input(&rtu));
+        drop(rtu);
+        let ascii = open_serial::<Ascii>(&slave_path, SerialConfig::default()).expect("opens");
+        assert!(ClientTransport::<Ascii>::discards_input(&ascii));
+        drop(master);
     }
 }

@@ -48,7 +48,13 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-097** — Discarding a non-corresponding response (CL-R-021) does not extend the deadline of CL-R-014.
 
-**CL-R-022** — A response whose header corresponds but whose function code is neither the code requested nor an exception to it fails immediately with an unexpected-function error, naming the code expected and the code received.
+**CL-R-022** — A response whose header corresponds but whose function code is neither the code requested nor an exception to it fails immediately with an unexpected-function error, naming the code expected and the code received, except over a discarding transport (TR-R-111), which CL-R-117 governs.
+
+**CL-R-117** — Over a discarding transport (TR-R-111), a response whose header corresponds but whose function code is neither the code requested nor an exception to it is discarded, and the client continues waiting against the deadline of CL-R-014, unextended.
+
+**CL-R-118** — Over a discarding transport (TR-R-111), a non-exception response carrying the requested function code whose PDU length differs from the length the request determines (CL-R-119) is discarded, and the client continues waiting against the deadline of CL-R-014, unextended, whether the request was issued through a typed method or the raw method (CL-R-061).
+
+**CL-R-119** — The response PDU length in bytes, function code included, that a request determines (CL-R-118) is: function codes 1 and 2, `2 + ceil(quantity / 8)`; 3 and 4, `2 + 2 × quantity`; 5, 6, 15 and 16, `5`; 7, `2`; 11, `5`; 22, `7`; 23, `2 + 2 × read quantity`. No other function code has a request-determined response length.
 
 **CL-R-023** — A response that cannot be decoded fails with the frame area's decoding error unaltered.
 
@@ -56,7 +62,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-099** — A request whose response failed to decode (CL-R-023) does not wait further for another response: the frame that failed was the answer to it.
 
-**CL-R-024** — A response arriving after its request has timed out is never delivered as the result of a later request. It is either discarded by CL-R-021 or refused by CL-R-031.
+**CL-R-024** — A response arriving after its request has timed out is never delivered as the result of a later request, except over a discarding transport (TR-R-111) when it arrives after the later request's discard (TR-R-112) and fits that request in unit, function code and length (CL-E-054). Otherwise it is discarded by CL-R-021, CL-R-117, CL-R-118 or TR-R-112, or refused by CL-R-031.
 
 ---
 
@@ -66,11 +72,13 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-100** — The default response timeout of CL-R-030 is 1 second.
 
-**CL-R-031** — A response timeout or an I/O failure marks the client desynchronized: what the peer will send next is no longer known. A decoding failure marks it desynchronized only in the case CL-R-098 names.
+**CL-R-031** — A response timeout or an I/O failure marks the client desynchronized: what the peer will send next is no longer known. A response timeout over a discarding transport (TR-R-111) is the exception CL-R-116 names. A decoding failure marks it desynchronized only in the case CL-R-098 names.
+
+**CL-R-116** — Over a discarding transport (TR-R-111), a response timeout fails the request with `Timeout { what: "response" }` and leaves the client usable, reporting the state "last exchange not answered, client usable" of CL-R-035.
 
 **CL-R-032** — A desynchronized client fails every subsequent request immediately, without writing to the transport, with a distinct error naming the condition.
 
-**CL-R-033** — Recovery from desynchronization is by discarding the client and establishing a new transport. The client never silently resynchronizes by draining, reconnecting, or retrying — each would issue a request the caller did not authorize.
+**CL-R-033** — Recovery from desynchronization is by discarding the client and establishing a new transport. The client never silently resynchronizes by draining, reconnecting, or retrying — each would issue a request the caller did not authorize. The discard before a request on a discarding transport (TR-R-112) is none of these: it delivers nothing, writes nothing, and occurs only as part of a request the caller issued.
 
 **CL-R-034** — The client reports whether it is desynchronized, so that a caller may discard it without first provoking an error.
 
@@ -122,7 +130,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (public client types
 
 **CL-R-111** — The timeout passed to `call_with_timeout` (CL-R-110) applies to that exchange only: a later exchange issued without one is bounded by the configured response timeout (CL-R-030).
 
-**CL-R-112** — `call_with_timeout(unit, request, t)` (CL-R-110) behaves exactly as `call(unit, request)` does on a client whose configured response timeout is `t`. That covers the deadline start (CL-R-014), discarding non-corresponding responses (CL-R-021), and the result when `t` elapses: `Timeout { what: "response" }` with the client unusable for reason `Silent` (CL-R-031, CL-R-037).
+**CL-R-112** — `call_with_timeout(unit, request, t)` (CL-R-110) behaves exactly as `call(unit, request)` does on a client whose configured response timeout is `t`. That covers the deadline start (CL-R-014), discarding non-corresponding responses (CL-R-021, CL-R-117, CL-R-118), and the result when `t` elapses: `Timeout { what: "response" }` with the client unusable for reason `Silent` (CL-R-031, CL-R-037), or usable and `Unanswered` over a discarding transport (CL-R-116).
 
 **CL-R-062** — A typed method reading bits returns exactly the quantity of bits requested, discarding the padding bits of the final byte (FR-R-024).
 

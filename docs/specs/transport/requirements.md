@@ -20,7 +20,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-004** — Receiving yields exactly one ADU per call.
 
-**TR-R-082** — Bytes read beyond an ADU's boundary are retained for the following receive call (TR-R-004) and never discarded.
+**TR-R-082** — Bytes read beyond an ADU's boundary are retained for the following receive call (TR-R-004) and never discarded, except by the discard before a request on a discarding transport (TR-R-112).
 
 **TR-R-005** — A frame that fails to decode does not desynchronize the stream: the transport consumes exactly that frame's bytes, surfaces the error, and remains usable for the next call.
 
@@ -35,6 +35,18 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 **TR-R-075** — The crate provides a `ClientTransport<F>` trait, exposing `send_request`/`recv_response` for a client-side exchange over framing `F`. It is implemented by `FrameTransport<S, F>` for any `S: AsyncRead + AsyncWrite + Unpin + Send` and by `UdpTransport<F>` (TR-R-070), so a client-side consumer can be written generically over either transport.
 
 **TR-R-081** — The futures returned by `ClientTransport::send_request` and `ClientTransport::recv_response` are `Send`, so that a future awaiting `Client::call` inside a function generic over `T: ClientTransport<F>` and `F: Framing` can be handed to a multi-threaded spawner (e.g. `tokio::spawn`) without naming a concrete transport or framing.
+
+**TR-R-107** — The crate provides a public trait `DiscardInput`, gated on `std`, with the single method `fn discard_input(&mut self) -> std::io::Result<()>`, which discards every byte the stream has received and not yet yielded to a read.
+
+**TR-R-109** — `FrameTransport` provides the constructor `with_discard(stream: S, config: TransportConfig) -> Self`, available only where `S: DiscardInput` (TR-R-107); a transport built by `new` or `with_config` never discards input, whatever traits `S` implements.
+
+**TR-R-111** — `ClientTransport<F>` (TR-R-075) has a provided method `discards_input(&self) -> bool` defaulting to `false`; `FrameTransport<S, F>` returns `true` exactly when built by `with_discard` (TR-R-109) and `F` is the RTU or ASCII framing, and `UdpTransport<F>` returns `false`. A transport for which it returns `true` is a *discarding transport*.
+
+**TR-R-112** — `send_request` on a discarding transport (TR-R-111), before writing any byte, discards the bytes retained under TR-R-082 and calls `DiscardInput::discard_input` on the stream.
+
+**TR-R-113** — A `discard_input` failure during TR-R-112 fails `send_request` with the I/O error of TR-R-040, and no byte of the request is written.
+
+**TR-R-114** — A discarding transport (TR-R-111) whose receive was abandoned mid-ADU remains usable for further sends and receives: the bytes gathered for the abandoned receive are removed by the next `send_request`'s discard (TR-R-112).
 
 ---
 
@@ -100,6 +112,10 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-034** — Every type appearing in the signature of a public serial item is nameable through this crate. In particular the serial stream type underlying `SerialTransport`, `RtuClient` and `AsciiClient` is re-exported under the `rtu` feature, so a consumer can name it without declaring the serial backend as a dependency of its own.
 
+**TR-R-108** — `SerialStream` (TR-R-034) implements `DiscardInput` (TR-R-107) by discarding the serial port's operating-system input queue.
+
+**TR-R-110** — `open_serial` (TR-R-030) returns a transport built by `with_discard` (TR-R-109).
+
 ---
 
 ## Errors
@@ -124,7 +140,7 @@ Companion documents: [`api-contract.md`](./api-contract.md) (transport types and
 
 **TR-R-041** — Timeouts surface as a distinct timeout error naming what timed out.
 
-**TR-R-090** — A transport that has timed out mid-ADU is treated as desynchronized and is not usable for a further receive (TR-R-041).
+**TR-R-090** — A transport that has timed out mid-ADU is treated as desynchronized and is not usable for a further receive (TR-R-041), except a discarding transport, which TR-R-114 governs.
 
 **TR-R-042** — The transport area imposes no response timeout. Per-request timing is the client's (`CL-R-*`); the only timeouts here are connect, RTU inter-frame silence, and ASCII's inter-character timeout (TR-R-076).
 
