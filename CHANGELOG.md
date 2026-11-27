@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- `DiscardInput` (implemented by `SerialStream`), `FrameTransport::with_discard` and `ClientTransport::discards_input`: a transport over RTU or ASCII framing can discard stale input before each request.
 - `Client::call_with_timeout` and `SyncClient::call_with_timeout`: a raw call bounded by a per-call response timeout instead of the configured one, for that exchange only.
 - `PipelinedClient::send_with_timeout` / `try_send_with_timeout` (also on `PipelinedUdpClient`): a per-request response timeout; when it elapses, the consequences are the type's usual ones (TCP desynchronizes the connection, UDP fails only that request).
 - `ListenerFailure` (`Transient` / `Fatal`) and `Error::listener_failure()`: classifies an `Io` error by its OS code, so a service can tell a transient accept or receive error (`EMFILE`, `ECONNABORTED`, Windows `WSAECONNRESET`) from a dead listener. Errors without an OS code, and every error on platforms other than Unix and Windows, are `Fatal`.
@@ -16,6 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **Breaking:** RTU/ASCII clients opened through `open_serial` (`RtuClient`, `AsciiClient`, `SyncRtuClient`, `SyncAsciiClient`) now discard stale input before each request. A response timeout leaves them usable (`Unanswered`) instead of `Unusable(Silent)`, and replies with a foreign function code or the wrong length are dropped rather than failing with `UnexpectedFunction`. A transport built with `FrameTransport::new` keeps the old rules.
 - **Breaking:** the futures returned by `ClientTransport::send_request` and `recv_response` are now `Send`, so a `Client::call` future awaited generically over `T: ClientTransport<F>` can be handed to `tokio::spawn`. The `FrameTransport`, `UdpTransport` and `SyncClient` implementations require `F: Send` and `F::Header: Sync` where needed; a custom `ClientTransport` implementation must return `Send` futures.
 - **Breaking:** `Server::serve_link` returns `Err(error)` when its link ends with `Disconnect::Failed(error)`, instead of `Ok(())`. It still returns `Ok(())` when the link is closed by the peer, refused, or shut down, and returns only after `on_disconnect` has completed.
 - **Breaking:** `Error::Io` gains `raw_os_error: Option<i32>`, the OS error code when there is one, and its `Display` appends ` (os error n)`. A pattern `Error::Io { kind }` needs `..`. `libc` is now a dependency on every Unix target with `std`.
